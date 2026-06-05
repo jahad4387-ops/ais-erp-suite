@@ -1,0 +1,166 @@
+openapi: 3.1.0
+info:
+  title: AIS ERP Suite API
+  version: 0.1.0
+  description: First contract for accounting, business documents, reports, AI suggestions, and safe Agent operations.
+servers:
+  - url: http://localhost:3000
+paths:
+  /account-sets:
+    post:
+      summary: Create an account set.
+      responses:
+        "201":
+          description: Account set created.
+  /periods:
+    get:
+      summary: List fiscal periods for the active account set.
+      responses:
+        "200":
+          description: Fiscal period list.
+  /vouchers:
+    post:
+      summary: Create a voucher draft.
+      responses:
+        "201":
+          description: Voucher draft created.
+  /vouchers/{voucherId}/submit:
+    post:
+      summary: Submit a voucher for approval.
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+      responses:
+        "200":
+          description: Voucher submitted.
+  /vouchers/{voucherId}/approve:
+    post:
+      summary: Approve a voucher.
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+      responses:
+        "200":
+          description: Voucher approved.
+  /vouchers/{voucherId}/post:
+    post:
+      summary: Post an approved voucher into the ledger.
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+      responses:
+        "200":
+          description: Voucher posted.
+  /vouchers/{voucherId}/reverse:
+    post:
+      summary: Create a reversal voucher.
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+      responses:
+        "201":
+          description: Reversal voucher created.
+  /ledger/trial-balance:
+    get:
+      summary: Query trial balance.
+      responses:
+        "200":
+          description: Trial balance.
+  /ledger/detail-ledger:
+    get:
+      summary: Query detail ledger.
+      responses:
+        "200":
+          description: Detail ledger.
+  /procure-to-pay/purchase-orders:
+    post:
+      summary: Create a purchase order.
+      responses:
+        "201":
+          description: Purchase order created.
+  /procure-to-pay/payments:
+    post:
+      summary: Create a supplier payment draft.
+      responses:
+        "201":
+          description: Payment draft created.
+  /order-to-cash/sales-orders:
+    post:
+      summary: Create a sales order.
+      responses:
+        "201":
+          description: Sales order created.
+  /order-to-cash/receipts:
+    post:
+      summary: Create a customer receipt draft.
+      responses:
+        "201":
+          description: Receipt draft created.
+  /inventory/stock-movements:
+    post:
+      summary: Create an inventory movement.
+      responses:
+        "201":
+          description: Stock movement created.
+  /payroll/runs:
+    post:
+      summary: Create a payroll run.
+      responses:
+        "201":
+          description: Payroll run created.
+  /fixed-assets/depreciation-runs:
+    post:
+      summary: Create a depreciation run.
+      responses:
+        "201":
+          description: Depreciation run created.
+  /reports/runs:
+    post:
+      summary: Run a report template.
+      responses:
+        "201":
+          description: Report run created.
+  /ai/voucher-suggestions:
+    post:
+      summary: Generate voucher draft suggestions from evidence.
+      responses:
+        "201":
+          description: AI suggestion created.
+  /agent-actions:
+    post:
+      summary: Create an Agent action in dry-run mode.
+      responses:
+        "201":
+          description: Agent action created.
+  /agent-actions/{agentActionId}/approve:
+    post:
+      summary: Approve a high-risk Agent action.
+      parameters:
+        - $ref: "#/components/parameters/AgentActionId"
+      responses:
+        "200":
+          description: Agent action approved.
+  /agent-actions/{agentActionId}/execute:
+    post:
+      summary: Execute an approved Agent action.
+      parameters:
+        - $ref: "#/components/parameters/AgentActionId"
+      responses:
+        "200":
+          description: Agent action executed.
+  /close/checklist:
+    post:
+      summary: Run period-end close checklist.
+      responses:
+        "200":
+          description: Close checklist result.
+components:
+  parameters:
+    VoucherId:
+      name: voucherId
+      in: path
+      required: true
+      schema:
+        type: string
+    AgentActionId:
+      name: agentActionId
+      in: path
+      required: true
+      schema:
+        type: string

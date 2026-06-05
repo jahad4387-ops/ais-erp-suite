@@ -1,0 +1,13 @@
+{
+  "name": "@ais-erp/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./ledger": "./src/ledger.mjs",
+    "./moduleCatalog": "./src/moduleCatalog.mjs"
+  },
+  "scripts": {
+    "test": "node ../../scripts/run-domain-tests.mjs"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "ais-erp-suite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AIS/ERP finance suite based on the textbook functional boundary, with safe AI and Agent workflows.",
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/run-domain-tests.mjs",
+    "test:domain": "node scripts/run-domain-tests.mjs"
+  },
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ]
+}
