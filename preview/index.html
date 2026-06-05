@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AIS ERP Suite 文档预览</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f8fb;
+        --panel: #ffffff;
+        --text: #1f2937;
+        --muted: #64748b;
+        --line: #d9e0ea;
+        --blue: #2563eb;
+        --blue-soft: #eff6ff;
+        --green: #15803d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          Inter, "Segoe UI", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 320px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      aside {
+        background: var(--panel);
+        border-right: 1px solid var(--line);
+        padding: 28px 22px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow: auto;
+      }
+
+      main {
+        padding: 32px;
+        overflow: auto;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+        line-height: 1.25;
+      }
+
+      .subtitle {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.6;
+        margin-bottom: 24px;
+      }
+
+      .section-title {
+        color: #0f172a;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        margin: 26px 0 12px;
+      }
+
+      .nav {
+        display: grid;
+        gap: 8px;
+      }
+
+      button.doc-link {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 22px 1fr;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--blue);
+        cursor: pointer;
+        font: inherit;
+        font-weight: 650;
+        padding: 9px 10px;
+        text-align: left;
+      }
+
+      button.doc-link:hover,
+      button.doc-link.active {
+        background: var(--blue-soft);
+        border-color: #bfdbfe;
+      }
+
+      .icon {
+        width: 18px;
+        height: 18px;
+        display: inline-block;
+      }
+
+      .structure {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+        margin: 0;
+        white-space: pre-wrap;
+      }
+
+      .reader {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        min-height: calc(100vh - 64px);
+        padding: 30px 34px;
+      }
+
+      .reader-header {
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 26px;
+        padding-bottom: 18px;
+      }
+
+      .reader-title {
+        margin: 0;
+        font-size: 26px;
+      }
+
+      .reader-path {
+        color: var(--muted);
+        font-size: 13px;
+        margin-top: 8px;
+      }
+
+      .status {
+        align-self: start;
+        background: #ecfdf5;
+        border: 1px solid #bbf7d0;
+        border-radius: 999px;
+        color: var(--green);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 6px 10px;
+        white-space: nowrap;
+      }
+
+      .content {
+        font-size: 15px;
+        line-height: 1.8;
+      }
+
+      .content h1,
+      .content h2,
+      .content h3 {
+        color: #0f172a;
+        line-height: 1.35;
+      }
+
+      .content h1 {
+        font-size: 28px;
+      }
+
+      .content h2 {
+        border-top: 1px solid var(--line);
+        font-size: 22px;
+        margin-top: 30px;
+        padding-top: 22px;
+      }
+
+      .content h3 {
+        font-size: 18px;
+        margin-top: 24px;
+      }
+
+      .content table {
+        border-collapse: collapse;
+        display: block;
+        overflow-x: auto;
+        width: 100%;
+      }
+
+      .content th,
+      .content td {
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .content th {
+        background: #f8fafc;
+      }
+
+      .content code {
+        background: #f1f5f9;
+        border-radius: 4px;
+        padding: 2px 5px;
+      }
+
+      .content pre {
+        background: #0f172a;
+        border-radius: 8px;
+        color: #e2e8f0;
+        overflow-x: auto;
+        padding: 16px;
+      }
+
+      .content pre code {
+        background: transparent;
+        color: inherit;
+        padding: 0;
+      }
+
+      @media (max-width: 860px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+
+        aside {
+          height: auto;
+          position: relative;
+        }
+
+        main {
+          padding: 18px;
+        }
+
+        .reader {
+          padding: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside>
+        <h1>AIS ERP Suite</h1>
+        <div class="subtitle">财务软件项目文档预览页。点击左侧文档，右侧会直接显示内容。</div>
+
+        <div class="section-title">当前资产</div>
+        <nav class="nav" id="docNav"></nav>
+
+        <div class="section-title">仓库结构</div>
+        <pre class="structure">apps/
+  web/
+  desktop/
+services/
+  api/
+  ai-worker/
+packages/
+  domain/
+docs/
+  superpowers/plans/
+preview/</pre>
+      </aside>
+
+      <main>
+        <article class="reader">
+          <header class="reader-header">
+            <div>
+              <h2 class="reader-title" id="readerTitle">加载中</h2>
+              <div class="reader-path" id="readerPath"></div>
+            </div>
+            <div class="status">Local Preview</div>
+          </header>
+          <section class="content" id="content"></section>
+        </article>
+      </main>
+    </div>
+
+    <script>
+      const docs = [
+        { title: "PRD", path: "../docs/prd.md" },
+        { title: "功能追踪矩阵", path: "../docs/traceability-matrix.md" },
+        { title: "架构设计", path: "../docs/architecture.md" },
+        { title: "Agent 操作规范", path: "../docs/agent-operations.md" },
+        { title: "Agent 原生财务系统设计", path: "../docs/agent-native-design.md" },
+        { title: "实施路线图", path: "../docs/implementation-roadmap.md" },
+        { title: "任务级实施计划", path: "../docs/superpowers/plans/2026-06-05-ais-erp-suite.md" },
+        { title: "API 草案", path: "../services/api/openapi.yaml" }
+      ];
+
+      const nav = document.getElementById("docNav");
+      const content = document.getElementById("content");
+      const readerTitle = document.getElementById("readerTitle");
+      const readerPath = document.getElementById("readerPath");
+
+      function escapeHtml(value) {
+        return value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+
+      function renderMarkdown(source) {
+        const lines = source.split(/\r?\n/);
+        let html = "";
+        let inCode = false;
+        let inTable = false;
+        let listOpen = false;
+
+        function closeList() {
+          if (listOpen) {
+            html += "</ul>";
+            listOpen = false;
+          }
+        }
+
+        function closeTable() {
+          if (inTable) {
+            html += "</tbody></table>";
+            inTable = false;
+          }
+        }
+
+        for (const raw of lines) {
+          const line = raw.trimEnd();
+
+          if (line.startsWith("```")) {
+            closeList();
+            closeTable();
+            if (!inCode) {
+              html += "<pre><code>";
+              inCode = true;
+            } else {
+              html += "</code></pre>";
+              inCode = false;
+            }
+            continue;
+          }
+
+          if (inCode) {
+            html += `${escapeHtml(raw)}\n`;
+            continue;
+          }
+
+          if (!line.trim()) {
+            closeList();
+            closeTable();
+            continue;
+          }
+
+          if (line.startsWith("|") && line.endsWith("|")) {
+            closeList();
+            const cells = line
+              .slice(1, -1)
+              .split("|")
+              .map((cell) => escapeHtml(cell.trim()));
+            const divider = cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+            if (divider) continue;
+            if (!inTable) {
+              html += "<table><tbody>";
+              inTable = true;
+            }
+            html += `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+            continue;
+          }
+
+          closeTable();
+
+          if (line.startsWith("# ")) {
+            closeList();
+            html += `<h1>${escapeHtml(line.slice(2))}</h1>`;
+          } else if (line.startsWith("## ")) {
+            closeList();
+            html += `<h2>${escapeHtml(line.slice(3))}</h2>`;
+          } else if (line.startsWith("### ")) {
+            closeList();
+            html += `<h3>${escapeHtml(line.slice(4))}</h3>`;
+          } else if (/^[-*]\s+/.test(line)) {
+            if (!listOpen) {
+              html += "<ul>";
+              listOpen = true;
+            }
+            html += `<li>${escapeHtml(line.replace(/^[-*]\s+/, ""))}</li>`;
+          } else if (/^\d+\.\s+/.test(line)) {
+            if (!listOpen) {
+              html += "<ul>";
+              listOpen = true;
+            }
+            html += `<li>${escapeHtml(line.replace(/^\d+\.\s+/, ""))}</li>`;
+          } else {
+            closeList();
+            html += `<p>${escapeHtml(line)}</p>`;
+          }
+        }
+
+        closeList();
+        closeTable();
+        if (inCode) html += "</code></pre>";
+        return html;
+      }
+
+      async function loadDoc(index) {
+        const doc = docs[index];
+        document.querySelectorAll(".doc-link").forEach((button, buttonIndex) => {
+          button.classList.toggle("active", buttonIndex === index);
+        });
+        readerTitle.textContent = doc.title;
+        readerPath.textContent = doc.path.replace("../", "");
+
+        try {
+          const response = await fetch(doc.path);
+          const text = await response.text();
+          content.innerHTML = renderMarkdown(text);
+        } catch (error) {
+          content.innerHTML = `<p>读取失败：${escapeHtml(String(error))}</p>`;
+        }
+      }
+
+      docs.forEach((doc, index) => {
+        const button = document.createElement("button");
+        button.className = "doc-link";
+        button.type = "button";
+        button.innerHTML = `<span class="icon">▣</span><span>${doc.title}</span>`;
+        button.addEventListener("click", () => loadDoc(index));
+        nav.appendChild(button);
+      });
+
+      loadDoc(0);
+    </script>
+  </body>
+</html>

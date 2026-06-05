@@ -10,6 +10,7 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+preview-server.*
 .turbo/
 .next/
 release/
