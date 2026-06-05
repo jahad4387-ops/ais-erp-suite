@@ -11,6 +11,7 @@
 - [架构设计](docs/architecture.md)
 - [Agent 操作规范](docs/agent-operations.md)
 - [Agent 原生财务系统设计](docs/agent-native-design.md)
+- [个人优先、预留多人协作的开发方式](docs/multi-team-development.md)
 - [实施路线图](docs/implementation-roadmap.md)
 - [任务级实施计划](docs/superpowers/plans/2026-06-05-ais-erp-suite.md)
 - [API 草案](services/api/openapi.yaml)
