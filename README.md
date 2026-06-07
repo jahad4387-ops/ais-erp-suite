@@ -47,6 +47,20 @@ node scripts/run-domain-tests.mjs
 C:\Users\jin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe scripts/run-domain-tests.mjs
 ```
 
+## 本地文档预览
+
+为避免和其他项目的本地预览端口冲突，本项目固定使用 `8877`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-preview.ps1
+```
+
+打开：
+
+```text
+http://127.0.0.1:8877/preview/index.html
+```
+
 ## 与旧 AI 财务软件的关系
 
 `C:\antigra-workplace\ai-finance-desktop` 可以作为参考或未来迁移来源，尤其是 OCR、AI 记账、凭证、报表、审批、桌面打包等能力。本项目先独立建立完整 ERP/AIS 范围，避免把教材全功能需求直接塞进旧桌面工具导致边界混乱。
