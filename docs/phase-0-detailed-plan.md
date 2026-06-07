@@ -24,6 +24,7 @@ Phase 0 完成时必须满足：
 - 本地预览页可以打开所有核心文档。
 - 领域层最小测试通过。
 - GitHub 仓库有首次提交和 Phase 0 文档提交。
+- 研发基础设施就绪：完成代码规范、环境锁定、Agent 规则与测试验证。
 - Phase 1 前置遗漏已进入计划：安装/卸载检查、系统管理、数据权限、单据设置、模块初始化、银行对账、UFO 报表和实验式验收。
 
 验证命令：
@@ -505,6 +506,42 @@ git status --short --branch
 - GitHub 上能看到最新文档。
 - 本地没有未提交的核心文档改动。
 
+### Task 0.13 配置代码规范与自动化构建
+
+目标：配置代码 Lint 与自动化测试工作流，确保在后续多人或人机协同开发中代码风格一致且能自动验证质量。
+
+文件：
+
+```text
+package.json
+.prettierrc
+.github/workflows/ci.yml
+```
+
+必须完成：
+
+- 在 `package.json` 锁定 `pnpm` 包管理器并配置初步格式化脚本。
+- 配置基础的 Prettier 规则。
+- 设置 GitHub Actions 工作流模板。
+
+### Task 0.14 建立 AI 助手全局规则文件与依赖锁定
+
+目标：把 Agent 操作规范和研发基础环境转化为明确的配置文件，让开发者或 AI 自动遵循。
+
+文件：
+
+```text
+.cursorrules
+.nvmrc
+.env.example
+```
+
+必须完成：
+
+- `.cursorrules`：提炼核心架构原则（如写操作要求幂等、财务操作带审计日志等）。
+- `.nvmrc`：锁定 Node 运行环境版本（20）。
+- `.env.example`：梳理后续所需的环境变量模板。
+
 ## 4. Phase 0 交付物清单
 
 | 类型 | 文件 |
@@ -522,6 +559,8 @@ git status --short --branch
 | API 草案 | `services/api/openapi.yaml` |
 | 领域测试 | `packages/domain/tests/*.test.mjs` |
 | 本地预览 | `preview/index.html` |
+| 开发与环境规范 | `package.json`, `.nvmrc`, `.env.example` |
+| AI 规则模板 | `.cursorrules` |
 
 ## 5. Phase 0 风险与处理
 
@@ -542,8 +581,9 @@ git status --short --branch
 - Phase 0 文档全部存在。
 - 参考书补漏审核完成，且可解析文字层发现的遗漏已进入计划。
 - 本地预览页可浏览核心文档。
-- 领域层测试通过。
-- GitHub 已推送最新文档。
+- 领域层测试通过，基础工程规范已配置。
+- GitHub 已推送最新文档并配置 CI 流。
+- 已建立 AI 助手的全局指导文件（.cursorrules）。
 - 平台与总账 MVP 的边界已经明确。
 
 Phase 1 的第一批开发对象：
