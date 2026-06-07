@@ -146,7 +146,28 @@ Select-String -LiteralPath services/api/openapi.yaml -Pattern "/vouchers","/agen
 
 Expected: each endpoint family is present.
 
-- [ ] **Step 2: Add API implementation after choosing backend stack**
+- [ ] **Step 2: Harden the OpenAPI contract before implementation**
+
+Add contract details to `services/api/openapi.yaml` before backend or frontend implementation starts:
+
+```text
+requestBody for each write endpoint
+response schemas for success and error cases
+components.schemas for account sets, periods, vouchers, voucher lines, attachments, reports, AgentAction, EvidenceRef, AuditRef, ErrorResponse
+Idempotency-Key header on all state-changing endpoints
+x-permission, x-risk-level, and x-agent-allowed metadata
+dryRun, evidenceRefs, approvalRequired, and idempotencyKey fields for Agent-facing workflows
+```
+
+Run:
+
+```powershell
+Select-String -LiteralPath services/api/openapi.yaml -Pattern "requestBody","schemas:","Idempotency-Key","x-permission","x-risk-level","ErrorResponse"
+```
+
+Expected: each contract-hardening marker is present.
+
+- [ ] **Step 3: Add API implementation after choosing backend stack**
 
 If using NestJS, create modules named:
 
@@ -164,7 +185,7 @@ AgentActionsModule
 
 Each module must expose service methods that match `services/api/openapi.yaml`.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 Run:
 

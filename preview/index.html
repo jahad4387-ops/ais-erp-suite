@@ -3,18 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AIS ERP Suite 文档预览</title>
+    <title>AIS ERP Suite 计划与 UI 预览</title>
     <style>
       :root {
         color-scheme: light;
-        --bg: #f7f8fb;
+        --bg: #f3f5f8;
         --panel: #ffffff;
+        --panel-soft: #f8fafc;
         --text: #1f2937;
+        --strong: #0f172a;
         --muted: #64748b;
+        --subtle: #94a3b8;
         --line: #d9e0ea;
-        --blue: #2563eb;
-        --blue-soft: #eff6ff;
+        --blue: #1d4ed8;
+        --blue-soft: #eaf2ff;
+        --teal: #0f766e;
+        --teal-soft: #e7f7f4;
+        --amber: #b45309;
+        --amber-soft: #fff7ed;
         --green: #15803d;
+        --green-soft: #ecfdf5;
+        --red: #b91c1c;
+        --red-soft: #fef2f2;
+        --shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
       }
 
       * {
@@ -47,7 +58,7 @@
       }
 
       main {
-        padding: 32px;
+        padding: 28px 32px 32px;
         overflow: auto;
       }
 
@@ -65,7 +76,7 @@
       }
 
       .section-title {
-        color: #0f172a;
+        color: var(--strong);
         font-size: 14px;
         font-weight: 700;
         letter-spacing: 0.02em;
@@ -114,11 +125,454 @@
         white-space: pre-wrap;
       }
 
+      .overview {
+        display: grid;
+        gap: 18px;
+        margin-bottom: 22px;
+      }
+
+      .top-strip,
+      .preview-grid,
+      .mock-app,
+      .audit-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+
+      .top-strip {
+        align-items: center;
+        display: grid;
+        gap: 18px;
+        grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+        padding: 20px 22px;
+      }
+
+      .eyebrow {
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 750;
+        letter-spacing: 0.06em;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+      }
+
+      .overview-title {
+        color: var(--strong);
+        font-size: 24px;
+        line-height: 1.25;
+        margin: 0;
+      }
+
+      .overview-copy {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.7;
+        margin: 10px 0 0;
+        max-width: 78ch;
+      }
+
+      .status-grid {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .metric {
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .metric-value {
+        color: var(--strong);
+        font-size: 22px;
+        font-weight: 760;
+        line-height: 1;
+      }
+
+      .metric-label {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+
+      .phase-strip {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+      }
+
+      .phase-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        min-height: 104px;
+        padding: 12px;
+      }
+
+      .phase-no {
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 760;
+      }
+
+      .phase-name {
+        color: var(--strong);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.35;
+        margin: 8px 0;
+      }
+
+      .phase-note {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .preview-grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.9fr);
+        padding: 18px;
+      }
+
+      .mock-app {
+        box-shadow: none;
+        overflow: hidden;
+      }
+
+      .mock-topbar {
+        align-items: center;
+        background: #0f3d4a;
+        color: #e5f7f5;
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 180px minmax(0, 1fr) auto;
+        padding: 12px 14px;
+      }
+
+      .brand {
+        font-size: 14px;
+        font-weight: 760;
+      }
+
+      .context-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .context-pill {
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        color: #e2f6f3;
+        font-size: 12px;
+        padding: 6px 8px;
+      }
+
+      .command-box {
+        background: rgba(255, 255, 255, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 6px;
+        color: #f8fafc;
+        font-size: 12px;
+        min-width: 172px;
+        padding: 7px 10px;
+      }
+
+      .mock-body {
+        display: grid;
+        grid-template-columns: 168px minmax(0, 1fr);
+        min-height: 508px;
+      }
+
+      .mock-nav {
+        background: #102a36;
+        border-right: 1px solid #1e3a46;
+        color: #cbd5e1;
+        padding: 12px;
+      }
+
+      .mock-nav-group {
+        color: #7dd3c7;
+        font-size: 11px;
+        font-weight: 760;
+        margin: 12px 0 8px;
+      }
+
+      .mock-nav-item {
+        border-radius: 6px;
+        color: #dbeafe;
+        font-size: 12px;
+        margin-bottom: 5px;
+        padding: 8px;
+      }
+
+      .mock-nav-item.active {
+        background: #1d4ed8;
+        color: #ffffff;
+      }
+
+      .workspace {
+        background: #f8fafc;
+        display: grid;
+        gap: 12px;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        padding: 14px;
+      }
+
+      .workspace-head {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+      }
+
+      .workspace-title {
+        color: var(--strong);
+        font-size: 18px;
+        font-weight: 760;
+      }
+
+      .action-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .ui-button {
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #ffffff;
+        color: var(--text);
+        display: inline-flex;
+        font-size: 12px;
+        font-weight: 700;
+        gap: 6px;
+        min-height: 34px;
+        padding: 7px 10px;
+      }
+
+      .ui-button.primary {
+        background: var(--blue);
+        border-color: var(--blue);
+        color: #ffffff;
+      }
+
+      .filter-bar {
+        align-items: center;
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+        padding: 10px;
+      }
+
+      .filter-chip {
+        background: var(--panel-soft);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        padding: 8px 9px;
+      }
+
+      .work-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: minmax(0, 1fr) 260px;
+        min-height: 0;
+      }
+
+      .table-panel,
+      .side-panel {
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        min-width: 0;
+        overflow: hidden;
+      }
+
+      .table-panel table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+
+      .table-panel th,
+      .table-panel td {
+        border-bottom: 1px solid var(--line);
+        font-size: 12px;
+        padding: 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .table-panel th {
+        background: #f8fafc;
+        color: var(--muted);
+        font-weight: 760;
+      }
+
+      .amount {
+        color: var(--strong);
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+
+      .tag {
+        border-radius: 999px;
+        display: inline-flex;
+        font-size: 11px;
+        font-weight: 760;
+        padding: 4px 8px;
+        white-space: nowrap;
+      }
+
+      .tag.green {
+        background: var(--green-soft);
+        color: var(--green);
+      }
+
+      .tag.amber {
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+
+      .tag.blue {
+        background: var(--blue-soft);
+        color: var(--blue);
+      }
+
+      .side-panel {
+        padding: 12px;
+      }
+
+      .side-title {
+        color: var(--strong);
+        font-size: 13px;
+        font-weight: 760;
+        margin-bottom: 10px;
+      }
+
+      .check-row {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        display: grid;
+        gap: 5px;
+        margin-bottom: 8px;
+        padding: 9px;
+      }
+
+      .check-name {
+        color: var(--strong);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .check-desc {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .trial-bar {
+        align-items: center;
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        padding: 10px;
+      }
+
+      .trial-item {
+        border-right: 1px solid var(--line);
+        min-width: 0;
+      }
+
+      .trial-item:last-child {
+        border-right: 0;
+      }
+
+      .trial-label {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .trial-value {
+        color: var(--strong);
+        font-size: 14px;
+        font-weight: 760;
+        margin-top: 3px;
+      }
+
+      .agent-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .audit-card {
+        box-shadow: none;
+        padding: 16px;
+      }
+
+      .audit-title {
+        color: var(--strong);
+        font-size: 16px;
+        font-weight: 760;
+        margin-bottom: 10px;
+      }
+
+      .audit-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .audit-item {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px;
+      }
+
+      .audit-item.warning {
+        background: var(--amber-soft);
+        border-color: #fed7aa;
+      }
+
+      .audit-item.good {
+        background: var(--teal-soft);
+        border-color: #99f6e4;
+      }
+
+      .audit-kicker {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 760;
+        margin-bottom: 5px;
+      }
+
+      .audit-copy {
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.55;
+        margin: 0;
+      }
+
       .reader {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 8px;
-        min-height: calc(100vh - 64px);
+        min-height: 560px;
         padding: 30px 34px;
       }
 
@@ -144,7 +598,7 @@
 
       .status {
         align-self: start;
-        background: #ecfdf5;
+        background: var(--green-soft);
         border: 1px solid #bbf7d0;
         border-radius: 999px;
         color: var(--green);
@@ -228,15 +682,50 @@
 
         aside {
           height: auto;
+          order: 2;
           position: relative;
         }
 
         main {
+          order: 1;
           padding: 18px;
+        }
+
+        .top-strip,
+        .preview-grid,
+        .work-grid,
+        .filter-bar,
+        .mock-topbar,
+        .mock-body {
+          grid-template-columns: 1fr;
+        }
+
+        .phase-strip {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .mock-nav {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .mock-nav-group {
+          grid-column: 1 / -1;
         }
 
         .reader {
           padding: 22px;
+        }
+      }
+
+      @media (max-width: 1500px) and (min-width: 861px) {
+        .preview-grid,
+        .top-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .phase-strip {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
         }
       }
     </style>
@@ -245,7 +734,7 @@
     <div class="shell">
       <aside>
         <h1>AIS ERP Suite</h1>
-        <div class="subtitle">财务软件项目文档预览页。点击左侧文档，右侧会直接显示内容。</div>
+        <div class="subtitle">计划、架构、UI 设计和阶段文档预览。左侧切换文档，右侧保留产品界面样张。</div>
 
         <div class="section-title">当前资产</div>
         <nav class="nav" id="docNav"></nav>
@@ -265,6 +754,224 @@ preview/</pre>
       </aside>
 
       <main>
+        <section class="overview" aria-label="计划与界面预览总览">
+          <div class="top-strip">
+            <div>
+              <div class="eyebrow">Planning Preview</div>
+              <h2 class="overview-title">从文档计划到可落地的财务工作台</h2>
+              <p class="overview-copy">
+                当前计划已经覆盖 PRD、追踪矩阵、架构、部署、Agent、安全审计和 Phase 0-6。
+                这个预览页补上产品 UI 的第一屏信号：打开本地地址就能看到简洁商务风格、模块导航、账套期间上下文、凭证列表、风险提示和审计状态。
+              </p>
+            </div>
+            <div class="status-grid">
+              <div class="metric">
+                <div class="metric-value">7</div>
+                <div class="metric-label">阶段计划</div>
+              </div>
+              <div class="metric">
+                <div class="metric-value">19</div>
+                <div class="metric-label">预览文档入口</div>
+              </div>
+              <div class="metric">
+                <div class="metric-value">10</div>
+                <div class="metric-label">一级模块导航</div>
+              </div>
+              <div class="metric">
+                <div class="metric-value">4</div>
+                <div class="metric-label">通用页面模式</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="phase-strip" aria-label="Phase roadmap">
+            <div class="phase-card">
+              <div class="phase-no">Phase 0</div>
+              <div class="phase-name">需求与验证资产</div>
+              <div class="phase-note">PRD、架构、UI、Agent、API 草案和领域测试。</div>
+            </div>
+            <div class="phase-card">
+              <div class="phase-no">Phase 1</div>
+              <div class="phase-name">平台与总账 MVP</div>
+              <div class="phase-note">账套、权限、期间、科目、凭证、记账、账簿。</div>
+            </div>
+            <div class="phase-card">
+              <div class="phase-no">Phase 2</div>
+              <div class="phase-name">采购付款与销售收款</div>
+              <div class="phase-note">P2P、O2C、核销、账龄和往来一致性。</div>
+            </div>
+            <div class="phase-card">
+              <div class="phase-no">Phase 3</div>
+              <div class="phase-name">存货生产成本</div>
+              <div class="phase-note">BOM、工单、出入库、成本计算和总账联查。</div>
+            </div>
+            <div class="phase-card">
+              <div class="phase-no">Phase 4</div>
+              <div class="phase-name">薪资与固定资产</div>
+              <div class="phase-note">工资计算、分摊、折旧、处置和对账。</div>
+            </div>
+            <div class="phase-card">
+              <div class="phase-no">Phase 5</div>
+              <div class="phase-name">报表与管理分析</div>
+              <div class="phase-note">UFO 报表、公式引擎、锁定快照和 AI 解读。</div>
+            </div>
+            <div class="phase-card">
+              <div class="phase-no">Phase 6</div>
+              <div class="phase-name">Agent 与生产化</div>
+              <div class="phase-note">dry-run、审批、证据链、Replay、迁移和备份。</div>
+            </div>
+          </div>
+
+          <div class="preview-grid">
+            <section class="mock-app" aria-label="总账工作台界面样张">
+              <div class="mock-topbar">
+                <div class="brand">AIS ERP Suite</div>
+                <div class="context-pills">
+                  <span class="context-pill">账套：演示科技 001</span>
+                  <span class="context-pill">期间：2026-01</span>
+                  <span class="context-pill">组织：总部财务</span>
+                </div>
+                <div class="command-box">搜索凭证、单据、报表</div>
+              </div>
+              <div class="mock-body">
+                <nav class="mock-nav" aria-label="ERP 模块导航">
+                  <div class="mock-nav-group">工作</div>
+                  <div class="mock-nav-item">我的待办</div>
+                  <div class="mock-nav-item active">总账</div>
+                  <div class="mock-nav-group">业务</div>
+                  <div class="mock-nav-item">采购付款</div>
+                  <div class="mock-nav-item">销售收款</div>
+                  <div class="mock-nav-item">存货生产</div>
+                  <div class="mock-nav-group">控制</div>
+                  <div class="mock-nav-item">报表分析</div>
+                  <div class="mock-nav-item">Agent 中心</div>
+                </nav>
+                <div class="workspace">
+                  <div class="workspace-head">
+                    <div>
+                      <div class="workspace-title">凭证中心</div>
+                      <div class="reader-path">总账 / 凭证 / 审核与记账</div>
+                    </div>
+                    <div class="action-row">
+                      <button class="ui-button" type="button" data-testid="voucher-import">导入</button>
+                      <button class="ui-button" type="button" data-testid="voucher-export">导出</button>
+                      <button class="ui-button" type="button" data-testid="agent-open-context" data-route="/agent/actions/new?source=voucher-center">Agent 助手</button>
+                      <button class="ui-button primary" type="button" data-testid="voucher-create">新增凭证</button>
+                    </div>
+                  </div>
+                  <div class="filter-bar">
+                    <div class="filter-chip">期间：2026-01</div>
+                    <div class="filter-chip">状态：待审核</div>
+                    <div class="filter-chip">制单人：全部</div>
+                    <div class="filter-chip">科目：银行存款</div>
+                    <button class="ui-button" type="button" data-testid="voucher-filter">筛选</button>
+                  </div>
+                  <div class="work-grid">
+                    <div class="table-panel">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>凭证号</th>
+                            <th>摘要</th>
+                            <th>借方</th>
+                            <th>贷方</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td>记-0008</td>
+                            <td>购买办公用品</td>
+                            <td class="amount">500.00</td>
+                            <td class="amount">500.00</td>
+                            <td><span class="tag amber">待审核</span></td>
+                            <td>预览</td>
+                          </tr>
+                          <tr>
+                            <td>记-0007</td>
+                            <td>销售收款入账</td>
+                            <td class="amount">8,600.00</td>
+                            <td class="amount">8,600.00</td>
+                            <td><span class="tag blue">已审核</span></td>
+                            <td>记账</td>
+                          </tr>
+                          <tr>
+                            <td>记-0006</td>
+                            <td>银行手续费</td>
+                            <td class="amount">35.00</td>
+                            <td class="amount">35.00</td>
+                            <td><span class="tag green">已记账</span></td>
+                            <td>联查</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <aside class="side-panel" aria-label="审核风险面板">
+                      <div class="side-title">审核检查</div>
+                      <div class="check-row">
+                        <div class="check-name">借贷平衡</div>
+                        <div class="check-desc">3 张凭证合计平衡，差额 0.00。</div>
+                      </div>
+                      <div class="check-row">
+                        <div class="check-name">期间状态</div>
+                        <div class="check-desc">当前期间打开，可提交审核和记账。</div>
+                      </div>
+                      <div class="check-row">
+                        <div class="check-name">Agent 草稿</div>
+                        <div class="check-desc">1 条 AI 建议等待人工确认，点击入口后打开上下文对话窗口。</div>
+                        <div class="agent-actions">
+                          <button class="ui-button" type="button" data-testid="agent-open-draft-dialog" data-route="/agent/actions/new?source=ai-voucher-draft">打开 Agent</button>
+                        </div>
+                      </div>
+                    </aside>
+                  </div>
+                  <div class="trial-bar">
+                    <div class="trial-item">
+                      <div class="trial-label">本期借方</div>
+                      <div class="trial-value">9,135.00</div>
+                    </div>
+                    <div class="trial-item">
+                      <div class="trial-label">本期贷方</div>
+                      <div class="trial-value">9,135.00</div>
+                    </div>
+                    <div class="trial-item">
+                      <div class="trial-label">试算状态</div>
+                      <div class="trial-value">平衡</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="audit-card" aria-label="UI 审核摘要">
+              <div class="audit-title">UI 审核摘要</div>
+              <div class="audit-list">
+                <div class="audit-item good">
+                  <div class="audit-kicker">已补齐</div>
+                  <p class="audit-copy">`docs/ui-design.md` 已覆盖全局布局、导航、页面模式、Phase 页面和 Agent-friendly 规则。</p>
+                </div>
+                <div class="audit-item good">
+                  <div class="audit-kicker">方向正确</div>
+                  <p class="audit-copy">ERP 页面以表格、筛选、工作台、状态流、审计链为主，避开营销式首屏和装饰型大屏。</p>
+                </div>
+                <div class="audit-item good">
+                  <div class="audit-kicker">已调整</div>
+                  <p class="audit-copy">首页只保留上下文 Agent 入口；真实对话窗口从凭证、审核、报表、结账等需要 Agent 的位置点击打开或跳转。</p>
+                </div>
+                <div class="audit-item good">
+                  <div class="audit-kicker">已纳入计划</div>
+                  <p class="audit-copy">OpenAPI 硬化已写入 Phase 0/1 和任务级计划：补 requestBody、schema、错误码、幂等头、权限与风险标注。</p>
+                </div>
+                <div class="audit-item good">
+                  <div class="audit-kicker">已纳入计划</div>
+                  <p class="audit-copy">Phase 3/4 成本依赖已拆成 Mock 自测与正式成本池二次联调，并明确最终端到端验收门槛。</p>
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
         <article class="reader">
           <header class="reader-header">
             <div>
@@ -285,6 +992,7 @@ preview/</pre>
         { title: "财务软件参考书审核记录", path: "../docs/reference-books-audit.md" },
         { title: "架构设计", path: "../docs/architecture.md" },
         { title: "内网与公网兼容部署设计", path: "../docs/deployment-topology.md" },
+        { title: "UI 与页面设计规划", path: "../docs/ui-design.md" },
         { title: "Agent 操作规范", path: "../docs/agent-operations.md" },
         { title: "Agent 原生财务系统设计", path: "../docs/agent-native-design.md" },
         { title: "个人优先、预留多人协作", path: "../docs/multi-team-development.md" },
@@ -317,6 +1025,7 @@ preview/</pre>
         let html = "";
         let inCode = false;
         let inTable = false;
+        let tableRowCount = 0;
         let listOpen = false;
 
         function closeList() {
@@ -330,6 +1039,7 @@ preview/</pre>
           if (inTable) {
             html += "</tbody></table>";
             inTable = false;
+            tableRowCount = 0;
           }
         }
 
@@ -371,8 +1081,11 @@ preview/</pre>
             if (!inTable) {
               html += "<table><tbody>";
               inTable = true;
+              tableRowCount = 0;
             }
-            html += `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+            const cellTag = tableRowCount === 0 ? "th" : "td";
+            html += `<tr>${cells.map((cell) => `<${cellTag}>${cell}</${cellTag}>`).join("")}</tr>`;
+            tableRowCount += 1;
             continue;
           }
 

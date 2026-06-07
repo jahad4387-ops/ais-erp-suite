@@ -627,6 +627,27 @@ bank_reconciliations
 
 **【注：所有导致数据状态变更的 POST / PATCH 等高危写操作接口（如凭证提交、审核、记账等），必须在 HTTP Header 中强制要求携带 `Idempotency-Key` 以保证 API 的幂等性防护。】**
 
+## 5.0 API 契约硬化门槛
+
+Phase 1 开发不能只依赖接口列表。进入前后端并行开发前，`services/api/openapi.yaml` 必须完成以下契约硬化：
+
+```text
+1. 每个 Phase 1 接口都有 requestBody / response schema。
+2. 所有写接口声明 Idempotency-Key header，并说明重复提交返回策略。
+3. 统一 ErrorResponse：code、message、fieldErrors、traceId、nextAction。
+4. 每个接口标注 x-permission、x-risk-level、x-agent-allowed。
+5. 凭证、分录、附件、期间、科目、辅助核算、审计日志都有 components.schemas。
+6. Agent 草稿接口包含 dryRun、evidenceRefs、approvalRequired 和风险等级。
+```
+
+完成标准：
+
+```text
+前端可以按 OpenAPI 生成类型或 mock 数据。
+后端可以按 OpenAPI 实现控制器和 DTO。
+Agent 工具层可以从 OpenAPI 读取权限、风险等级、幂等和 dry-run 约束。
+```
+
 ## 5.1 账套
 
 ```http
@@ -927,6 +948,8 @@ POST /api/posting/period-end/transfer-pl
 
 # 6. 前端页面详细规划
 
+Phase 1 前端必须遵循 `docs/ui-design.md` 的简洁商务风格：以列表、表格、凭证录入、账簿查询和审核工作台为核心，不做营销式首页。页面必须具备稳定 URL、清晰状态、明确错误提示和 Agent-friendly `data-testid`。
+
 ## 6.1 平台管理
 
 | 页面   | 功能               |
@@ -977,6 +1000,19 @@ POST /api/posting/period-end/transfer-pl
 | 试算平衡  | 借贷平衡检查         |
 | 凭证联查  | 从账簿跳转凭证详情      |
 | 导出中心  | CSV / Excel 导出 |
+
+---
+
+## 6.5 Phase 1 UI 验收要求
+
+- Web App 进入后默认显示工作台或可操作列表，不显示空泛欢迎页。
+- 顶部栏固定显示当前账套、组织、会计期间和用户身份。
+- 左侧导航至少覆盖平台管理、基础档案、总账、报表、Agent 中心入口。
+- 凭证录入页必须固定展示借方合计、贷方合计和差额。
+- 凭证列表、审核工作台、记账工作台必须支持期间、状态、制单人和科目筛选。
+- 凭证详情必须展示附件、审批记录、状态日志和来源链路。
+- 银行对账页面必须支持银行流水与日记账左右对照。
+- 权限不足、期间关闭、已记账、已锁定状态下，页面不能展示可直接执行的正式写操作按钮。
 
 ---
 

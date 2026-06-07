@@ -341,9 +341,9 @@ docs/multi-team-development.md
 - 未来多人加入时有模块边界、分支和 PR 规则。
 - Agent 任务必须有明确文件范围。
 
-### Task 0.9 建立 API 草案
+### Task 0.9 建立并硬化 API 契约草案
 
-目标：先定义关键接口方向，避免后续前端、后端、Agent 各做各的。
+目标：先定义关键接口方向，并把 OpenAPI 从“端点清单”推进到可供前端、后端、Agent 并行开发的契约。避免后续各端只对齐 URL，却在请求体、错误码、权限和幂等规则上重新返工。
 
 文件：
 
@@ -370,17 +370,28 @@ services/api/openapi.yaml
 - 单据设置。
 - 报表模板和报表输出。
 
+契约硬化要求：
+
+- 每个写接口必须定义 `requestBody`、成功响应、通用错误响应和示例。
+- `components.schemas` 至少覆盖账套、期间、凭证、凭证分录、附件、业务单据、报表运行、Agent Action、EvidenceRef、AuditRef。
+- `components.parameters` 必须包含账套、期间、分页、排序、筛选和对象 ID 参数。
+- 所有导致状态变更的 POST / PATCH / DELETE 必须声明 `Idempotency-Key` header。
+- 所有接口必须标注权限点，建议使用 `x-permission`、`x-risk-level`、`x-agent-allowed` 等扩展字段。
+- Agent 相关接口必须显式包含 `dryRun`、`idempotencyKey`、`evidenceRefs`、`approvalRequired` 和风险等级。
+- 错误响应必须统一包含 `code`、`message`、`fieldErrors`、`traceId` 和 `nextAction`。
+
 验证：
 
 ```powershell
 Select-String -LiteralPath services/api/openapi.yaml -Pattern "/vouchers","/agent-actions","/close/checklist","/procure-to-pay","/order-to-cash","/inventory"
+Select-String -LiteralPath services/api/openapi.yaml -Pattern "requestBody","components:","schemas:","Idempotency-Key","x-permission","x-risk-level","ErrorResponse"
 ```
 
 完成标准：
 
 - 核心模块都有初始 API 入口。
 - Agent 相关接口存在。
-- 后续 Phase 1 可在此基础上细化。
+- Phase 1 开始前，OpenAPI 不再只是端点草案，而是具备请求体、响应 schema、错误码、幂等头和权限/风险标注的前后端协作契约。
 
 ### Task 0.10 建立最小领域测试
 
@@ -542,6 +553,34 @@ package.json
 - `.nvmrc`：锁定 Node 运行环境版本（20）。
 - `.env.example`：梳理后续所需的环境变量模板。
 
+### Task 0.15 完成 UI 与页面设计规划
+
+目标：补齐页面 UI 设计缺口，让后续 Phase 1～6 的前端开发不只依赖“页面名称 + 功能清单”，而是有统一的信息架构、页面模式、商务视觉原则和验收规则。
+
+文件：
+
+```text
+docs/ui-design.md
+README.md
+preview/index.html
+docs/implementation-roadmap.md
+docs/phase-1-detailed-plan.md
+docs/phase-2-detailed-plan.md
+docs/phase-3-detailed-plan.md
+docs/phase-4-detailed-plan.md
+docs/phase-5-detailed-plan.md
+docs/phase-6-detailed-plan.md
+```
+
+必须完成：
+
+- 明确 UI 采用简洁商务风格，优先服务财务、业务和管理人员高频办公。
+- 明确全局布局、一级导航、命令搜索、账套/期间上下文。
+- 明确列表页、编辑页、工作台、详情页四类通用页面模式。
+- 为 Phase 1～6 补齐核心页面设计，不只列功能。
+- 明确 Agent-friendly UI 要求：稳定 URL、`data-testid`、批量动作预览、风险等级、dry-run 与审批状态。
+- 将 `docs/ui-design.md` 加入 README 和本地预览。
+
 ## 4. Phase 0 交付物清单
 
 | 类型 | 文件 |
@@ -553,6 +592,7 @@ package.json
 | 参考书审核 | `docs/reference-books-audit.md` |
 | Agent 操作 | `docs/agent-operations.md` |
 | Agent 原生设计 | `docs/agent-native-design.md` |
+| UI 与页面设计 | `docs/ui-design.md` |
 | 协作方式 | `docs/multi-team-development.md` |
 | 路线图 | `docs/implementation-roadmap.md` |
 | Phase 0 详细计划 | `docs/phase-0-detailed-plan.md` |
@@ -584,6 +624,7 @@ package.json
 - 领域层测试通过，基础工程规范已配置。
 - GitHub 已推送最新文档并配置 CI 流。
 - 已建立 AI 助手的全局指导文件（.cursorrules）。
+- 已建立 UI 与页面设计规划，并补齐 Phase 1～6 的页面入口和验收约束。
 - 平台与总账 MVP 的边界已经明确。
 
 Phase 1 的第一批开发对象：

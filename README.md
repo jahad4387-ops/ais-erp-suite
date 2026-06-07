@@ -11,6 +11,7 @@
 - [财务软件参考书审核记录](docs/reference-books-audit.md)
 - [架构设计](docs/architecture.md)
 - [内网与公网兼容部署设计](docs/deployment-topology.md)
+- [UI 与页面设计规划](docs/ui-design.md)
 - [Agent 操作规范](docs/agent-operations.md)
 - [Agent 原生财务系统设计](docs/agent-native-design.md)
 - [个人优先、预留多人协作的开发方式](docs/multi-team-development.md)
