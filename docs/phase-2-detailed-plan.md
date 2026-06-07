@@ -184,10 +184,49 @@ reversed 已冲销
 
 ```text
 partners (统一管理客户和供应商，支持 partner_type: both)
-...
+- id
+- account_set_id
+- partner_type (customer / supplier / both)
+- code
+- name
+- tax_rate
+- credit_limit
+- payment_terms
+- settlement_method
 ```
 
-## 6.2 AP 应付与付款表
+## 6.2 P2P 采购与应付表
+
+### purchase_orders
+
+```text
+- id
+- account_set_id
+- supplier_id
+- order_no
+- order_date
+- total_amount
+- status (draft / submitted / approved / partially_received / completed / closed)
+- currency
+- exchange_rate
+```
+
+### purchase_order_lines
+
+```text
+- id
+- purchase_order_id
+- item_id
+- quantity
+- unit_price
+- tax_rate
+- tax_amount
+- total_amount
+- received_quantity
+- invoiced_quantity
+```
+
+### ap_bills (应付单/采购发票)
 
 ### ap_bills
 
@@ -208,7 +247,7 @@ gl_voucher_id
 ...
 ```
 
-### ap_settlements
+### ap_settlements (付款核销单)
 
 ```text
 id
@@ -216,7 +255,66 @@ account_set_id
 supplier_id
 settlement_type: payment_to_bill / prepayment_to_bill / refund / credit_note_to_bill / ar_ap_netting
 status
+gl_voucher_id
 ...
+```
+
+## 6.3 O2C 销售与应收表
+
+### sales_orders
+
+```text
+- id
+- account_set_id
+- customer_id
+- order_no
+- order_date
+- total_amount
+- status (draft / submitted / approved / partially_shipped / completed / closed)
+- currency
+- exchange_rate
+```
+
+### sales_order_lines
+
+```text
+- id
+- sales_order_id
+- item_id
+- quantity
+- unit_price
+- tax_rate
+- tax_amount
+- total_amount
+- shipped_quantity
+- invoiced_quantity
+```
+
+### ar_bills (应收单/销售发票)
+
+```text
+- id
+- account_set_id
+- customer_id
+- bill_no
+- bill_date
+- due_date
+- receivable_amount
+- received_amount
+- settled_amount
+- status
+- gl_voucher_id
+```
+
+### ar_settlements (收款核销单)
+
+```text
+- id
+- account_set_id
+- customer_id
+- settlement_type: receipt_to_bill / prepayment_to_bill / refund / credit_note_to_bill / ar_ap_netting
+- status
+- gl_voucher_id
 ```
 
 ---

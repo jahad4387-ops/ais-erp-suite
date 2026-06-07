@@ -59,7 +59,7 @@ flowchart LR
 - `general-ledger`：科目、凭证、账簿、期末、辅助核算。
 - `procure-to-pay`：采购、入库、应付、付款、核销。
 - `order-to-cash`：销售、出库、应收、收款、核销。
-- `inventory-costing`：库存、盘点、成本、收发存。
+- `inventory-costing`：库存、盘点、成本、收发存、BOM、工单、领料完工。
 - `payroll`：工资项目、工资计算、分摊。
 - `fixed-assets`：资产卡片、折旧、处置。
 - `reporting`：报表模板、公式、编制、导出。

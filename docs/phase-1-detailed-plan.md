@@ -35,6 +35,8 @@ Phase 1 的产品定位不是“完整 ERP”，而是一个**稳定的总账内
 | 记账    | 已审核凭证记账、更新余额、写入日记账、幂等控制          |
 | 账簿    | 总账、明细账、科目余额表、试算平衡                |
 | AI 草稿 | 根据文本/附件生成凭证草稿，必须人工确认             |
+| 银行对账 | 银行流水导入、对账单管理、自动/手工核对（Bank Reconciliation） |
+| 期末处理 | 期末自动结转损益凭证生成                        |
 | 审计    | 登录、配置、凭证、审核、记账、附件操作全部留痕          |
 
 ---
@@ -53,12 +55,10 @@ Phase 1 的产品定位不是“完整 ERP”，而是一个**稳定的总账内
 成本核算
 现金流量表
 完整资产负债表/利润表自动编制
-银行对账
 税务申报
 复杂审批流
 多币种汇兑损益
 多公司合并报表
-期末自动结转损益（Phase 1 需人工手工录入结转凭证）
 ```
 
 预留字段：
@@ -596,6 +596,33 @@ account_period_balances
 
 ---
 
+## 4.9 银行对账与期末结转
+
+```sql
+bank_statements
+bank_reconciliation_rules
+bank_reconciliations
+```
+
+### bank_statements
+
+```sql
+- id
+- account_set_id
+- bank_account_id
+- transaction_date
+- description
+- amount
+- balance
+- status: unreconciled / reconciled
+```
+
+### 期末结转
+
+不需要独立表，依靠系统配置与凭证引擎实现，主要逻辑在服务层。
+
+---
+
 # 5. 后端 API 详细清单
 
 **【注：所有导致数据状态变更的 POST / PATCH 等高危写操作接口（如凭证提交、审核、记账等），必须在 HTTP Header 中强制要求携带 `Idempotency-Key` 以保证 API 的幂等性防护。】**
@@ -801,6 +828,40 @@ include_unposted=false
 
 ```json
 {
+  "debit_total": 5000,
+  "credit_total": 5000,
+  "is_balanced": true,
+  "details": [ ... ]
+}
+```
+
+---
+
+## 5.7 账簿与报表
+
+```http
+GET /api/ledger/general-ledger
+GET /api/ledger/sub-ledger
+GET /api/reports/account-balances
+GET /api/reports/trial-balance
+```
+
+总账查询参数：
+
+```text
+account_set_id
+fiscal_year
+period_from
+period_to
+account_code_from
+account_code_to
+include_unposted=false
+```
+
+试算平衡返回：
+
+```json
+{
   "opening_balance_equal": true,
   "period_amount_equal": true,
   "closing_balance_equal": true,
@@ -840,7 +901,26 @@ AI 只写 ai_voucher_drafts
 AI 不直接写 vouchers posted 状态
 AI 不能调用审核接口
 AI 不能调用记账接口
-AI 生成结果必须经过凭证校验器
+AI 生成结果必须经过凭证校验。
+```
+
+---
+
+## 5.10 银行对账
+
+```http
+POST /api/bank/statements
+GET  /api/bank/statements
+POST /api/bank/reconcile
+POST /api/bank/reconcile/auto
+```
+
+---
+
+## 5.11 期末处理
+
+```http
+POST /api/posting/period-end/transfer-pl
 ```
 
 ---
