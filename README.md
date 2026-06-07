@@ -9,6 +9,7 @@
 - [PRD](docs/prd.md)
 - [功能追踪矩阵](docs/traceability-matrix.md)
 - [架构设计](docs/architecture.md)
+- [内网与公网兼容部署设计](docs/deployment-topology.md)
 - [Agent 操作规范](docs/agent-operations.md)
 - [Agent 原生财务系统设计](docs/agent-native-design.md)
 - [个人优先、预留多人协作的开发方式](docs/multi-team-development.md)
