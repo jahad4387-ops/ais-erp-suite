@@ -68,6 +68,36 @@ paths:
       responses:
         "200":
           description: Detail ledger.
+  /ledger/bank-reconciliations:
+    post:
+      summary: Create a bank reconciliation run.
+      responses:
+        "201":
+          description: Bank reconciliation run created.
+  /ledger/bank-reconciliations/{reconciliationId}/match:
+    post:
+      summary: Match bank statement rows with cash/bank journal entries.
+      parameters:
+        - name: reconciliationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Bank reconciliation match result.
+  /document-settings/document-types:
+    post:
+      summary: Create or update a business document type.
+      responses:
+        "201":
+          description: Document type saved.
+  /document-settings/numbering-rules:
+    post:
+      summary: Create or update a document numbering rule.
+      responses:
+        "201":
+          description: Numbering rule saved.
   /procure-to-pay/purchase-orders:
     post:
       summary: Create a purchase order.
@@ -116,6 +146,24 @@ paths:
       responses:
         "201":
           description: Report run created.
+  /reports/templates:
+    post:
+      summary: Create a report template with cell formulas.
+      responses:
+        "201":
+          description: Report template created.
+  /reports/runs/{reportRunId}/export:
+    post:
+      summary: Export a report run to Excel or PDF.
+      parameters:
+        - name: reportRunId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Report export created.
   /ai/voucher-suggestions:
     post:
       summary: Generate voucher draft suggestions from evidence.

@@ -8,6 +8,7 @@
 
 - [PRD](docs/prd.md)
 - [功能追踪矩阵](docs/traceability-matrix.md)
+- [财务软件参考书审核记录](docs/reference-books-audit.md)
 - [架构设计](docs/architecture.md)
 - [内网与公网兼容部署设计](docs/deployment-topology.md)
 - [Agent 操作规范](docs/agent-operations.md)
