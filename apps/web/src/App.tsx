@@ -55,6 +55,8 @@ import { MockCostInputs } from './pages/MockCostInputs';
 import { CostAllocations } from './pages/CostAllocations';
 import { CostVoucherDrafts } from './pages/CostVoucherDrafts';
 import { InventoryReconciliation } from './pages/InventoryReconciliation';
+import { PayrollSetup } from './pages/PayrollSetup';
+import { PayrollRuns } from './pages/PayrollRuns';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -249,6 +251,15 @@ const AppFrame: React.FC = () => {
                 ],
               },
               {
+                key: 'payroll-assets',
+                icon: <FileOutlined />,
+                label: '薪资固资',
+                children: [
+                  { key: 'payroll-setup', label: <Link to="/payroll-setup">薪资基础</Link> },
+                  { key: 'payroll-runs', label: <Link to="/payroll-runs">工资批次</Link> },
+                ],
+              },
+              {
                 key: 'general-ledger',
                 icon: <BookOutlined />,
                 label: '总账',
@@ -373,6 +384,8 @@ const AppFrame: React.FC = () => {
                 <Route path="/cost-voucher-drafts" element={<RequireAuth><CostVoucherDrafts /></RequireAuth>} />
                 <Route path="/inventory-reconciliation" element={<RequireAuth><InventoryReconciliation /></RequireAuth>} />
                 <Route path="/inventory-ledger" element={<RequireAuth><InventoryLedger /></RequireAuth>} />
+                <Route path="/payroll-setup" element={<RequireAuth><PayrollSetup /></RequireAuth>} />
+                <Route path="/payroll-runs" element={<RequireAuth><PayrollRuns /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />
                 <Route path="/auxiliaries" element={<RequireAuth><Auxiliaries /></RequireAuth>} />

@@ -62,6 +62,10 @@ const phase3VoucherReconciliationMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260611040000_phase3_voucher_reconciliation/migration.sql", import.meta.url)
 );
 const phase3VoucherReconciliationMigrationText = phase3VoucherReconciliationMigrationSql.toString("utf8");
+const phase4PayrollFoundationMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260611050000_phase4_payroll_foundation/migration.sql", import.meta.url)
+);
+const phase4PayrollFoundationMigrationText = phase4PayrollFoundationMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -328,4 +332,25 @@ test("Phase 3 voucher reconciliation migration creates cost voucher drafts and r
   assert.match(phase3VoucherReconciliationMigrationText, /"differenceAmount" REAL NOT NULL DEFAULT 0/, "Reconciliation must persist difference amount.");
   assert.match(phase3VoucherReconciliationMigrationText, /CREATE INDEX "CostVoucherDraft_accountSetId_fiscalYear_periodNo_idx"/);
   assert.match(phase3VoucherReconciliationMigrationText, /CREATE INDEX "InventoryReconciliationRun_accountSetId_fiscalYear_periodNo_idx"/);
+});
+
+test("Phase 4 payroll foundation migration creates setup, import, and calculation tables", () => {
+  for (const table of [
+    "PayrollCategory",
+    "PayrollItem",
+    "PayrollFormula",
+    "EmployeePayrollProfile",
+    "PayrollVariableImport",
+    "PayrollVariableImportLine",
+    "PayrollRun",
+    "PayrollRunLine"
+  ]) {
+    assert.match(phase4PayrollFoundationMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase4PayrollFoundationMigrationText, /"monthlyTaxExemption" REAL NOT NULL DEFAULT 5000/, "Payroll profiles must persist tax base settings.");
+  assert.match(phase4PayrollFoundationMigrationText, /"manualAdjustmentAmount" REAL NOT NULL DEFAULT 0/, "Payroll run lines must persist manual tail adjustments.");
+  assert.match(phase4PayrollFoundationMigrationText, /"cumulativeTaxableIncome" REAL NOT NULL DEFAULT 0/, "Payroll run lines must persist cumulative monthly tax basis.");
+  assert.match(phase4PayrollFoundationMigrationText, /CREATE UNIQUE INDEX "PayrollCategory_accountSetId_code_key"/);
+  assert.match(phase4PayrollFoundationMigrationText, /CREATE INDEX "PayrollRun_accountSetId_fiscalYear_periodNo_idx"/);
+  assert.match(phase4PayrollFoundationMigrationText, /CREATE INDEX "PayrollRunLine_employeeProfileId_idx"/);
 });

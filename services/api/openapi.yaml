@@ -3721,6 +3721,218 @@ paths:
               schema:
                 $ref: "#/components/schemas/InventoryReconciliation"
 
+  /payroll-categories:
+    get:
+      summary: List Phase 4 payroll categories.
+      x-permission: payroll_setup.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payroll category list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PayrollCategory"
+    post:
+      summary: Create a Phase 4 payroll category.
+      x-permission: payroll_setup.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePayrollCategoryRequest"
+      responses:
+        "201":
+          description: Payroll category created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayrollCategory"
+
+  /payroll-items:
+    get:
+      summary: List Phase 4 payroll items and formulas.
+      x-permission: payroll_setup.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payroll item list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PayrollItem"
+    post:
+      summary: Create a Phase 4 payroll item.
+      x-permission: payroll_setup.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePayrollItemRequest"
+      responses:
+        "201":
+          description: Payroll item created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayrollItem"
+
+  /employee-payroll-profiles:
+    get:
+      summary: List Phase 4 employee payroll profiles.
+      x-permission: payroll_setup.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Employee payroll profile list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EmployeePayrollProfile"
+    post:
+      summary: Create a Phase 4 employee payroll profile.
+      x-permission: payroll_setup.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEmployeePayrollProfileRequest"
+      responses:
+        "201":
+          description: Employee payroll profile created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmployeePayrollProfile"
+
+  /payroll-variable-imports:
+    get:
+      summary: List Phase 4 payroll attendance and variable pay imports.
+      x-permission: payroll_run.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payroll variable import list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PayrollVariableImport"
+    post:
+      summary: Import attendance, performance, piece-rate, allowance, and deduction rows.
+      x-permission: payroll_run.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePayrollVariableImportRequest"
+      responses:
+        "201":
+          description: Payroll variable import created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayrollVariableImport"
+
+  /payroll-runs:
+    get:
+      summary: List Phase 4 payroll calculation runs.
+      x-permission: payroll_run.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payroll run list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PayrollRun"
+
+  /payroll-runs/calculate:
+    post:
+      summary: Calculate a Phase 4 payroll run with cumulative monthly tax and manual adjustments.
+      x-permission: payroll_run.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CalculatePayrollRunRequest"
+      responses:
+        "201":
+          description: Payroll run calculated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayrollRun"
+
 components:
   parameters:
     AccountSetId:
@@ -7520,6 +7732,318 @@ components:
           type: number
         amount:
           type: number
+
+    CreatePayrollCategoryRequest:
+      type: object
+      required: [accountSetId, code, name]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        createdBy:
+          type: string
+
+    PayrollCategory:
+      type: object
+      required: [id, accountSetId, code, name, status]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+
+    CreatePayrollItemRequest:
+      type: object
+      required: [accountSetId, code, name, itemType]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        itemType:
+          type: string
+          enum: [earning, deduction, tax, company_cost]
+        formula:
+          type: string
+        createdBy:
+          type: string
+
+    PayrollItem:
+      type: object
+      required: [id, accountSetId, code, name, itemType, status]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        itemType:
+          type: string
+        formula:
+          type: string
+        status:
+          type: string
+
+    CreateEmployeePayrollProfileRequest:
+      type: object
+      required: [accountSetId, employeeNo, employeeName, departmentId, payrollCategoryId]
+      properties:
+        accountSetId:
+          type: string
+        employeeNo:
+          type: string
+        employeeName:
+          type: string
+        departmentId:
+          type: string
+        departmentName:
+          type: string
+        payrollCategoryId:
+          type: string
+        baseSalary:
+          type: number
+        personalSocialSecurity:
+          type: number
+        personalHousingFund:
+          type: number
+        companySocialSecurity:
+          type: number
+        companyHousingFund:
+          type: number
+        monthlyTaxExemption:
+          type: number
+        createdBy:
+          type: string
+
+    EmployeePayrollProfile:
+      type: object
+      required: [id, accountSetId, employeeNo, employeeName, departmentId, payrollCategoryId, baseSalary, monthlyTaxExemption]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        employeeNo:
+          type: string
+        employeeName:
+          type: string
+        departmentId:
+          type: string
+        departmentName:
+          type: string
+        payrollCategoryId:
+          type: string
+        baseSalary:
+          type: number
+        personalSocialSecurity:
+          type: number
+        personalHousingFund:
+          type: number
+        companySocialSecurity:
+          type: number
+        companyHousingFund:
+          type: number
+        monthlyTaxExemption:
+          type: number
+
+    CreatePayrollVariableImportRequest:
+      type: object
+      required: [accountSetId, fiscalYear, periodNo, importType, lines]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        importType:
+          type: string
+          enum: [attendance_performance, bonus, allowance_deduction]
+        createdBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayrollVariableImportLineInput"
+
+    PayrollVariableImportLineInput:
+      type: object
+      required: [employeeProfileId]
+      properties:
+        employeeProfileId:
+          type: string
+        workDays:
+          type: number
+        performancePay:
+          type: number
+        piecePay:
+          type: number
+        allowance:
+          type: number
+        deduction:
+          type: number
+
+    PayrollVariableImport:
+      type: object
+      required: [id, accountSetId, fiscalYear, periodNo, importType, status, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        importType:
+          type: string
+        status:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayrollVariableImportLine"
+
+    PayrollVariableImportLine:
+      allOf:
+        - $ref: "#/components/schemas/PayrollVariableImportLineInput"
+        - type: object
+          required: [id, importId, employeeNo, employeeName]
+          properties:
+            id:
+              type: string
+            importId:
+              type: string
+            employeeNo:
+              type: string
+            employeeName:
+              type: string
+
+    CalculatePayrollRunRequest:
+      type: object
+      required: [accountSetId, runNo, payrollCategoryId, variableImportId, fiscalYear, periodNo]
+      properties:
+        accountSetId:
+          type: string
+        runNo:
+          type: string
+        payrollCategoryId:
+          type: string
+        variableImportId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+        manualAdjustments:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayrollManualAdjustment"
+
+    PayrollManualAdjustment:
+      type: object
+      required: [employeeProfileId, field, amount, reason]
+      properties:
+        employeeProfileId:
+          type: string
+        field:
+          type: string
+          enum: [individualIncomeTax, personalSocialSecurity, personalHousingFund]
+        amount:
+          type: number
+        reason:
+          type: string
+
+    PayrollRun:
+      type: object
+      required: [id, accountSetId, runNo, status, lineCount, totalGrossAmount, totalNetPay, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        runNo:
+          type: string
+        payrollCategoryId:
+          type: string
+        variableImportId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [calculated]
+        lineCount:
+          type: integer
+        totalGrossAmount:
+          type: number
+        totalDeductionAmount:
+          type: number
+        totalTaxAmount:
+          type: number
+        totalNetPay:
+          type: number
+        totalCompanyCost:
+          type: number
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayrollRunLine"
+
+    PayrollRunLine:
+      type: object
+      required: [id, employeeProfileId, grossAmount, deductionAmount, taxableIncome, cumulativeTaxableIncome, individualIncomeTax, manualAdjustmentAmount, netPay, companyCost]
+      properties:
+        id:
+          type: string
+        employeeProfileId:
+          type: string
+        employeeNo:
+          type: string
+        employeeName:
+          type: string
+        departmentId:
+          type: string
+        grossAmount:
+          type: number
+        deductionAmount:
+          type: number
+        taxableIncome:
+          type: number
+        cumulativeTaxableIncome:
+          type: number
+        individualIncomeTax:
+          type: number
+        manualAdjustmentAmount:
+          type: number
+        netPay:
+          type: number
+        companyCost:
+          type: number
+        manualAdjustments:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayrollManualAdjustment"
 
     CreateAgentActionRequest:
       type: object

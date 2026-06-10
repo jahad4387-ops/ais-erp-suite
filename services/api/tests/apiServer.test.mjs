@@ -2754,6 +2754,143 @@ test("Phase 3 cost voucher drafts and inventory reconciliation close the self-te
   assert.ok(api.state.auditLogs.some((log) => log.action === "cost_voucher_draft.create" && log.objectId === draft.body.id));
 });
 
+test("Phase 4 payroll foundation calculates imported variable pay with monthly cumulative tax and manual adjustments", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P4-PAY",
+      name: "Phase 4 Payroll Set",
+      companyName: "Phase 4 Payroll Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase4-payroll-account-set"
+  );
+  const actorId = "phase4-payroll-actor";
+  api.state.permissionsByActor.set(actorId, new Set(["payroll_setup.manage", "payroll_run.manage"]));
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+
+  const category = await api.handle({
+    method: "POST",
+    path: "/payroll-categories",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-payroll-category" },
+    body: { accountSetId: accountSet.body.id, code: "MONTHLY", name: "Monthly payroll", createdBy: actorId }
+  });
+  const item = await api.handle({
+    method: "POST",
+    path: "/payroll-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-payroll-item" },
+    body: { accountSetId: accountSet.body.id, code: "PERF", name: "Performance pay", itemType: "earning", formula: "import.performancePay", createdBy: actorId }
+  });
+  const profile = await api.handle({
+    method: "POST",
+    path: "/employee-payroll-profiles",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-payroll-profile" },
+    body: {
+      accountSetId: accountSet.body.id,
+      employeeNo: "E001",
+      employeeName: "Lin Mei",
+      departmentId: "D-PROD",
+      departmentName: "Production",
+      payrollCategoryId: category.body.id,
+      baseSalary: 10000,
+      personalSocialSecurity: 1000,
+      personalHousingFund: 500,
+      companySocialSecurity: 1600,
+      companyHousingFund: 1200,
+      monthlyTaxExemption: 5000,
+      createdBy: actorId
+    }
+  });
+  const firstImport = await api.handle({
+    method: "POST",
+    path: "/payroll-variable-imports",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-payroll-import-1" },
+    body: {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      importType: "attendance_performance",
+      createdBy: actorId,
+      lines: [{ employeeProfileId: profile.body.id, workDays: 22, performancePay: 1000, piecePay: 0, allowance: 200, deduction: 100 }]
+    }
+  });
+  const firstRun = await api.handle({
+    method: "POST",
+    path: "/payroll-runs/calculate",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-payroll-run-1" },
+    body: {
+      accountSetId: accountSet.body.id,
+      runNo: "PAY-202601-01",
+      payrollCategoryId: category.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      variableImportId: firstImport.body.id,
+      createdBy: actorId,
+      manualAdjustments: [{ employeeProfileId: profile.body.id, field: "individualIncomeTax", amount: 170, reason: "official tax rounding" }]
+    }
+  });
+  const secondImport = await api.handle({
+    method: "POST",
+    path: "/payroll-variable-imports",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-payroll-import-2" },
+    body: {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      importType: "bonus",
+      createdBy: actorId,
+      lines: [{ employeeProfileId: profile.body.id, workDays: 0, performancePay: 3000, piecePay: 0, allowance: 0, deduction: 0 }]
+    }
+  });
+  const secondRun = await api.handle({
+    method: "POST",
+    path: "/payroll-runs/calculate",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-payroll-run-2" },
+    body: {
+      accountSetId: accountSet.body.id,
+      runNo: "PAY-202601-02",
+      payrollCategoryId: category.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      variableImportId: secondImport.body.id,
+      createdBy: actorId
+    }
+  });
+  const runs = await api.handle({
+    method: "GET",
+    path: `/payroll-runs?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(category.status, 201);
+  assert.equal(item.status, 201);
+  assert.equal(profile.status, 201);
+  assert.equal(firstImport.status, 201);
+  assert.equal(firstImport.body.lines[0].performancePay, 1000);
+  assert.equal(firstRun.status, 201);
+  assert.equal(firstRun.body.status, "calculated");
+  assert.equal(firstRun.body.lineCount, 1);
+  assert.equal(firstRun.body.totalGrossAmount, 11200);
+  assert.equal(firstRun.body.lines[0].individualIncomeTax, 170);
+  assert.equal(firstRun.body.lines[0].manualAdjustmentAmount, 32);
+  assert.equal(firstRun.body.lines[0].cumulativeTaxableIncome, 9600);
+  assert.equal(firstRun.body.lines[0].netPay, 9430);
+  assert.equal(secondRun.status, 201);
+  assert.equal(secondRun.body.lines[0].grossAmount, 3000);
+  assert.equal(secondRun.body.lines[0].cumulativeTaxableIncome, 12600);
+  assert.equal(secondRun.body.lines[0].individualIncomeTax, 58);
+  assert.equal(secondRun.body.lines[0].netPay, 2942);
+  assert.deepEqual(runs.body.map((run) => run.runNo), ["PAY-202601-01", "PAY-202601-02"]);
+  assert.ok(api.state.auditLogs.some((log) => log.action === "payroll_variable_import.create" && log.objectId === firstImport.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "payroll_run.calculate" && log.objectId === secondRun.body.id));
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

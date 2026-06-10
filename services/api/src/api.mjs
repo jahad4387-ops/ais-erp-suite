@@ -100,7 +100,9 @@ const DEFAULT_PERMISSION_CODES = [
   "mock_cost_input.manage",
   "cost_allocation.manage",
   "cost_voucher.manage",
-  "inventory_reconciliation.view"
+  "inventory_reconciliation.view",
+  "payroll_setup.manage",
+  "payroll_run.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -646,6 +648,12 @@ function permissionFor(request) {
   if (segments[0] === "inventory-reconciliation") {
     return "inventory_reconciliation.view";
   }
+  if (segments[0] === "payroll-categories" || segments[0] === "payroll-items" || segments[0] === "employee-payroll-profiles") {
+    return "payroll_setup.manage";
+  }
+  if (segments[0] === "payroll-variable-imports" || segments[0] === "payroll-runs") {
+    return "payroll_run.manage";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -781,6 +789,12 @@ function createState(options = {}) {
     inventoryCostAdjustments: new Map(),
     costVoucherDrafts: new Map(),
     inventoryReconciliationRuns: new Map(),
+    payrollCategories: new Map(),
+    payrollItems: new Map(),
+    employeePayrollProfiles: new Map(),
+    payrollVariableImports: new Map(),
+    payrollRuns: new Map(),
+    payrollRunLines: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1844,6 +1858,133 @@ function buildInventoryReconciliation(state, accountSetId, { fiscalYear, periodN
   };
   state.inventoryReconciliationRuns.set(run.id, run);
   return run;
+}
+
+function listPayrollCategories(state, accountSetId) {
+  return [...state.payrollCategories.values()].filter((row) => row.accountSetId === accountSetId).sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function listPayrollItems(state, accountSetId) {
+  return [...state.payrollItems.values()].filter((row) => row.accountSetId === accountSetId).sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function listEmployeePayrollProfiles(state, accountSetId) {
+  return [...state.employeePayrollProfiles.values()]
+    .filter((row) => row.accountSetId === accountSetId)
+    .sort((left, right) => left.employeeNo.localeCompare(right.employeeNo));
+}
+
+function listPayrollRuns(state, accountSetId) {
+  return [...state.payrollRuns.values()].filter((row) => row.accountSetId === accountSetId).sort((left, right) => left.runNo.localeCompare(right.runNo));
+}
+
+function findPayrollCategoryByIdentifier(state, identifier) {
+  return state.payrollCategories.get(identifier) ?? [...state.payrollCategories.values()].find((row) => row.code === identifier) ?? null;
+}
+
+function findEmployeePayrollProfileByIdentifier(state, identifier) {
+  return state.employeePayrollProfiles.get(identifier) ?? [...state.employeePayrollProfiles.values()].find((row) => row.employeeNo === identifier) ?? null;
+}
+
+function findPayrollVariableImportByIdentifier(state, identifier) {
+  return state.payrollVariableImports.get(identifier) ?? null;
+}
+
+function calculateSimpleMonthlyTax(taxableIncome, monthlyTaxExemption) {
+  return roundAmount(Math.max(0, taxableIncome - monthlyTaxExemption) * 0.03);
+}
+
+function manualAdjustmentFor(manualAdjustments, employeeProfileId, field) {
+  return (manualAdjustments ?? []).find((adjustment) => adjustment.employeeProfileId === employeeProfileId && adjustment.field === field) ?? null;
+}
+
+function priorPayrollRunLinesForMonth(state, accountSetId, fiscalYear, periodNo, employeeProfileId) {
+  return [...state.payrollRuns.values()]
+    .filter((run) => run.accountSetId === accountSetId && run.fiscalYear === fiscalYear && run.periodNo === periodNo)
+    .flatMap((run) => run.lines ?? [])
+    .filter((line) => line.employeeProfileId === employeeProfileId);
+}
+
+function buildPayrollRun(state, body, actorId) {
+  const category = findPayrollCategoryByIdentifier(state, body.payrollCategoryId);
+  if (!category || category.accountSetId !== body.accountSetId) {
+    return { error: errorResponse(404, "PAYROLL_CATEGORY_NOT_FOUND", "Payroll category was not found.") };
+  }
+  const variableImport = findPayrollVariableImportByIdentifier(state, body.variableImportId);
+  if (!variableImport || variableImport.accountSetId !== body.accountSetId) {
+    return { error: errorResponse(404, "PAYROLL_VARIABLE_IMPORT_NOT_FOUND", "Payroll variable import was not found.") };
+  }
+  const fiscalYear = Number(body.fiscalYear);
+  const periodNo = Number(body.periodNo);
+  const runId = `payroll-run:${randomUUID()}`;
+  const lines = variableImport.lines.map((importLine) => {
+    const profile = findEmployeePayrollProfileByIdentifier(state, importLine.employeeProfileId);
+    if (!profile || profile.accountSetId !== body.accountSetId) {
+      throw new Error("Payroll profile was not found.");
+    }
+    const includeBaseSalary = Number(importLine.workDays ?? 0) > 0 || variableImport.importType === "attendance_performance";
+    const baseSalary = includeBaseSalary ? Number(profile.baseSalary ?? 0) : 0;
+    const personalSocialSecurity = includeBaseSalary ? Number(profile.personalSocialSecurity ?? 0) : 0;
+    const personalHousingFund = includeBaseSalary ? Number(profile.personalHousingFund ?? 0) : 0;
+    const companySocialSecurity = includeBaseSalary ? Number(profile.companySocialSecurity ?? 0) : 0;
+    const companyHousingFund = includeBaseSalary ? Number(profile.companyHousingFund ?? 0) : 0;
+    const grossAmount = roundAmount(baseSalary + Number(importLine.performancePay ?? 0) + Number(importLine.piecePay ?? 0) + Number(importLine.allowance ?? 0));
+    const deductionAmount = roundAmount(personalSocialSecurity + personalHousingFund + Number(importLine.deduction ?? 0));
+    const taxableIncome = roundAmount(Math.max(0, grossAmount - deductionAmount));
+    const priorLines = priorPayrollRunLinesForMonth(state, body.accountSetId, fiscalYear, periodNo, profile.id);
+    const priorTaxableIncome = roundAmount(priorLines.reduce((sum, line) => sum + Number(line.taxableIncome ?? 0), 0));
+    const priorTax = roundAmount(priorLines.reduce((sum, line) => sum + Number(line.individualIncomeTax ?? 0), 0));
+    const cumulativeTaxableIncome = roundAmount(priorTaxableIncome + taxableIncome);
+    const calculatedTax = roundAmount(Math.max(0, calculateSimpleMonthlyTax(cumulativeTaxableIncome, Number(profile.monthlyTaxExemption ?? 5000)) - priorTax));
+    const taxOverride = manualAdjustmentFor(body.manualAdjustments, profile.id, "individualIncomeTax");
+    const individualIncomeTax = roundAmount(taxOverride ? Number(taxOverride.amount) : calculatedTax);
+    const manualAdjustmentAmount = roundAmount(individualIncomeTax - calculatedTax);
+    const netPay = roundAmount(grossAmount - deductionAmount - individualIncomeTax);
+    const companyCost = roundAmount(grossAmount + companySocialSecurity + companyHousingFund);
+    return {
+      id: `payroll-run-line:${randomUUID()}`,
+      payrollRunId: runId,
+      employeeProfileId: profile.id,
+      employeeNo: profile.employeeNo,
+      employeeName: profile.employeeName,
+      departmentId: profile.departmentId,
+      departmentName: profile.departmentName ?? null,
+      grossAmount,
+      deductionAmount,
+      taxableIncome,
+      cumulativeTaxableIncome,
+      individualIncomeTax,
+      manualAdjustmentAmount,
+      netPay,
+      companyCost,
+      manualAdjustments: taxOverride ? [taxOverride] : []
+    };
+  });
+  const run = {
+    id: runId,
+    accountSetId: body.accountSetId,
+    runNo: body.runNo,
+    payrollCategoryId: category.id,
+    payrollCategoryCode: category.code,
+    variableImportId: variableImport.id,
+    fiscalYear,
+    periodNo,
+    status: "calculated",
+    lineCount: lines.length,
+    totalGrossAmount: roundAmount(lines.reduce((sum, line) => sum + line.grossAmount, 0)),
+    totalDeductionAmount: roundAmount(lines.reduce((sum, line) => sum + line.deductionAmount, 0)),
+    totalTaxAmount: roundAmount(lines.reduce((sum, line) => sum + line.individualIncomeTax, 0)),
+    totalNetPay: roundAmount(lines.reduce((sum, line) => sum + line.netPay, 0)),
+    totalCompanyCost: roundAmount(lines.reduce((sum, line) => sum + line.companyCost, 0)),
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    lines
+  };
+  state.payrollRuns.set(run.id, run);
+  for (const line of lines) {
+    state.payrollRunLines.set(line.id, line);
+  }
+  return { run };
 }
 
 function normalizeOrderLines(lines = []) {
@@ -4047,6 +4188,177 @@ async function route(request, state) {
     const actorId = actorIdFor(request, state);
     if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
     return jsonResponse(200, buildInventoryReconciliation(state, accountSetId, { fiscalYear, periodNo }));
+  }
+
+  if (segments.length === 1 && segments[0] === "payroll-categories") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, listPayrollCategories(state, accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const duplicate = listPayrollCategories(state, body.accountSetId).find((category) => category.code === body.code);
+      if (duplicate) return errorResponse(409, "PAYROLL_CATEGORY_EXISTS", "Payroll category code already exists in this account set.");
+      const category = {
+        id: body.id ?? `payroll-category:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        code: String(body.code),
+        name: String(body.name),
+        description: body.description ?? null,
+        status: body.status ?? "active",
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now"
+      };
+      state.payrollCategories.set(category.id, category);
+      appendAuditLog(state, { actorId: category.createdBy, action: "payroll_category.create", objectType: "payroll_category", objectId: category.id });
+      return jsonResponse(201, category);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "payroll-items") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, listPayrollItems(state, accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const duplicate = listPayrollItems(state, body.accountSetId).find((item) => item.code === body.code);
+      if (duplicate) return errorResponse(409, "PAYROLL_ITEM_EXISTS", "Payroll item code already exists in this account set.");
+      const item = {
+        id: body.id ?? `payroll-item:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        code: String(body.code),
+        name: String(body.name),
+        itemType: body.itemType,
+        formula: body.formula ?? null,
+        status: body.status ?? "active",
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now"
+      };
+      state.payrollItems.set(item.id, item);
+      appendAuditLog(state, { actorId: item.createdBy, action: "payroll_item.create", objectType: "payroll_item", objectId: item.id });
+      return jsonResponse(201, item);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "employee-payroll-profiles") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, listEmployeePayrollProfiles(state, accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const category = findPayrollCategoryByIdentifier(state, body.payrollCategoryId);
+      if (!category || category.accountSetId !== body.accountSetId) return errorResponse(404, "PAYROLL_CATEGORY_NOT_FOUND", "Payroll category was not found.");
+      const duplicate = listEmployeePayrollProfiles(state, body.accountSetId).find((profile) => profile.employeeNo === body.employeeNo);
+      if (duplicate) return errorResponse(409, "EMPLOYEE_PAYROLL_PROFILE_EXISTS", "Employee payroll profile already exists in this account set.");
+      const profile = {
+        id: body.id ?? `employee-payroll-profile:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        employeeNo: String(body.employeeNo),
+        employeeName: String(body.employeeName),
+        departmentId: String(body.departmentId),
+        departmentName: body.departmentName ?? null,
+        payrollCategoryId: category.id,
+        payrollCategoryCode: category.code,
+        baseSalary: roundAmount(body.baseSalary ?? 0),
+        personalSocialSecurity: roundAmount(body.personalSocialSecurity ?? 0),
+        personalHousingFund: roundAmount(body.personalHousingFund ?? 0),
+        companySocialSecurity: roundAmount(body.companySocialSecurity ?? 0),
+        companyHousingFund: roundAmount(body.companyHousingFund ?? 0),
+        monthlyTaxExemption: roundAmount(body.monthlyTaxExemption ?? 5000),
+        status: body.status ?? "active",
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now"
+      };
+      state.employeePayrollProfiles.set(profile.id, profile);
+      appendAuditLog(state, { actorId: profile.createdBy, action: "employee_payroll_profile.create", objectType: "employee_payroll_profile", objectId: profile.id });
+      return jsonResponse(201, profile);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "payroll-variable-imports") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, [...state.payrollVariableImports.values()].filter((row) => row.accountSetId === accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const importId = body.id ?? `payroll-variable-import:${randomUUID()}`;
+      const lines = (body.lines ?? []).map((line) => {
+        const profile = findEmployeePayrollProfileByIdentifier(state, line.employeeProfileId);
+        if (!profile || profile.accountSetId !== body.accountSetId) throw new Error("Payroll profile was not found.");
+        return {
+          id: `payroll-variable-import-line:${randomUUID()}`,
+          importId,
+          employeeProfileId: profile.id,
+          employeeNo: profile.employeeNo,
+          employeeName: profile.employeeName,
+          workDays: Number(line.workDays ?? 0),
+          performancePay: roundAmount(line.performancePay ?? 0),
+          piecePay: roundAmount(line.piecePay ?? 0),
+          allowance: roundAmount(line.allowance ?? 0),
+          deduction: roundAmount(line.deduction ?? 0),
+          raw: line
+        };
+      });
+      const variableImport = {
+        id: importId,
+        accountSetId: body.accountSetId,
+        fiscalYear: Number(body.fiscalYear),
+        periodNo: Number(body.periodNo),
+        importType: body.importType,
+        status: "imported",
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now",
+        lines
+      };
+      state.payrollVariableImports.set(variableImport.id, variableImport);
+      appendAuditLog(state, { actorId: variableImport.createdBy, action: "payroll_variable_import.create", objectType: "payroll_variable_import", objectId: variableImport.id });
+      return jsonResponse(201, variableImport);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "payroll-runs" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    if (!accountSetId) throw new Error("accountSetId is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+    return jsonResponse(200, listPayrollRuns(state, accountSetId));
+  }
+
+  if (segments.length === 2 && segments[0] === "payroll-runs" && segments[1] === "calculate" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+    try {
+      const result = buildPayrollRun(state, body, actorId);
+      if (result.error) return result.error;
+      appendAuditLog(state, { actorId: result.run.createdBy, action: "payroll_run.calculate", objectType: "payroll_run", objectId: result.run.id });
+      return jsonResponse(201, result.run);
+    } catch (error) {
+      return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
+    }
   }
 
   if (request.method === "GET" && request.path === "/periods") {

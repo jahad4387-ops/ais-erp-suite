@@ -69,6 +69,12 @@ model AccountSet {
   inventoryCostAdjustments InventoryCostAdjustment[]
   costVoucherDrafts  CostVoucherDraft[]
   inventoryReconciliationRuns InventoryReconciliationRun[]
+  payrollCategories  PayrollCategory[]
+  payrollItems       PayrollItem[]
+  payrollFormulas    PayrollFormula[]
+  employeePayrollProfiles EmployeePayrollProfile[]
+  payrollVariableImports PayrollVariableImport[]
+  payrollRuns        PayrollRun[]
 }
 
 model User {
@@ -1571,4 +1577,160 @@ model InventoryReconciliationRun {
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
 
   @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model PayrollCategory {
+  id          String   @id @default(uuid())
+  accountSetId String
+  code        String
+  name        String
+  description String?
+  status      String   @default("active")
+  createdBy   String
+  createdAt   DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  profiles   EmployeePayrollProfile[]
+  runs       PayrollRun[]
+
+  @@unique([accountSetId, code])
+}
+
+model PayrollItem {
+  id          String   @id @default(uuid())
+  accountSetId String
+  code        String
+  name        String
+  itemType    String
+  formula     String?
+  status      String   @default("active")
+  createdBy   String
+  createdAt   DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  formulas   PayrollFormula[]
+
+  @@unique([accountSetId, code])
+}
+
+model PayrollFormula {
+  id            String   @id @default(uuid())
+  accountSetId  String
+  payrollItemId String
+  expression    String
+  effectiveFrom DateTime?
+  effectiveTo   DateTime?
+  createdBy     String
+  createdAt     DateTime @default(now())
+
+  accountSet  AccountSet @relation(fields: [accountSetId], references: [id])
+  payrollItem PayrollItem @relation(fields: [payrollItemId], references: [id])
+}
+
+model EmployeePayrollProfile {
+  id                     String   @id @default(uuid())
+  accountSetId           String
+  employeeNo             String
+  employeeName           String
+  departmentId           String
+  departmentName         String?
+  payrollCategoryId      String
+  baseSalary             Float    @default(0)
+  personalSocialSecurity Float    @default(0)
+  personalHousingFund    Float    @default(0)
+  companySocialSecurity  Float    @default(0)
+  companyHousingFund     Float    @default(0)
+  monthlyTaxExemption    Float    @default(5000)
+  status                 String   @default("active")
+  createdBy              String
+  createdAt              DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  payrollCategory PayrollCategory @relation(fields: [payrollCategoryId], references: [id])
+  importLines PayrollVariableImportLine[]
+  runLines    PayrollRunLine[]
+
+  @@unique([accountSetId, employeeNo])
+}
+
+model PayrollVariableImport {
+  id           String   @id @default(uuid())
+  accountSetId String
+  fiscalYear   Int
+  periodNo     Int
+  importType   String
+  status       String   @default("imported")
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  lines      PayrollVariableImportLine[]
+  runs       PayrollRun[]
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model PayrollVariableImportLine {
+  id                String @id @default(uuid())
+  importId          String
+  employeeProfileId String
+  workDays          Float  @default(0)
+  performancePay    Float  @default(0)
+  piecePay          Float  @default(0)
+  allowance         Float  @default(0)
+  deduction         Float  @default(0)
+  rawJson           String?
+
+  import PayrollVariableImport @relation(fields: [importId], references: [id])
+  employeeProfile EmployeePayrollProfile @relation(fields: [employeeProfileId], references: [id])
+}
+
+model PayrollRun {
+  id                   String   @id @default(uuid())
+  accountSetId          String
+  runNo                 String
+  payrollCategoryId     String
+  variableImportId      String
+  fiscalYear            Int
+  periodNo              Int
+  status                String   @default("calculated")
+  lineCount             Int      @default(0)
+  totalGrossAmount      Float    @default(0)
+  totalDeductionAmount  Float    @default(0)
+  totalTaxAmount        Float    @default(0)
+  totalNetPay           Float    @default(0)
+  totalCompanyCost      Float    @default(0)
+  createdBy             String
+  createdAt             DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  payrollCategory PayrollCategory @relation(fields: [payrollCategoryId], references: [id])
+  variableImport PayrollVariableImport @relation(fields: [variableImportId], references: [id])
+  lines PayrollRunLine[]
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model PayrollRunLine {
+  id                      String @id @default(uuid())
+  payrollRunId            String
+  employeeProfileId       String
+  employeeNo              String
+  employeeName            String
+  departmentId            String
+  departmentName          String?
+  grossAmount             Float  @default(0)
+  deductionAmount         Float  @default(0)
+  taxableIncome           Float  @default(0)
+  cumulativeTaxableIncome Float  @default(0)
+  individualIncomeTax     Float  @default(0)
+  manualAdjustmentAmount  Float  @default(0)
+  netPay                  Float  @default(0)
+  companyCost             Float  @default(0)
+  manualAdjustmentsJson   String?
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id])
+  employeeProfile EmployeePayrollProfile @relation(fields: [employeeProfileId], references: [id])
+
+  @@index([employeeProfileId])
 }

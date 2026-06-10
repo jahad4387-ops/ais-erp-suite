@@ -348,6 +348,25 @@ test("Phase 3 final endpoints document cost voucher drafts and inventory reconci
   assert.match(contract, /differenceAmount:/, "Inventory reconciliation must expose differences.");
 });
 
+test("Phase 4 payroll foundation endpoints document setup, variable import, and calculation contracts", () => {
+  const categoryBlock = blockAfter("  /payroll-categories:");
+  const itemBlock = blockAfter("  /payroll-items:");
+  const profileBlock = blockAfter("  /employee-payroll-profiles:");
+  const importBlock = blockAfter("  /payroll-variable-imports:");
+  const runBlock = blockAfter("  /payroll-runs/calculate:");
+
+  assert.match(categoryBlock, /x-permission: payroll_setup\.manage/);
+  assert.match(categoryBlock, /PayrollCategory/);
+  assert.match(itemBlock, /PayrollItem/);
+  assert.match(profileBlock, /EmployeePayrollProfile/);
+  assert.match(importBlock, /x-permission: payroll_run\.manage/);
+  assert.match(importBlock, /PayrollVariableImport/);
+  assert.match(runBlock, /x-permission: payroll_run\.manage/);
+  assert.match(runBlock, /PayrollRun/);
+  assert.match(contract, /manualAdjustmentAmount:/, "Payroll run lines must expose manual adjustments.");
+  assert.match(contract, /cumulativeTaxableIncome:/, "Payroll run lines must expose cumulative tax basis.");
+});
+
 test("deployment configuration check endpoint is documented", () => {
   const block = blockAfter("  /deployment/config:");
 
