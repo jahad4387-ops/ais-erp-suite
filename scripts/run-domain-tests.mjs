@@ -32,3 +32,4 @@ import "../apps/web/tests/orderWorkflowPages.test.mjs";
 import "../apps/web/tests/fulfillmentPages.test.mjs";
 import "../apps/web/tests/invoicePages.test.mjs";
 import "../apps/web/tests/counterpartyLedgerPage.test.mjs";
+import "../apps/web/tests/paymentWorkbenchPage.test.mjs";

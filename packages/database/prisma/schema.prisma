@@ -44,6 +44,8 @@ model AccountSet {
   purchaseInvoices   PurchaseInvoice[]
   salesInvoices      SalesInvoice[]
   counterpartyLedgerEntries CounterpartyLedgerEntry[]
+  paymentRequests    PaymentRequest[]
+  supplierPayments   SupplierPayment[]
 }
 
 model User {
@@ -480,6 +482,8 @@ model Partner {
   purchaseInvoices PurchaseInvoice[] @relation("PurchaseInvoiceSupplier")
   salesInvoices    SalesInvoice[]    @relation("SalesInvoiceCustomer")
   counterpartyLedgerEntries CounterpartyLedgerEntry[]
+  paymentRequests   PaymentRequest[]  @relation("PaymentRequestSupplier")
+  supplierPayments  SupplierPayment[] @relation("SupplierPaymentSupplier")
 
   @@unique([accountSetId, code])
   @@index([accountSetId, partnerType])
@@ -781,15 +785,79 @@ model CounterpartyLedgerEntry {
   glAccountCode      String
   auxiliaryType      String
   auxiliaryPartnerId String
+  isPaymentBlocked   Boolean  @default(false)
+  paymentBlockReason String?
   createdBy          String
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
   partner    Partner    @relation(fields: [partnerId], references: [id])
+  paymentRequests  PaymentRequest[]
+  supplierPayments SupplierPayment[]
 
   @@unique([sourceType, sourceId])
   @@index([accountSetId, direction, status])
   @@index([partnerId])
   @@index([dueDate])
+}
+
+model PaymentRequest {
+  id                        String   @id @default(uuid())
+  accountSetId              String
+  counterpartyLedgerEntryId String
+  supplierId                String
+  requestNo                 String
+  requestDate               DateTime
+  plannedPaymentDate        DateTime?
+  requestedAmount           Float    @default(0)
+  status                    String   @default("pending_approval")
+  requestedBy               String
+  approvedBy                String?
+  approvedAt                DateTime?
+  approvalComment           String?
+  paymentMethod             String?
+  bankAccountCode           String
+  evidenceRefsJson          String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  accountSet              AccountSet              @relation(fields: [accountSetId], references: [id])
+  counterpartyLedgerEntry CounterpartyLedgerEntry @relation(fields: [counterpartyLedgerEntryId], references: [id])
+  supplier                Partner                 @relation("PaymentRequestSupplier", fields: [supplierId], references: [id])
+  supplierPayments        SupplierPayment[]
+
+  @@unique([accountSetId, requestNo])
+  @@index([accountSetId, status])
+  @@index([counterpartyLedgerEntryId])
+  @@index([supplierId])
+}
+
+model SupplierPayment {
+  id                        String   @id @default(uuid())
+  accountSetId              String
+  paymentRequestId          String
+  counterpartyLedgerEntryId String
+  supplierId                String
+  paymentNo                 String
+  paymentDate               DateTime
+  paidAmount                Float    @default(0)
+  status                    String   @default("paid")
+  paidBy                    String
+  paymentMethod             String?
+  bankAccountCode           String
+  glVoucherId               String?
+  evidenceRefsJson          String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  accountSet              AccountSet              @relation(fields: [accountSetId], references: [id])
+  paymentRequest          PaymentRequest          @relation(fields: [paymentRequestId], references: [id])
+  counterpartyLedgerEntry CounterpartyLedgerEntry @relation(fields: [counterpartyLedgerEntryId], references: [id])
+  supplier                Partner                 @relation("SupplierPaymentSupplier", fields: [supplierId], references: [id])
+
+  @@unique([accountSetId, paymentNo])
+  @@index([accountSetId, status])
+  @@index([paymentRequestId])
+  @@index([supplierId])
 }

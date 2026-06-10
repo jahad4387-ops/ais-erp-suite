@@ -1179,7 +1179,10 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
         "sales_delivery.manage",
         "purchase_invoice.manage",
         "sales_invoice.manage",
-        "counterparty_ledger.view"
+        "counterparty_ledger.view",
+        "payment_request.manage",
+        "supplier_payment.manage",
+        "payment_block.manage"
       ]
     },
     "phase2-invoice-role"
@@ -1359,6 +1362,72 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
     path: `/counterparty-ledger?accountSetId=${accountSet.body.id}&direction=ar`,
     headers: { "Actor-Id": actor.body.id }
   });
+  const paymentRequest = await api.handle({
+    method: "POST",
+    path: "/payment-requests",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-payment-request" },
+    body: {
+      accountSetId: accountSet.body.id,
+      counterpartyLedgerEntryId: payableLedger.body[0].id,
+      requestDate: "2026-04-08",
+      plannedPaymentDate: "2026-04-18",
+      requestedAmount: 600,
+      requestedBy: actor.body.id,
+      paymentMethod: "bank_transfer",
+      bankAccountCode: "1002",
+      evidenceRefs: ["attachment:payment-approval"]
+    }
+  });
+  const approvedPaymentRequest = await api.handle({
+    method: "POST",
+    path: `/payment-requests/${paymentRequest.body.id}/approve`,
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-payment-request-approve" },
+    body: { approvedBy: actor.body.id, approvalComment: "Pay this week" }
+  });
+  const supplierPayment = await api.handle({
+    method: "POST",
+    path: "/supplier-payments",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-supplier-payment" },
+    body: {
+      accountSetId: accountSet.body.id,
+      paymentRequestId: approvedPaymentRequest.body.id,
+      paymentDate: "2026-04-19",
+      paidAmount: 600,
+      paidBy: actor.body.id,
+      bankAccountCode: "1002",
+      evidenceRefs: ["attachment:bank-slip"]
+    }
+  });
+  const approvedPaymentRequests = await api.handle({
+    method: "GET",
+    path: `/payment-requests?accountSetId=${accountSet.body.id}&status=approved`,
+    headers: { "Actor-Id": actor.body.id }
+  });
+  const supplierPayments = await api.handle({
+    method: "GET",
+    path: `/supplier-payments?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": actor.body.id }
+  });
+  const blockedLedger = await api.handle({
+    method: "POST",
+    path: `/counterparty-ledger/${payableLedger.body[0].id}/block-payment`,
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-block-payment" },
+    body: { blockedBy: actor.body.id, paymentBlockReason: "Supplier bank account under review" }
+  });
+  const blockedPaymentRequest = await api.handle({
+    method: "POST",
+    path: "/payment-requests",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-blocked-payment-request" },
+    body: {
+      accountSetId: accountSet.body.id,
+      counterpartyLedgerEntryId: payableLedger.body[0].id,
+      requestDate: "2026-04-09",
+      requestedAmount: 100,
+      requestedBy: actor.body.id,
+      paymentMethod: "bank_transfer",
+      bankAccountCode: "1002"
+    }
+  });
 
   assert.equal(purchaseInvoice.status, 201);
   assert.equal(purchaseInvoice.body.status, "confirmed");
@@ -1396,8 +1465,29 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
   assert.equal(receivableLedger.body[0].glAccountCode, "1122");
   assert.equal(receivableLedger.body[0].auxiliaryType, "customer");
   assert.equal(receivableLedger.body[0].auxiliaryPartnerId, customer.body.id);
+  assert.equal(paymentRequest.status, 201);
+  assert.equal(paymentRequest.body.status, "pending_approval");
+  assert.equal(paymentRequest.body.supplierId, supplier.body.id);
+  assert.equal(paymentRequest.body.requestedAmount, 600);
+  assert.equal(paymentRequest.body.sourceNo, purchaseInvoice.body.invoiceNo);
+  assert.equal(approvedPaymentRequest.status, 200);
+  assert.equal(approvedPaymentRequest.body.status, "approved");
+  assert.equal(approvedPaymentRequest.body.approvedBy, actor.body.id);
+  assert.equal(supplierPayment.status, 201);
+  assert.equal(supplierPayment.body.status, "paid");
+  assert.equal(supplierPayment.body.paymentRequestNo, paymentRequest.body.requestNo);
+  assert.equal(supplierPayment.body.paidAmount, 600);
+  assert.deepEqual(approvedPaymentRequests.body.map((request) => request.requestNo), [paymentRequest.body.requestNo]);
+  assert.deepEqual(supplierPayments.body.map((payment) => payment.paymentNo), [supplierPayment.body.paymentNo]);
+  assert.equal(blockedLedger.status, 200);
+  assert.equal(blockedLedger.body.isPaymentBlocked, true);
+  assert.equal(blockedLedger.body.paymentBlockReason, "Supplier bank account under review");
+  assert.equal(blockedPaymentRequest.status, 409);
+  assert.equal(blockedPaymentRequest.body.code, "PAYMENT_BLOCKED");
   assert.ok(api.state.auditLogs.some((log) => log.action === "purchase_invoice.confirm" && log.objectId === purchaseInvoice.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "sales_invoice.confirm" && log.objectId === salesInvoice.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "payment_request.approve" && log.objectId === paymentRequest.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "supplier_payment.create" && log.objectId === supplierPayment.body.id));
 });
 
 test("API can persist account sets and scoped grants through platform store", async () => {

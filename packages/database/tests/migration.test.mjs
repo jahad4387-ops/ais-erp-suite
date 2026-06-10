@@ -26,6 +26,10 @@ const phase2CounterpartyLedgerMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610130000_phase2_counterparty_ledger/migration.sql", import.meta.url)
 );
 const phase2CounterpartyLedgerMigrationText = phase2CounterpartyLedgerMigrationSql.toString("utf8");
+const phase2PaymentMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610140000_phase2_payment_workflow/migration.sql", import.meta.url)
+);
+const phase2PaymentMigrationText = phase2PaymentMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -149,4 +153,19 @@ test("Phase 2 counterparty ledger migration maps AP and AR to GL auxiliary dimen
   assert.match(phase2CounterpartyLedgerMigrationText, /"auxiliaryPartnerId" TEXT NOT NULL/);
   assert.match(phase2CounterpartyLedgerMigrationText, /CREATE INDEX "CounterpartyLedgerEntry_accountSetId_direction_status_idx"/);
   assert.match(phase2CounterpartyLedgerMigrationText, /CREATE INDEX "CounterpartyLedgerEntry_partnerId_idx"/);
+});
+
+test("Phase 2 payment migration creates request, approval, payment, and freeze controls", () => {
+  assert.match(phase2PaymentMigrationText, /ALTER TABLE "CounterpartyLedgerEntry" ADD COLUMN "isPaymentBlocked" BOOLEAN NOT NULL DEFAULT false/);
+  assert.match(phase2PaymentMigrationText, /ALTER TABLE "CounterpartyLedgerEntry" ADD COLUMN "paymentBlockReason" TEXT/);
+  for (const table of ["PaymentRequest", "SupplierPayment"]) {
+    assert.match(phase2PaymentMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase2PaymentMigrationText, /"counterpartyLedgerEntryId" TEXT NOT NULL/, "Payment requests must keep the payable source.");
+  assert.match(phase2PaymentMigrationText, /"status" TEXT NOT NULL DEFAULT 'pending_approval'/, "Payment requests must start pending approval.");
+  assert.match(phase2PaymentMigrationText, /"approvedBy" TEXT/, "Payment approval actor must be persisted.");
+  assert.match(phase2PaymentMigrationText, /"paymentRequestId" TEXT NOT NULL/, "Supplier payments must point back to an approved request.");
+  assert.match(phase2PaymentMigrationText, /"bankAccountCode" TEXT NOT NULL/, "Payments must capture the cash or bank account.");
+  assert.match(phase2PaymentMigrationText, /CREATE INDEX "PaymentRequest_accountSetId_status_idx"/);
+  assert.match(phase2PaymentMigrationText, /CREATE INDEX "SupplierPayment_accountSetId_status_idx"/);
 });

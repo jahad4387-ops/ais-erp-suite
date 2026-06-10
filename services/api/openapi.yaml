@@ -1963,6 +1963,185 @@ paths:
                 items:
                   $ref: "#/components/schemas/CounterpartyLedgerEntry"
 
+  /counterparty-ledger/{counterpartyLedgerEntryId}/block-payment:
+    post:
+      summary: Freeze payment for a payable counterparty ledger entry.
+      x-permission: payment_block.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: counterpartyLedgerEntryId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paymentBlockReason]
+              properties:
+                blockedBy:
+                  type: string
+                paymentBlockReason:
+                  type: string
+      responses:
+        "200":
+          description: Payable entry payment frozen.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CounterpartyLedgerEntry"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /payment-requests:
+    get:
+      summary: List Phase 2 supplier payment requests.
+      x-permission: payment_request.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending_approval, approved, rejected, closed]
+        - name: supplierId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payment request list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PaymentRequest"
+    post:
+      summary: Create a supplier payment request from an open payable entry.
+      x-permission: payment_request.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentRequestCreateRequest"
+      responses:
+        "201":
+          description: Payment request created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /payment-requests/{paymentRequestId}/approve:
+    post:
+      summary: Approve a supplier payment request.
+      x-permission: payment_request.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: paymentRequestId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                approvedBy:
+                  type: string
+                approvalComment:
+                  type: string
+      responses:
+        "200":
+          description: Payment request approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /supplier-payments:
+    get:
+      summary: List Phase 2 supplier payment orders.
+      x-permission: supplier_payment.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [paid, voided]
+        - name: supplierId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Supplier payment list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SupplierPayment"
+    post:
+      summary: Create a supplier payment order from an approved payment request.
+      x-permission: supplier_payment.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupplierPaymentCreateRequest"
+      responses:
+        "201":
+          description: Supplier payment created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupplierPayment"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /attachments/upload:
     post:
       summary: Upload an attachment and return its central status.
@@ -3537,8 +3716,157 @@ components:
           enum: [supplier, customer]
         auxiliaryPartnerId:
           type: string
+        isPaymentBlocked:
+          type: boolean
+        paymentBlockReason:
+          type: string
         createdBy:
           type: string
+
+    PaymentRequestCreateRequest:
+      type: object
+      required: [accountSetId, counterpartyLedgerEntryId, requestDate, requestedAmount, requestedBy, bankAccountCode]
+      properties:
+        accountSetId:
+          type: string
+        counterpartyLedgerEntryId:
+          type: string
+        requestNo:
+          type: string
+        requestDate:
+          type: string
+          format: date
+        plannedPaymentDate:
+          type: string
+          format: date
+        requestedAmount:
+          type: number
+        requestedBy:
+          type: string
+        paymentMethod:
+          type: string
+        bankAccountCode:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+
+    PaymentRequest:
+      type: object
+      required: [id, accountSetId, counterpartyLedgerEntryId, supplierId, requestNo, requestDate, requestedAmount, status, requestedBy, bankAccountCode, evidenceRefs]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        counterpartyLedgerEntryId:
+          type: string
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        sourceNo:
+          type: string
+        requestNo:
+          type: string
+        requestDate:
+          type: string
+          format: date
+        plannedPaymentDate:
+          type: string
+          format: date
+        requestedAmount:
+          type: number
+        status:
+          type: string
+          enum: [pending_approval, approved, rejected, closed]
+        requestedBy:
+          type: string
+        approvedBy:
+          type: string
+        approvedAt:
+          type: string
+          format: date-time
+        approvalComment:
+          type: string
+        paymentMethod:
+          type: string
+        bankAccountCode:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+
+    SupplierPaymentCreateRequest:
+      type: object
+      required: [accountSetId, paymentRequestId, paymentDate, paidBy, bankAccountCode]
+      properties:
+        accountSetId:
+          type: string
+        paymentRequestId:
+          type: string
+        paymentNo:
+          type: string
+        paymentDate:
+          type: string
+          format: date
+        paidAmount:
+          type: number
+        paidBy:
+          type: string
+        paymentMethod:
+          type: string
+        bankAccountCode:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+
+    SupplierPayment:
+      type: object
+      required: [id, accountSetId, paymentRequestId, counterpartyLedgerEntryId, supplierId, paymentNo, paymentDate, paidAmount, status, paidBy, bankAccountCode, evidenceRefs]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        paymentRequestId:
+          type: string
+        paymentRequestNo:
+          type: string
+        counterpartyLedgerEntryId:
+          type: string
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        sourceNo:
+          type: string
+        paymentNo:
+          type: string
+        paymentDate:
+          type: string
+          format: date
+        paidAmount:
+          type: number
+        status:
+          type: string
+          enum: [paid, voided]
+        paidBy:
+          type: string
+        paymentMethod:
+          type: string
+        bankAccountCode:
+          type: string
+        glVoucherId:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
 
     AccountingPeriod:
       type: object

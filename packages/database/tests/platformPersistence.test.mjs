@@ -20,6 +20,8 @@ function createFakePrisma() {
   const purchaseInvoices = new Map();
   const salesInvoices = new Map();
   const counterpartyLedgerEntries = new Map();
+  const paymentRequests = new Map();
+  const supplierPayments = new Map();
   const periods = new Map();
   const chartOfAccounts = new Map();
   const auxiliaryTypes = new Map();
@@ -353,6 +355,52 @@ function createFakePrisma() {
         if (where?.partnerId) rows = rows.filter((entry) => entry.partnerId === where.partnerId);
         if (where?.status) rows = rows.filter((entry) => entry.status === where.status);
         return rows.map((entry) => (include?.partner ? entry : { ...entry, partner: undefined }));
+      },
+      update: async ({ where, data, include }) => {
+        const entry = { ...counterpartyLedgerEntries.get(where.id), ...data };
+        counterpartyLedgerEntries.set(where.id, entry);
+        return include?.partner ? { ...entry, partner: partners.get(entry.partnerId) } : entry;
+      }
+    },
+    paymentRequest: {
+      create: async ({ data, include }) => {
+        const request = {
+          ...data,
+          supplier: partners.get(data.supplierId),
+          counterpartyLedgerEntry: counterpartyLedgerEntries.get(data.counterpartyLedgerEntryId)
+        };
+        paymentRequests.set(request.id, request);
+        return include?.supplier ? request : { ...request, supplier: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        let rows = [...paymentRequests.values()];
+        if (where?.accountSetId) rows = rows.filter((request) => request.accountSetId === where.accountSetId);
+        if (where?.status) rows = rows.filter((request) => request.status === where.status);
+        if (where?.supplierId) rows = rows.filter((request) => request.supplierId === where.supplierId);
+        return rows.map((request) => (include?.supplier ? request : { ...request, supplier: undefined }));
+      },
+      update: async ({ where, data, include }) => {
+        const request = { ...paymentRequests.get(where.id), ...data };
+        paymentRequests.set(where.id, request);
+        return include?.supplier ? { ...request, supplier: partners.get(request.supplierId) } : request;
+      }
+    },
+    supplierPayment: {
+      create: async ({ data, include }) => {
+        const payment = {
+          ...data,
+          supplier: partners.get(data.supplierId),
+          paymentRequest: paymentRequests.get(data.paymentRequestId)
+        };
+        supplierPayments.set(payment.id, payment);
+        return include?.supplier ? payment : { ...payment, supplier: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        let rows = [...supplierPayments.values()];
+        if (where?.accountSetId) rows = rows.filter((payment) => payment.accountSetId === where.accountSetId);
+        if (where?.status) rows = rows.filter((payment) => payment.status === where.status);
+        if (where?.supplierId) rows = rows.filter((payment) => payment.supplierId === where.supplierId);
+        return rows.map((payment) => (include?.supplier ? payment : { ...payment, supplier: undefined }));
       }
     },
     accountingPeriod: {
@@ -1159,6 +1207,49 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
   const salesInvoices = await store.listSalesInvoices(accountSet.id);
   const payableLedger = await store.listCounterpartyLedgerEntries(accountSet.id, { direction: "ap" });
   const receivableLedger = await store.listCounterpartyLedgerEntries(accountSet.id, { direction: "ar" });
+  const blockedLedger = await store.updateCounterpartyLedgerPaymentBlock(payableLedger[0].id, {
+    isPaymentBlocked: true,
+    paymentBlockReason: "Invoice under review"
+  });
+  const paymentRequest = await store.createPaymentRequest({
+    id: "payment-request:1",
+    accountSetId: accountSet.id,
+    counterpartyLedgerEntryId: payableLedger[0].id,
+    supplierId: supplier.id,
+    requestNo: "PAY-REQ-202603-001",
+    requestDate: "2026-03-10",
+    plannedPaymentDate: "2026-03-20",
+    requestedAmount: 600,
+    status: "pending_approval",
+    requestedBy: "ap",
+    paymentMethod: "bank_transfer",
+    bankAccountCode: "1002",
+    approvalComment: null,
+    evidenceRefs: ["attachment:payment-request"]
+  });
+  const approvedRequest = await store.updatePaymentRequestStatus(paymentRequest.id, {
+    status: "approved",
+    approvedBy: "controller",
+    approvalComment: "Approved"
+  });
+  const supplierPayment = await store.createSupplierPayment({
+    id: "supplier-payment:1",
+    accountSetId: accountSet.id,
+    paymentRequestId: approvedRequest.id,
+    counterpartyLedgerEntryId: payableLedger[0].id,
+    supplierId: supplier.id,
+    paymentNo: "PAY-202603-001",
+    paymentDate: "2026-03-21",
+    paidAmount: 600,
+    status: "paid",
+    paidBy: "cashier",
+    paymentMethod: "bank_transfer",
+    bankAccountCode: "1002",
+    glVoucherId: null,
+    evidenceRefs: ["attachment:bank-slip"]
+  });
+  const paymentRequests = await store.listPaymentRequests(accountSet.id, { status: "approved" });
+  const supplierPayments = await store.listSupplierPayments(accountSet.id, { supplierId: supplier.id });
 
   assert.equal(purchaseInvoice.purchaseReceiptNo, "PR-202603-001");
   assert.equal(purchaseInvoice.payableAmount, 1160);
@@ -1179,6 +1270,16 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
   assert.equal(receivableLedger[0].glAccountCode, "1122");
   assert.equal(receivableLedger[0].auxiliaryType, "customer");
   assert.equal(receivableLedger[0].auxiliaryPartnerId, customer.id);
+  assert.equal(blockedLedger.isPaymentBlocked, true);
+  assert.equal(blockedLedger.paymentBlockReason, "Invoice under review");
+  assert.equal(paymentRequest.requestNo, "PAY-REQ-202603-001");
+  assert.equal(paymentRequest.requestedAmount, 600);
+  assert.equal(approvedRequest.status, "approved");
+  assert.equal(approvedRequest.approvedBy, "controller");
+  assert.deepEqual(paymentRequests.map((row) => row.requestNo), ["PAY-REQ-202603-001"]);
+  assert.equal(supplierPayment.paymentNo, "PAY-202603-001");
+  assert.equal(supplierPayment.paidAmount, 600);
+  assert.deepEqual(supplierPayments.map((row) => row.paymentNo), ["PAY-202603-001"]);
 });
 
 test("Prisma platform persistence stores accounting periods and lifecycle status", async () => {

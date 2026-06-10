@@ -78,7 +78,10 @@ const DEFAULT_PERMISSION_CODES = [
   "sales_delivery.manage",
   "purchase_invoice.manage",
   "sales_invoice.manage",
-  "counterparty_ledger.view"
+  "counterparty_ledger.view",
+  "payment_request.manage",
+  "supplier_payment.manage",
+  "payment_block.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -573,7 +576,14 @@ function permissionFor(request) {
     return "sales_invoice.manage";
   }
   if (segments[0] === "counterparty-ledger") {
+    if (request.method === "POST" && segments.length === 3 && segments[2] === "block-payment") return "payment_block.manage";
     return "counterparty_ledger.view";
+  }
+  if (segments[0] === "payment-requests") {
+    return "payment_request.manage";
+  }
+  if (segments[0] === "supplier-payments") {
+    return "supplier_payment.manage";
   }
   if (request.method === "POST" && request.path === "/attachments/upload") return "attachment.upload";
   if (request.method === "POST" && request.path === "/attachment-links") return "attachment.upload";
@@ -660,6 +670,8 @@ function createState(options = {}) {
     purchaseInvoices: new Map(),
     salesInvoices: new Map(),
     counterpartyLedgerEntries: new Map(),
+    paymentRequests: new Map(),
+    supplierPayments: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1210,6 +1222,8 @@ function payableLedgerEntryFromInvoice(invoice) {
     glAccountCode: "2202",
     auxiliaryType: "supplier",
     auxiliaryPartnerId: invoice.supplierId,
+    isPaymentBlocked: false,
+    paymentBlockReason: null,
     createdBy: invoice.createdBy
   };
 }
@@ -1234,8 +1248,88 @@ function receivableLedgerEntryFromInvoice(invoice) {
     glAccountCode: "1122",
     auxiliaryType: "customer",
     auxiliaryPartnerId: invoice.customerId,
+    isPaymentBlocked: false,
+    paymentBlockReason: null,
     createdBy: invoice.createdBy
   };
+}
+
+async function findCounterpartyLedgerEntryById(state, entryId) {
+  const inMemoryEntry = state.counterpartyLedgerEntries.get(entryId);
+  if (inMemoryEntry) return inMemoryEntry;
+  const persistedEntries = state.config.platformStore?.listCounterpartyLedgerEntries
+    ? await state.config.platformStore.listCounterpartyLedgerEntries(null, {})
+    : [];
+  return persistedEntries.find((entry) => entry.id === entryId) ?? null;
+}
+
+async function updateCounterpartyLedgerPaymentBlock(state, entryId, updates) {
+  const savedEntry = state.config.platformStore?.updateCounterpartyLedgerPaymentBlock
+    ? await state.config.platformStore.updateCounterpartyLedgerPaymentBlock(entryId, updates)
+    : { ...(await findCounterpartyLedgerEntryById(state, entryId)), ...updates };
+  state.counterpartyLedgerEntries.set(savedEntry.id, savedEntry);
+  return savedEntry;
+}
+
+async function listPaymentRequests(state, accountSetId, filters = {}) {
+  const persistedRequests = state.config.platformStore?.listPaymentRequests
+    ? await state.config.platformStore.listPaymentRequests(accountSetId, filters)
+    : [];
+  const requestsById = new Map(persistedRequests.map((request) => [request.id, request]));
+  for (const request of state.paymentRequests.values()) {
+    if (accountSetId && request.accountSetId !== accountSetId) continue;
+    if (filters.status && request.status !== filters.status) continue;
+    if (filters.supplierId && request.supplierId !== filters.supplierId) continue;
+    requestsById.set(request.id, request);
+  }
+  return [...requestsById.values()].sort((left, right) => left.requestNo.localeCompare(right.requestNo));
+}
+
+async function createPaymentRequest(state, request) {
+  const savedRequest = state.config.platformStore?.createPaymentRequest
+    ? await state.config.platformStore.createPaymentRequest(request)
+    : request;
+  state.paymentRequests.set(savedRequest.id, savedRequest);
+  return savedRequest;
+}
+
+async function updatePaymentRequestStatus(state, requestId, updates) {
+  const savedRequest = state.config.platformStore?.updatePaymentRequestStatus
+    ? await state.config.platformStore.updatePaymentRequestStatus(requestId, updates)
+    : { ...state.paymentRequests.get(requestId), ...updates, approvedAt: updates.approvedAt ?? new Date().toISOString() };
+  state.paymentRequests.set(savedRequest.id, savedRequest);
+  return savedRequest;
+}
+
+async function findPaymentRequestById(state, requestId) {
+  const request = state.paymentRequests.get(requestId);
+  if (request) return request;
+  const persistedRequests = state.config.platformStore?.listPaymentRequests
+    ? await state.config.platformStore.listPaymentRequests(null, {})
+    : [];
+  return persistedRequests.find((item) => item.id === requestId) ?? null;
+}
+
+async function listSupplierPayments(state, accountSetId, filters = {}) {
+  const persistedPayments = state.config.platformStore?.listSupplierPayments
+    ? await state.config.platformStore.listSupplierPayments(accountSetId, filters)
+    : [];
+  const paymentsById = new Map(persistedPayments.map((payment) => [payment.id, payment]));
+  for (const payment of state.supplierPayments.values()) {
+    if (accountSetId && payment.accountSetId !== accountSetId) continue;
+    if (filters.status && payment.status !== filters.status) continue;
+    if (filters.supplierId && payment.supplierId !== filters.supplierId) continue;
+    paymentsById.set(payment.id, payment);
+  }
+  return [...paymentsById.values()].sort((left, right) => left.paymentNo.localeCompare(right.paymentNo));
+}
+
+async function createSupplierPayment(state, payment) {
+  const savedPayment = state.config.platformStore?.createSupplierPayment
+    ? await state.config.platformStore.createSupplierPayment(payment)
+    : payment;
+  state.supplierPayments.set(savedPayment.id, savedPayment);
+  return savedPayment;
 }
 
 function normalizeFulfillmentLines(order, lines = [], { sourceLineIdField, executedQuantityField }) {
@@ -2534,6 +2628,204 @@ async function route(request, state) {
       status: query.get("status") ?? null
     };
     return jsonResponse(200, await listCounterpartyLedgerEntries(state, accountSetId, filters));
+  }
+
+  if (segments.length === 3 && segments[0] === "counterparty-ledger" && segments[2] === "block-payment" && request.method === "POST") {
+    const entry = await findCounterpartyLedgerEntryById(state, segments[1]);
+    if (!entry) {
+      return errorResponse(404, "COUNTERPARTY_LEDGER_ENTRY_NOT_FOUND", "Counterparty ledger entry was not found.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, entry.accountSetId))) {
+      return accountSetAccessError(state, actorId, entry.accountSetId);
+    }
+    if (entry.direction !== "ap") {
+      return errorResponse(409, "BUSINESS_RULE_FAILED", "Only payable ledger entries can be blocked for payment.");
+    }
+    const blocked = await updateCounterpartyLedgerPaymentBlock(state, entry.id, {
+      isPaymentBlocked: true,
+      paymentBlockReason: body.paymentBlockReason ?? body.reason ?? null
+    });
+    appendAuditLog(state, {
+      actorId: body.blockedBy ?? actorId,
+      action: "counterparty_ledger.payment_block",
+      objectType: "counterparty_ledger_entry",
+      objectId: blocked.id
+    });
+    return jsonResponse(200, blocked);
+  }
+
+  if (segments.length === 1 && segments[0] === "payment-requests") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(
+        200,
+        await listPaymentRequests(state, accountSetId, {
+          status: query.get("status") ?? null,
+          supplierId: query.get("supplierId") ?? null
+        })
+      );
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const entry = await findCounterpartyLedgerEntryById(state, body.counterpartyLedgerEntryId);
+      if (!entry || entry.accountSetId !== body.accountSetId) {
+        return errorResponse(404, "COUNTERPARTY_LEDGER_ENTRY_NOT_FOUND", "Counterparty ledger entry was not found.");
+      }
+      if (entry.direction !== "ap") {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "Payment requests can only be created from payable entries.");
+      }
+      if (entry.isPaymentBlocked) {
+        return errorResponse(409, "PAYMENT_BLOCKED", entry.paymentBlockReason ?? "Payment is blocked for this payable entry.");
+      }
+      const requestedAmount = Number(body.requestedAmount);
+      if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", "requestedAmount must be greater than 0.");
+      }
+      if (requestedAmount > Number(entry.remainingAmount ?? 0)) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "requestedAmount exceeds remaining payable amount.");
+      }
+      const existingRequests = await listPaymentRequests(state, body.accountSetId);
+      const requestDate = body.requestDate ?? new Date().toISOString().slice(0, 10);
+      const paymentRequest = {
+        id: body.id ?? `payment-request:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        counterpartyLedgerEntryId: entry.id,
+        supplierId: entry.partnerId,
+        supplierName: entry.partnerName ?? null,
+        sourceNo: entry.sourceNo,
+        requestNo: body.requestNo ?? nextFulfillmentNo("PAY-REQ", body.accountSetId, requestDate, existingRequests, "requestNo"),
+        requestDate,
+        plannedPaymentDate: body.plannedPaymentDate ?? null,
+        requestedAmount,
+        status: "pending_approval",
+        requestedBy: body.requestedBy ?? actorId,
+        approvedBy: null,
+        approvedAt: null,
+        approvalComment: body.approvalComment ?? null,
+        paymentMethod: body.paymentMethod ?? "bank_transfer",
+        bankAccountCode: body.bankAccountCode ?? "1002",
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : []
+      };
+      const savedRequest = await createPaymentRequest(state, paymentRequest);
+      appendAuditLog(state, {
+        actorId: savedRequest.requestedBy,
+        action: "payment_request.create",
+        objectType: "payment_request",
+        objectId: savedRequest.id
+      });
+      return jsonResponse(201, savedRequest);
+    }
+  }
+
+  if (segments.length === 3 && segments[0] === "payment-requests" && segments[2] === "approve" && request.method === "POST") {
+    const paymentRequest = await findPaymentRequestById(state, segments[1]);
+    if (!paymentRequest) {
+      return errorResponse(404, "PAYMENT_REQUEST_NOT_FOUND", "Payment request was not found.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, paymentRequest.accountSetId))) {
+      return accountSetAccessError(state, actorId, paymentRequest.accountSetId);
+    }
+    if (paymentRequest.status !== "pending_approval") {
+      return errorResponse(409, "BUSINESS_RULE_FAILED", "Only pending payment requests can be approved.");
+    }
+    const approved = await updatePaymentRequestStatus(state, paymentRequest.id, {
+      status: "approved",
+      approvedBy: body.approvedBy ?? actorId,
+      approvedAt: new Date().toISOString(),
+      approvalComment: body.approvalComment ?? null
+    });
+    appendAuditLog(state, {
+      actorId: approved.approvedBy,
+      action: "payment_request.approve",
+      objectType: "payment_request",
+      objectId: approved.id
+    });
+    return jsonResponse(200, approved);
+  }
+
+  if (segments.length === 1 && segments[0] === "supplier-payments") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(
+        200,
+        await listSupplierPayments(state, accountSetId, {
+          status: query.get("status") ?? null,
+          supplierId: query.get("supplierId") ?? null
+        })
+      );
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const paymentRequest = await findPaymentRequestById(state, body.paymentRequestId);
+      if (!paymentRequest || paymentRequest.accountSetId !== body.accountSetId) {
+        return errorResponse(404, "PAYMENT_REQUEST_NOT_FOUND", "Payment request was not found.");
+      }
+      if (paymentRequest.status !== "approved") {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "Only approved payment requests can generate supplier payments.");
+      }
+      const paidAmount = Number(body.paidAmount ?? paymentRequest.requestedAmount);
+      if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", "paidAmount must be greater than 0.");
+      }
+      if (paidAmount > Number(paymentRequest.requestedAmount ?? 0)) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "paidAmount exceeds approved payment request amount.");
+      }
+      const existingPayments = await listSupplierPayments(state, body.accountSetId);
+      const paymentDate = body.paymentDate ?? new Date().toISOString().slice(0, 10);
+      const payment = {
+        id: body.id ?? `supplier-payment:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        paymentRequestId: paymentRequest.id,
+        paymentRequestNo: paymentRequest.requestNo,
+        counterpartyLedgerEntryId: paymentRequest.counterpartyLedgerEntryId,
+        supplierId: paymentRequest.supplierId,
+        supplierName: paymentRequest.supplierName ?? null,
+        sourceNo: paymentRequest.sourceNo ?? null,
+        paymentNo: body.paymentNo ?? nextFulfillmentNo("PAY", body.accountSetId, paymentDate, existingPayments, "paymentNo"),
+        paymentDate,
+        paidAmount,
+        status: "paid",
+        paidBy: body.paidBy ?? actorId,
+        paymentMethod: body.paymentMethod ?? paymentRequest.paymentMethod ?? "bank_transfer",
+        bankAccountCode: body.bankAccountCode ?? paymentRequest.bankAccountCode,
+        glVoucherId: null,
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : []
+      };
+      const savedPayment = await createSupplierPayment(state, payment);
+      appendAuditLog(state, {
+        actorId: savedPayment.paidBy,
+        action: "supplier_payment.create",
+        objectType: "supplier_payment",
+        objectId: savedPayment.id
+      });
+      return jsonResponse(201, savedPayment);
+    }
   }
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "periods" && segments[2] === "open") {

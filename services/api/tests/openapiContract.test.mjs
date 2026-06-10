@@ -40,6 +40,10 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/sales-orders/{salesOrderId}/close:",
     "/sales-deliveries:",
     "/sales-invoices:",
+    "/payment-requests:",
+    "/payment-requests/{paymentRequestId}/approve:",
+    "/supplier-payments:",
+    "/counterparty-ledger/{counterpartyLedgerEntryId}/block-payment:",
     "/accounts:",
     "/accounts/{accountId}:",
     "/accounts/import:",
@@ -97,6 +101,8 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "PurchaseInvoice:",
     "SalesInvoice:",
     "CounterpartyLedgerEntry:",
+    "PaymentRequest:",
+    "SupplierPayment:",
     "AccountingPeriod:",
     "Account:",
     "AccountCodeRule:",
@@ -134,6 +140,21 @@ test("Phase 2 counterparty ledger endpoint is documented for AP and AR auxiliary
   assert.match(block, /CounterpartyLedgerEntry/);
   assert.match(contract, /glAccountCode:/, "Counterparty ledger schema must expose the mapped GL account.");
   assert.match(contract, /auxiliaryPartnerId:/, "Counterparty ledger schema must expose the mapped auxiliary partner.");
+});
+
+test("Phase 2 payment workflow endpoints are documented with freeze control", () => {
+  const requestsBlock = blockAfter("  /payment-requests:");
+  const approveBlock = blockAfter("  /payment-requests/{paymentRequestId}/approve:");
+  const paymentsBlock = blockAfter("  /supplier-payments:");
+  const blockPaymentBlock = blockAfter("  /counterparty-ledger/{counterpartyLedgerEntryId}/block-payment:");
+
+  assert.match(requestsBlock, /x-permission: payment_request\.manage/);
+  assert.match(requestsBlock, /PaymentRequest/);
+  assert.match(approveBlock, /x-permission: payment_request\.manage/);
+  assert.match(paymentsBlock, /x-permission: supplier_payment\.manage/);
+  assert.match(paymentsBlock, /SupplierPayment/);
+  assert.match(blockPaymentBlock, /x-permission: payment_block\.manage/);
+  assert.match(blockPaymentBlock, /paymentBlockReason/);
 });
 
 test("deployment configuration check endpoint is documented", () => {

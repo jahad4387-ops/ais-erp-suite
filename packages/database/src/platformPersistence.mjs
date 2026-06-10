@@ -283,7 +283,54 @@ function counterpartyLedgerEntryToDto(entry) {
     glAccountCode: entry.glAccountCode,
     auxiliaryType: entry.auxiliaryType,
     auxiliaryPartnerId: entry.auxiliaryPartnerId,
+    isPaymentBlocked: entry.isPaymentBlocked ?? false,
+    paymentBlockReason: entry.paymentBlockReason ?? null,
     createdBy: entry.createdBy
+  };
+}
+
+function paymentRequestToDto(request) {
+  return {
+    id: request.id,
+    accountSetId: request.accountSetId,
+    counterpartyLedgerEntryId: request.counterpartyLedgerEntryId,
+    supplierId: request.supplierId,
+    supplierName: request.supplier?.name ?? null,
+    sourceNo: request.counterpartyLedgerEntry?.sourceNo ?? null,
+    requestNo: request.requestNo,
+    requestDate: dateOnly(request.requestDate),
+    plannedPaymentDate: dateOnly(request.plannedPaymentDate),
+    requestedAmount: request.requestedAmount,
+    status: request.status,
+    requestedBy: request.requestedBy,
+    approvedBy: request.approvedBy ?? null,
+    approvedAt: request.approvedAt?.toISOString?.() ?? request.approvedAt ?? null,
+    approvalComment: request.approvalComment ?? null,
+    paymentMethod: request.paymentMethod ?? null,
+    bankAccountCode: request.bankAccountCode,
+    evidenceRefs: evidenceRefsFromJson(request.evidenceRefsJson)
+  };
+}
+
+function supplierPaymentToDto(payment) {
+  return {
+    id: payment.id,
+    accountSetId: payment.accountSetId,
+    paymentRequestId: payment.paymentRequestId,
+    paymentRequestNo: payment.paymentRequest?.requestNo ?? null,
+    counterpartyLedgerEntryId: payment.counterpartyLedgerEntryId,
+    supplierId: payment.supplierId,
+    supplierName: payment.supplier?.name ?? null,
+    sourceNo: payment.counterpartyLedgerEntry?.sourceNo ?? null,
+    paymentNo: payment.paymentNo,
+    paymentDate: dateOnly(payment.paymentDate),
+    paidAmount: payment.paidAmount,
+    status: payment.status,
+    paidBy: payment.paidBy,
+    paymentMethod: payment.paymentMethod ?? null,
+    bankAccountCode: payment.bankAccountCode,
+    glVoucherId: payment.glVoucherId ?? null,
+    evidenceRefs: evidenceRefsFromJson(payment.evidenceRefsJson)
   };
 }
 
@@ -293,6 +340,14 @@ function counterpartyLedgerWhere(accountSetId, filters = {}) {
     ...(filters.direction ? { direction: filters.direction } : {}),
     ...(filters.partnerId ? { partnerId: filters.partnerId } : {}),
     ...(filters.status ? { status: filters.status } : {})
+  };
+}
+
+function paymentWorkflowWhere(accountSetId, filters = {}) {
+  return {
+    ...(accountSetId ? { accountSetId } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.supplierId ? { supplierId: filters.supplierId } : {})
   };
 }
 
@@ -1163,6 +1218,8 @@ export function createPlatformPersistence(prisma) {
           glAccountCode: entry.glAccountCode,
           auxiliaryType: entry.auxiliaryType,
           auxiliaryPartnerId: entry.auxiliaryPartnerId,
+          isPaymentBlocked: entry.isPaymentBlocked ?? false,
+          paymentBlockReason: entry.paymentBlockReason ?? null,
           createdBy: entry.createdBy
         },
         include: { partner: true }
@@ -1178,6 +1235,96 @@ export function createPlatformPersistence(prisma) {
       return entries
         .map(counterpartyLedgerEntryToDto)
         .sort((left, right) => left.documentDate.localeCompare(right.documentDate) || left.sourceNo.localeCompare(right.sourceNo));
+    },
+
+    async updateCounterpartyLedgerPaymentBlock(entryId, { isPaymentBlocked, paymentBlockReason }) {
+      const saved = await prisma.counterpartyLedgerEntry.update({
+        where: { id: entryId },
+        data: {
+          isPaymentBlocked: Boolean(isPaymentBlocked),
+          paymentBlockReason: isPaymentBlocked ? paymentBlockReason ?? null : null
+        },
+        include: { partner: true }
+      });
+      return counterpartyLedgerEntryToDto(saved);
+    },
+
+    async createPaymentRequest(request) {
+      const saved = await prisma.paymentRequest.create({
+        data: {
+          id: request.id,
+          accountSetId: request.accountSetId,
+          counterpartyLedgerEntryId: request.counterpartyLedgerEntryId,
+          supplierId: request.supplierId,
+          requestNo: request.requestNo,
+          requestDate: dateTime(request.requestDate),
+          plannedPaymentDate: request.plannedPaymentDate ? dateTime(request.plannedPaymentDate) : null,
+          requestedAmount: request.requestedAmount,
+          status: request.status ?? "pending_approval",
+          requestedBy: request.requestedBy,
+          approvedBy: request.approvedBy ?? null,
+          approvedAt: request.approvedAt ? dateTime(request.approvedAt) : null,
+          approvalComment: request.approvalComment ?? null,
+          paymentMethod: request.paymentMethod ?? null,
+          bankAccountCode: request.bankAccountCode,
+          evidenceRefsJson: JSON.stringify(request.evidenceRefs ?? [])
+        },
+        include: { supplier: true, counterpartyLedgerEntry: true }
+      });
+      return paymentRequestToDto(saved);
+    },
+
+    async listPaymentRequests(accountSetId, filters = {}) {
+      const requests = await prisma.paymentRequest.findMany({
+        where: paymentWorkflowWhere(accountSetId, filters),
+        include: { supplier: true, counterpartyLedgerEntry: true }
+      });
+      return requests.map(paymentRequestToDto).sort((left, right) => left.requestNo.localeCompare(right.requestNo));
+    },
+
+    async updatePaymentRequestStatus(requestId, updates) {
+      const saved = await prisma.paymentRequest.update({
+        where: { id: requestId },
+        data: {
+          status: updates.status,
+          approvedBy: updates.approvedBy ?? null,
+          approvedAt: updates.approvedAt ? dateTime(updates.approvedAt) : new Date(),
+          approvalComment: updates.approvalComment ?? null
+        },
+        include: { supplier: true, counterpartyLedgerEntry: true }
+      });
+      return paymentRequestToDto(saved);
+    },
+
+    async createSupplierPayment(payment) {
+      const saved = await prisma.supplierPayment.create({
+        data: {
+          id: payment.id,
+          accountSetId: payment.accountSetId,
+          paymentRequestId: payment.paymentRequestId,
+          counterpartyLedgerEntryId: payment.counterpartyLedgerEntryId,
+          supplierId: payment.supplierId,
+          paymentNo: payment.paymentNo,
+          paymentDate: dateTime(payment.paymentDate),
+          paidAmount: payment.paidAmount,
+          status: payment.status ?? "paid",
+          paidBy: payment.paidBy,
+          paymentMethod: payment.paymentMethod ?? null,
+          bankAccountCode: payment.bankAccountCode,
+          glVoucherId: payment.glVoucherId ?? null,
+          evidenceRefsJson: JSON.stringify(payment.evidenceRefs ?? [])
+        },
+        include: { supplier: true, paymentRequest: true, counterpartyLedgerEntry: true }
+      });
+      return supplierPaymentToDto(saved);
+    },
+
+    async listSupplierPayments(accountSetId, filters = {}) {
+      const payments = await prisma.supplierPayment.findMany({
+        where: paymentWorkflowWhere(accountSetId, filters),
+        include: { supplier: true, paymentRequest: true, counterpartyLedgerEntry: true }
+      });
+      return payments.map(supplierPaymentToDto).sort((left, right) => left.paymentNo.localeCompare(right.paymentNo));
     },
 
     async createAccount(account) {
