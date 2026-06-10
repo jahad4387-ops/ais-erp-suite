@@ -51,6 +51,8 @@ import { InventoryLedger } from './pages/InventoryLedger';
 import { ProductionWorkOrders } from './pages/ProductionWorkOrders';
 import { MaterialRequisitions } from './pages/MaterialRequisitions';
 import { ProductReceipts } from './pages/ProductReceipts';
+import { MockCostInputs } from './pages/MockCostInputs';
+import { CostAllocations } from './pages/CostAllocations';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -237,6 +239,8 @@ const AppFrame: React.FC = () => {
                   { key: 'work-orders', label: <Link to="/work-orders">生产工单</Link> },
                   { key: 'material-requisitions', label: <Link to="/material-requisitions">生产领料</Link> },
                   { key: 'product-receipts', label: <Link to="/product-receipts">完工入库</Link> },
+                  { key: 'mock-cost-inputs', label: <Link to="/mock-cost-inputs">成本输入</Link> },
+                  { key: 'cost-allocations', label: <Link to="/cost-allocations">成本分摊</Link> },
                   { key: 'inventory-ledger', label: <Link to="/inventory-ledger">收发存查询</Link> },
                 ],
               },
@@ -360,6 +364,8 @@ const AppFrame: React.FC = () => {
                 <Route path="/work-orders" element={<RequireAuth><ProductionWorkOrders /></RequireAuth>} />
                 <Route path="/material-requisitions" element={<RequireAuth><MaterialRequisitions /></RequireAuth>} />
                 <Route path="/product-receipts" element={<RequireAuth><ProductReceipts /></RequireAuth>} />
+                <Route path="/mock-cost-inputs" element={<RequireAuth><MockCostInputs /></RequireAuth>} />
+                <Route path="/cost-allocations" element={<RequireAuth><CostAllocations /></RequireAuth>} />
                 <Route path="/inventory-ledger" element={<RequireAuth><InventoryLedger /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />

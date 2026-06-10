@@ -92,7 +92,11 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/work-orders/{workOrderId}/release:",
     "/work-orders/{workOrderId}/close:",
     "/material-requisitions:",
-    "/product-receipts:"
+    "/product-receipts:",
+    "/mock-cost-inputs:",
+    "/mock-cost-inputs/{costInputId}/lock:",
+    "/cost-allocations/dry-run:",
+    "/cost-allocations:"
   ];
 
   for (const path of writePaths) {
@@ -169,6 +173,10 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "MaterialRequisitionLine:",
     "ProductReceipt:",
     "ProductReceiptLine:",
+    "MockCostInput:",
+    "CostAllocation:",
+    "CostAllocationLine:",
+    "InventoryCostAdjustment:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -306,6 +314,23 @@ test("Phase 3 production workflow endpoints document work orders, material requi
   assert.match(contract, /directMaterialCost:/, "Work orders must expose accumulated direct material cost.");
   assert.match(contract, /sourceMovementId:/, "Production documents must expose inventory movement traceability.");
   assert.match(contract, /direct_material_only/, "Product receipts must document pre-allocation cost status.");
+});
+
+test("Phase 3 cost allocation endpoints document mock cost inputs, locking, dry-run, and inventory adjustments", () => {
+  const inputBlock = blockAfter("  /mock-cost-inputs:");
+  const lockBlock = blockAfter("  /mock-cost-inputs/{costInputId}/lock:");
+  const dryRunBlock = blockAfter("  /cost-allocations/dry-run:");
+  const allocationBlock = blockAfter("  /cost-allocations:");
+
+  assert.match(inputBlock, /x-permission: mock_cost_input\.manage/);
+  assert.match(inputBlock, /MockCostInput/);
+  assert.match(lockBlock, /x-permission: mock_cost_input\.manage/);
+  assert.match(dryRunBlock, /x-permission: cost_allocation\.manage/);
+  assert.match(dryRunBlock, /CostAllocation/);
+  assert.match(allocationBlock, /x-permission: cost_allocation\.manage/);
+  assert.match(allocationBlock, /CostAllocation/);
+  assert.match(contract, /PHASE4_SOURCE_MISSING/, "Allocation contract must disclose temporary Phase 4 source limitation.");
+  assert.match(contract, /InventoryCostAdjustment/, "Committed allocations must expose inventory cost adjustments.");
 });
 
 test("deployment configuration check endpoint is documented", () => {

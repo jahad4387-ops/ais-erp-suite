@@ -3542,6 +3542,113 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProductReceipt"
 
+  /mock-cost-inputs:
+    get:
+      summary: List Phase 3 mock or manual production cost inputs.
+      x-permission: mock_cost_input.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Mock cost input list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MockCostInput"
+    post:
+      summary: Create a Phase 3 mock/manual production cost input.
+      x-permission: mock_cost_input.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMockCostInputRequest"
+      responses:
+        "201":
+          description: Mock cost input created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MockCostInput"
+
+  /mock-cost-inputs/{costInputId}/lock:
+    post:
+      summary: Lock a mock/manual production cost input before committed allocation.
+      x-permission: mock_cost_input.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - name: costInputId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Cost input locked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MockCostInput"
+
+  /cost-allocations/dry-run:
+    post:
+      summary: Dry-run Phase 3 production cost allocation while Phase 4 formal sources are missing.
+      x-permission: cost_allocation.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCostAllocationRequest"
+      responses:
+        "200":
+          description: Cost allocation preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CostAllocation"
+
+  /cost-allocations:
+    post:
+      summary: Commit Phase 3 production cost allocation and inventory cost adjustments.
+      x-permission: cost_allocation.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCostAllocationRequest"
+      responses:
+        "201":
+          description: Cost allocation committed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CostAllocation"
+
 components:
   parameters:
     AccountSetId:
@@ -7067,6 +7174,142 @@ components:
           type: number
         amount:
           type: number
+
+    CreateMockCostInputRequest:
+      type: object
+      required: [accountSetId, workOrderId, fiscalYear, periodNo, sourceType, costType, amount]
+      properties:
+        accountSetId:
+          type: string
+        workOrderId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        sourceType:
+          type: string
+          enum: [mock, manual]
+        costType:
+          type: string
+          enum: [direct_labor, depreciation, manufacturing_overhead]
+        amount:
+          type: number
+        createdBy:
+          type: string
+
+    MockCostInput:
+      type: object
+      required: [id, accountSetId, workOrderId, sourceType, costType, amount]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        workOrderId:
+          type: string
+        workOrderNo:
+          type: string
+        sourceType:
+          type: string
+        costType:
+          type: string
+        amount:
+          type: number
+        lockedAt:
+          type: string
+        lockedBy:
+          type: string
+
+    CreateCostAllocationRequest:
+      type: object
+      required: [accountSetId, workOrderId, fiscalYear, periodNo, costInputIds]
+      properties:
+        accountSetId:
+          type: string
+        workOrderId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        costInputIds:
+          type: array
+          items:
+            type: string
+        createdBy:
+          type: string
+
+    CostAllocation:
+      type: object
+      required: [id, accountSetId, workOrderId, dryRun, status, totalAllocatedAmount, warningCodes, lines, adjustments]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        workOrderId:
+          type: string
+        dryRun:
+          type: boolean
+        status:
+          type: string
+          enum: [preview, committed]
+        totalAllocatedAmount:
+          type: number
+        warningCodes:
+          type: array
+          items:
+            type: string
+            enum: [PHASE4_SOURCE_MISSING]
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/CostAllocationLine"
+        adjustments:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryCostAdjustment"
+
+    CostAllocationLine:
+      type: object
+      required: [id, costInputId, costType, allocatedAmount]
+      properties:
+        id:
+          type: string
+        costInputId:
+          type: string
+        costType:
+          type: string
+        allocatedAmount:
+          type: number
+
+    InventoryCostAdjustment:
+      type: object
+      required: [id, accountSetId, costAllocationId, workOrderId, itemId, warehouseId, quantity, amount, reason]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        costAllocationId:
+          type: string
+        workOrderId:
+          type: string
+        itemId:
+          type: string
+        itemCode:
+          type: string
+        warehouseId:
+          type: string
+        warehouseCode:
+          type: string
+        quantity:
+          type: number
+        amount:
+          type: number
+        reason:
+          type: string
 
     CreateAgentActionRequest:
       type: object

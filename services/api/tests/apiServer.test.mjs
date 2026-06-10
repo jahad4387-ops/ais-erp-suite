@@ -2505,6 +2505,161 @@ test("Phase 3 production workflow releases work orders, issues materials, and re
   assert.ok(api.state.auditLogs.some((log) => log.action === "product_receipt.post" && log.objectId === receipt.body.id));
 });
 
+test("Phase 3 cost allocation uses locked mock inputs and adjusts finished-goods inventory cost", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P3-COST",
+      name: "Phase 3 Cost Set",
+      companyName: "Phase 3 Cost Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase3-cost-account-set"
+  );
+  const actorId = "phase3-cost-actor";
+  api.state.permissionsByActor.set(
+    actorId,
+    new Set([
+      "inventory_item.manage",
+      "bom.manage",
+      "warehouse.manage",
+      "inventory_balance.manage",
+      "inventory_movement.manage",
+      "work_order.manage",
+      "material_requisition.manage",
+      "product_receipt.manage",
+      "mock_cost_input.manage",
+      "cost_allocation.manage"
+    ])
+  );
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+
+  const material = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-raw" },
+    body: { accountSetId: accountSet.body.id, code: "RM-LAB", name: "Labor Material", unit: "kg", costMethod: "fifo", isBatchManaged: true, createdBy: actorId }
+  });
+  const product = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-fg" },
+    body: { accountSetId: accountSet.body.id, code: "FG-COST", name: "Costed Finished Good", unit: "pcs", costMethod: "moving_average", isManufactured: true, createdBy: actorId }
+  });
+  const warehouse = await api.handle({
+    method: "POST",
+    path: "/warehouses",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-warehouse" },
+    body: { accountSetId: accountSet.body.id, code: "WH-COST", name: "Cost Warehouse", createdBy: actorId }
+  });
+  await api.handle({
+    method: "POST",
+    path: "/inventory-opening-balances",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-opening" },
+    body: { accountSetId: accountSet.body.id, itemId: material.body.id, warehouseId: warehouse.body.id, batchNo: "LAB-A", fiscalYear: 2026, periodNo: 1, quantity: 20, amount: 200, createdBy: actorId }
+  });
+  const bom = await api.handle({
+    method: "POST",
+    path: "/boms",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-bom" },
+    body: { accountSetId: accountSet.body.id, productItemId: product.body.id, version: "V1", status: "active", yieldQuantity: 1, createdBy: actorId, lines: [{ componentItemId: material.body.id, quantity: 2 }] }
+  });
+  const workOrder = await api.handle({
+    method: "POST",
+    path: "/work-orders",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-wo" },
+    body: { accountSetId: accountSet.body.id, workOrderNo: "WO-COST-001", productItemId: product.body.id, bomId: bom.body.id, plannedQuantity: 4, fiscalYear: 2026, periodNo: 1, createdBy: actorId }
+  });
+  await api.handle({ method: "POST", path: `/work-orders/${workOrder.body.id}/release`, headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-release" }, body: { releasedBy: actorId } });
+  await api.handle({
+    method: "POST",
+    path: "/material-requisitions",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-mr" },
+    body: { accountSetId: accountSet.body.id, requisitionNo: "MR-COST-001", workOrderId: workOrder.body.id, fiscalYear: 2026, periodNo: 1, createdBy: actorId, lines: [{ componentItemId: material.body.id, warehouseId: warehouse.body.id, batchNo: "LAB-A", quantity: 8 }] }
+  });
+  const receipt = await api.handle({
+    method: "POST",
+    path: "/product-receipts",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-pr" },
+    body: { accountSetId: accountSet.body.id, receiptNo: "PR-COST-001", workOrderId: workOrder.body.id, fiscalYear: 2026, periodNo: 1, createdBy: actorId, lines: [{ productItemId: product.body.id, warehouseId: warehouse.body.id, quantity: 4 }] }
+  });
+  const costInput = await api.handle({
+    method: "POST",
+    path: "/mock-cost-inputs",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-input" },
+    body: {
+      accountSetId: accountSet.body.id,
+      workOrderId: workOrder.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      sourceType: "manual",
+      costType: "direct_labor",
+      amount: 40,
+      createdBy: actorId
+    }
+  });
+  const dryRun = await api.handle({
+    method: "POST",
+    path: "/cost-allocations/dry-run",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-dry-run" },
+    body: { accountSetId: accountSet.body.id, workOrderId: workOrder.body.id, fiscalYear: 2026, periodNo: 1, costInputIds: [costInput.body.id], createdBy: actorId }
+  });
+  const blockedCommit = await api.handle({
+    method: "POST",
+    path: "/cost-allocations",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-blocked" },
+    body: { accountSetId: accountSet.body.id, workOrderId: workOrder.body.id, fiscalYear: 2026, periodNo: 1, costInputIds: [costInput.body.id], createdBy: actorId }
+  });
+  const lockedInput = await api.handle({
+    method: "POST",
+    path: `/mock-cost-inputs/${costInput.body.id}/lock`,
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-lock" },
+    body: { lockedBy: actorId }
+  });
+  const allocation = await api.handle({
+    method: "POST",
+    path: "/cost-allocations",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-cost-commit" },
+    body: { accountSetId: accountSet.body.id, workOrderId: workOrder.body.id, fiscalYear: 2026, periodNo: 1, costInputIds: [costInput.body.id], createdBy: actorId }
+  });
+  const balances = await api.handle({
+    method: "GET",
+    path: `/inventory-balances?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(receipt.body.totalAmount, 80);
+  assert.equal(costInput.status, 201);
+  assert.equal(costInput.body.sourceType, "manual");
+  assert.equal(costInput.body.lockedAt, null);
+  assert.equal(dryRun.status, 200);
+  assert.equal(dryRun.body.dryRun, true);
+  assert.equal(dryRun.body.totalAllocatedAmount, 40);
+  assert.deepEqual(dryRun.body.warningCodes, ["PHASE4_SOURCE_MISSING"]);
+  assert.equal(blockedCommit.status, 409);
+  assert.equal(blockedCommit.body.code, "COST_INPUT_NOT_LOCKED");
+  assert.equal(lockedInput.body.lockedAt, "now");
+  assert.equal(allocation.status, 201);
+  assert.equal(allocation.body.dryRun, false);
+  assert.equal(allocation.body.totalAllocatedAmount, 40);
+  assert.equal(allocation.body.lines[0].allocatedAmount, 40);
+  assert.equal(allocation.body.adjustments[0].amount, 40);
+  assert.deepEqual(
+    balances.body
+      .filter((balance) => balance.itemCode === "FG-COST")
+      .map((balance) => ({ quantity: balance.quantity, amount: balance.amount, unitCost: balance.unitCost })),
+    [{ quantity: 4, amount: 120, unitCost: 30 }]
+  );
+  assert.ok(api.state.auditLogs.some((log) => log.action === "mock_cost_input.lock" && log.objectId === costInput.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "cost_allocation.commit" && log.objectId === allocation.body.id));
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

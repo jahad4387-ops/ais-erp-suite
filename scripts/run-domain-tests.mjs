@@ -40,3 +40,4 @@ import "../docs/tests/phase2AcceptanceReport.test.mjs";
 import "../apps/web/tests/inventoryFoundationPages.test.mjs";
 import "../apps/web/tests/inventoryMovementPages.test.mjs";
 import "../apps/web/tests/productionWorkflowPages.test.mjs";
+import "../apps/web/tests/costAllocationPages.test.mjs";

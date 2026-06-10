@@ -96,7 +96,9 @@ const DEFAULT_PERMISSION_CODES = [
   "stock_count.manage",
   "work_order.manage",
   "material_requisition.manage",
-  "product_receipt.manage"
+  "product_receipt.manage",
+  "mock_cost_input.manage",
+  "cost_allocation.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -630,6 +632,12 @@ function permissionFor(request) {
   if (segments[0] === "product-receipts") {
     return "product_receipt.manage";
   }
+  if (segments[0] === "mock-cost-inputs") {
+    return "mock_cost_input.manage";
+  }
+  if (segments[0] === "cost-allocations") {
+    return "cost_allocation.manage";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -760,6 +768,9 @@ function createState(options = {}) {
     workOrders: new Map(),
     materialRequisitions: new Map(),
     productReceipts: new Map(),
+    mockCostInputs: new Map(),
+    costAllocations: new Map(),
+    inventoryCostAdjustments: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1610,6 +1621,101 @@ function listProductReceipts(state, accountSetId) {
 
 function findBomByIdentifier(state, identifier) {
   return [...state.boms.values()].find((bom) => bom.id === identifier) ?? null;
+}
+
+function listMockCostInputs(state, accountSetId) {
+  return [...state.mockCostInputs.values()]
+    .filter((input) => input.accountSetId === accountSetId)
+    .sort((left, right) => `${left.workOrderNo}:${left.costType}`.localeCompare(`${right.workOrderNo}:${right.costType}`));
+}
+
+function findMockCostInputByIdentifier(state, identifier) {
+  return state.mockCostInputs.get(identifier) ?? null;
+}
+
+function buildCostAllocation(state, body, actorId, { dryRun }) {
+  const workOrder = findWorkOrderByIdentifier(state, body.workOrderId);
+  if (!workOrder || workOrder.accountSetId !== body.accountSetId) {
+    throw new Error("Work order was not found.");
+  }
+  const inputs = (body.costInputIds ?? [])
+    .map((id) => findMockCostInputByIdentifier(state, id))
+    .filter(Boolean);
+  if (inputs.length === 0) {
+    throw new Error("At least one cost input is required.");
+  }
+  if (!dryRun && inputs.some((input) => !input.lockedAt)) {
+    return { error: errorResponse(409, "COST_INPUT_NOT_LOCKED", "Committed allocation requires locked mock/manual cost inputs.") };
+  }
+  const allocationId = body.id ?? `cost-allocation:${randomUUID()}`;
+  const lines = inputs.map((input) => ({
+    id: `cost-allocation-line:${randomUUID()}`,
+    costAllocationId: allocationId,
+    costInputId: input.id,
+    costType: input.costType,
+    allocatedAmount: roundAmount(input.amount)
+  }));
+  const totalAllocatedAmount = roundAmount(lines.reduce((sum, line) => sum + line.allocatedAmount, 0));
+  const warningCodes = inputs.some((input) => ["mock", "manual"].includes(input.sourceType)) ? ["PHASE4_SOURCE_MISSING"] : [];
+  const allocation = {
+    id: allocationId,
+    accountSetId: body.accountSetId,
+    workOrderId: workOrder.id,
+    workOrderNo: workOrder.workOrderNo,
+    fiscalYear: Number(body.fiscalYear),
+    periodNo: Number(body.periodNo),
+    dryRun,
+    status: dryRun ? "preview" : "committed",
+    totalAllocatedAmount,
+    warningCodes,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    lines,
+    adjustments: []
+  };
+  if (dryRun) {
+    return { allocation };
+  }
+
+  const receipts = [...state.productReceipts.values()].filter((receipt) => receipt.workOrderId === workOrder.id);
+  const totalReceiptQuantity = receipts.reduce((sum, receipt) => sum + receipt.totalQuantity, 0);
+  for (const receipt of receipts) {
+    for (const line of receipt.lines) {
+      const item = findInventoryItemByIdentifier(state, line.productItemId);
+      const warehouse = findWarehouseByIdentifier(state, line.warehouseId);
+      if (!item || !warehouse || totalReceiptQuantity === 0) continue;
+      const location = line.locationId ? findWarehouseLocation(warehouse, line.locationId) : null;
+      const adjustmentAmount = roundAmount((line.quantity / totalReceiptQuantity) * totalAllocatedAmount);
+      const balance = getInventoryBalance(state, {
+        accountSetId: body.accountSetId,
+        item,
+        warehouse,
+        location,
+        batchNo: line.batchNo
+      });
+      updateInventoryBalance(balance, { quantityDelta: 0, amountDelta: adjustmentAmount });
+      const adjustment = {
+        id: `inventory-cost-adjustment:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        costAllocationId: allocation.id,
+        workOrderId: workOrder.id,
+        itemId: item.id,
+        itemCode: item.code,
+        warehouseId: warehouse.id,
+        warehouseCode: warehouse.code,
+        locationId: location?.id ?? null,
+        batchNo: line.batchNo ?? null,
+        quantity: 0,
+        amount: adjustmentAmount,
+        reason: "cost_allocation",
+        createdAt: "now"
+      };
+      state.inventoryCostAdjustments.set(adjustment.id, adjustment);
+      allocation.adjustments.push(adjustment);
+    }
+  }
+  state.costAllocations.set(allocation.id, allocation);
+  return { allocation };
 }
 
 function normalizeOrderLines(lines = []) {
@@ -3701,6 +3807,79 @@ async function route(request, state) {
       state.productReceipts.set(receipt.id, receipt);
       appendAuditLog(state, { actorId: receipt.createdBy, action: "product_receipt.post", objectType: "product_receipt", objectId: receipt.id });
       return jsonResponse(201, receipt);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "mock-cost-inputs") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, listMockCostInputs(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const workOrder = findWorkOrderByIdentifier(state, body.workOrderId);
+      if (!workOrder || workOrder.accountSetId !== body.accountSetId) return errorResponse(404, "WORK_ORDER_NOT_FOUND", "Work order was not found.");
+      const amount = Number(body.amount);
+      if (!Number.isFinite(amount) || amount <= 0) throw new Error("amount must be greater than 0.");
+      const input = {
+        id: body.id ?? `mock-cost-input:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        workOrderId: workOrder.id,
+        workOrderNo: workOrder.workOrderNo,
+        fiscalYear: Number(body.fiscalYear),
+        periodNo: Number(body.periodNo),
+        sourceType: body.sourceType ?? "manual",
+        costType: body.costType,
+        amount: roundAmount(amount),
+        lockedAt: null,
+        lockedBy: null,
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now"
+      };
+      state.mockCostInputs.set(input.id, input);
+      appendAuditLog(state, { actorId: input.createdBy, action: "mock_cost_input.create", objectType: "mock_cost_input", objectId: input.id });
+      return jsonResponse(201, { ...input });
+    }
+  }
+
+  if (segments.length === 3 && segments[0] === "mock-cost-inputs" && segments[2] === "lock" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    const input = findMockCostInputByIdentifier(state, segments[1]);
+    if (!input) return errorResponse(404, "MOCK_COST_INPUT_NOT_FOUND", "Mock cost input was not found.");
+    if (!(await canAccessAccountSet(state, actorId, input.accountSetId))) return accountSetAccessError(state, actorId, input.accountSetId);
+    input.lockedAt = "now";
+    input.lockedBy = body.lockedBy ?? actorId;
+    appendAuditLog(state, { actorId: input.lockedBy, action: "mock_cost_input.lock", objectType: "mock_cost_input", objectId: input.id });
+    return jsonResponse(200, { ...input });
+  }
+
+  if (segments.length === 2 && segments[0] === "cost-allocations" && segments[1] === "dry-run" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+    try {
+      const result = buildCostAllocation(state, body, actorId, { dryRun: true });
+      return jsonResponse(200, result.allocation);
+    } catch (error) {
+      return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "cost-allocations" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+    try {
+      const result = buildCostAllocation(state, body, actorId, { dryRun: false });
+      if (result.error) return result.error;
+      appendAuditLog(state, { actorId: result.allocation.createdBy, action: "cost_allocation.commit", objectType: "cost_allocation", objectId: result.allocation.id });
+      return jsonResponse(201, result.allocation);
+    } catch (error) {
+      return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
     }
   }
 

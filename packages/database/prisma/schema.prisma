@@ -64,6 +64,9 @@ model AccountSet {
   workOrders         WorkOrder[]
   materialRequisitions MaterialRequisition[]
   productReceipts    ProductReceipt[]
+  mockCostInputs     MockCostInput[]
+  costAllocations    CostAllocation[]
+  inventoryCostAdjustments InventoryCostAdjustment[]
 }
 
 model User {
@@ -1038,6 +1041,7 @@ model InventoryItem {
   workOrders       WorkOrder[]
   materialRequisitionLines MaterialRequisitionLine[]
   productReceiptLines ProductReceiptLine[]
+  inventoryCostAdjustments InventoryCostAdjustment[]
 
   @@unique([accountSetId, code])
 }
@@ -1126,6 +1130,7 @@ model Warehouse {
   stockCountLines StockCountLine[]
   materialRequisitionLines MaterialRequisitionLine[]
   productReceiptLines ProductReceiptLine[]
+  inventoryCostAdjustments InventoryCostAdjustment[]
 
   @@unique([accountSetId, code])
 }
@@ -1146,6 +1151,7 @@ model WarehouseLocation {
   stockCountLines StockCountLine[]
   materialRequisitionLines MaterialRequisitionLine[]
   productReceiptLines ProductReceiptLine[]
+  inventoryCostAdjustments InventoryCostAdjustment[]
 
   @@unique([warehouseId, code])
 }
@@ -1360,6 +1366,9 @@ model WorkOrder {
   bom                  Bom @relation(fields: [bomId], references: [id])
   materialRequisitions MaterialRequisition[]
   productReceipts      ProductReceipt[]
+  mockCostInputs       MockCostInput[]
+  costAllocations      CostAllocation[]
+  inventoryCostAdjustments InventoryCostAdjustment[]
 
   @@unique([accountSetId, workOrderNo])
   @@index([accountSetId, status])
@@ -1444,4 +1453,81 @@ model ProductReceiptLine {
   productItem    InventoryItem @relation(fields: [productItemId], references: [id])
   warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
   location       WarehouseLocation? @relation(fields: [locationId], references: [id])
+}
+
+model MockCostInput {
+  id           String   @id @default(uuid())
+  accountSetId String
+  workOrderId  String
+  fiscalYear   Int
+  periodNo     Int
+  sourceType   String
+  costType     String
+  amount       Float
+  lockedAt     DateTime?
+  lockedBy     String?
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  accountSet      AccountSet @relation(fields: [accountSetId], references: [id])
+  workOrder       WorkOrder @relation(fields: [workOrderId], references: [id])
+  allocationLines CostAllocationLine[]
+
+  @@index([workOrderId])
+}
+
+model CostAllocation {
+  id                   String   @id @default(uuid())
+  accountSetId         String
+  workOrderId          String
+  fiscalYear           Int
+  periodNo             Int
+  dryRun               Boolean  @default(true)
+  status               String   @default("preview")
+  totalAllocatedAmount Float    @default(0)
+  warningCodesJson     String?
+  createdBy            String
+  createdAt            DateTime @default(now())
+
+  accountSet  AccountSet @relation(fields: [accountSetId], references: [id])
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+  lines       CostAllocationLine[]
+  adjustments InventoryCostAdjustment[]
+
+  @@index([workOrderId])
+}
+
+model CostAllocationLine {
+  id               String @id @default(uuid())
+  costAllocationId String
+  costInputId      String
+  costType         String
+  allocatedAmount  Float  @default(0)
+
+  costAllocation CostAllocation @relation(fields: [costAllocationId], references: [id])
+  costInput      MockCostInput @relation(fields: [costInputId], references: [id])
+}
+
+model InventoryCostAdjustment {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  costAllocationId String
+  workOrderId      String
+  itemId           String
+  warehouseId      String
+  locationId       String?
+  batchNo          String?
+  quantity         Float    @default(0)
+  amount           Float    @default(0)
+  reason           String
+  createdAt        DateTime @default(now())
+
+  accountSet     AccountSet @relation(fields: [accountSetId], references: [id])
+  costAllocation CostAllocation @relation(fields: [costAllocationId], references: [id])
+  workOrder      WorkOrder @relation(fields: [workOrderId], references: [id])
+  item           InventoryItem @relation(fields: [itemId], references: [id])
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  location       WarehouseLocation? @relation(fields: [locationId], references: [id])
+
+  @@index([accountSetId, itemId])
 }

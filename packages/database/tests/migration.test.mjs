@@ -54,6 +54,10 @@ const phase3ProductionWorkflowMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260611020000_phase3_production_workflow/migration.sql", import.meta.url)
 );
 const phase3ProductionWorkflowMigrationText = phase3ProductionWorkflowMigrationSql.toString("utf8");
+const phase3CostAllocationMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260611030000_phase3_cost_allocation/migration.sql", import.meta.url)
+);
+const phase3CostAllocationMigrationText = phase3CostAllocationMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -297,4 +301,16 @@ test("Phase 3 production workflow migration creates work orders, material requis
   assert.match(phase3ProductionWorkflowMigrationText, /CREATE UNIQUE INDEX "WorkOrder_accountSetId_workOrderNo_key"/);
   assert.match(phase3ProductionWorkflowMigrationText, /CREATE INDEX "MaterialRequisition_workOrderId_idx"/);
   assert.match(phase3ProductionWorkflowMigrationText, /CREATE INDEX "ProductReceipt_workOrderId_idx"/);
+});
+
+test("Phase 3 cost allocation migration creates mock cost inputs, allocations, allocation lines, and cost adjustments", () => {
+  for (const table of ["MockCostInput", "CostAllocation", "CostAllocationLine", "InventoryCostAdjustment"]) {
+    assert.match(phase3CostAllocationMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase3CostAllocationMigrationText, /"sourceType" TEXT NOT NULL/, "Cost inputs must distinguish mock, manual, and future Phase 4 sources.");
+  assert.match(phase3CostAllocationMigrationText, /"lockedAt" DATETIME/, "Cost inputs must be lockable before committed allocation.");
+  assert.match(phase3CostAllocationMigrationText, /"dryRun" BOOLEAN NOT NULL DEFAULT true/, "Allocations must support dry-run mode.");
+  assert.match(phase3CostAllocationMigrationText, /"warningCodesJson" TEXT/, "Allocation warnings must persist Phase 4 source limitations.");
+  assert.match(phase3CostAllocationMigrationText, /CREATE INDEX "MockCostInput_workOrderId_idx"/);
+  assert.match(phase3CostAllocationMigrationText, /CREATE INDEX "InventoryCostAdjustment_accountSetId_itemId_idx"/);
 });
