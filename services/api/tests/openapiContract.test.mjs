@@ -367,6 +367,26 @@ test("Phase 4 payroll foundation endpoints document setup, variable import, and 
   assert.match(contract, /cumulativeTaxableIncome:/, "Payroll run lines must expose cumulative tax basis.");
 });
 
+test("Phase 4 payroll workflow endpoints document approval, locking, payment, allocation, and cost-pool outputs", () => {
+  const approveBlock = blockAfter("  /payroll-runs/{payrollRunId}/approve:");
+  const lockBlock = blockAfter("  /payroll-runs/{payrollRunId}/lock:");
+  const paymentBlock = blockAfter("  /payroll-payment-files:");
+  const allocationBlock = blockAfter("  /payroll-allocations:");
+  const costPoolBlock = blockAfter("  /payroll-cost-pools:");
+
+  assert.match(approveBlock, /x-permission: payroll_run\.manage/);
+  assert.match(lockBlock, /x-permission: payroll_run\.manage/);
+  assert.match(paymentBlock, /x-permission: payroll_payment\.manage/);
+  assert.match(paymentBlock, /PayrollPaymentFile/);
+  assert.match(allocationBlock, /x-permission: payroll_allocation\.manage/);
+  assert.match(allocationBlock, /PayrollAllocation/);
+  assert.match(costPoolBlock, /x-permission: payroll_cost_pool\.view/);
+  assert.match(costPoolBlock, /PayrollCostPoolOutput/);
+  assert.match(contract, /phase4_payroll_allocation/, "Payroll allocations must identify their voucher source.");
+  assert.match(contract, /sourceRunId:/, "Cost pools must trace the locked payroll run.");
+  assert.match(contract, /lockedAt:/, "Cost pools must expose lock status.");
+});
+
 test("deployment configuration check endpoint is documented", () => {
   const block = blockAfter("  /deployment/config:");
 

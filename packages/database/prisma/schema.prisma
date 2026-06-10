@@ -75,6 +75,9 @@ model AccountSet {
   employeePayrollProfiles EmployeePayrollProfile[]
   payrollVariableImports PayrollVariableImport[]
   payrollRuns        PayrollRun[]
+  payrollPaymentFiles PayrollPaymentFile[]
+  payrollAllocations PayrollAllocation[]
+  payrollCostPoolOutputs PayrollCostPoolOutput[]
 }
 
 model User {
@@ -1649,6 +1652,7 @@ model EmployeePayrollProfile {
   payrollCategory PayrollCategory @relation(fields: [payrollCategoryId], references: [id])
   importLines PayrollVariableImportLine[]
   runLines    PayrollRunLine[]
+  paymentFileLines PayrollPaymentFileLine[]
 
   @@unique([accountSetId, employeeNo])
 }
@@ -1702,11 +1706,18 @@ model PayrollRun {
   totalCompanyCost      Float    @default(0)
   createdBy             String
   createdAt             DateTime @default(now())
+  approvedBy            String?
+  approvedAt            DateTime?
+  lockedBy              String?
+  lockedAt              DateTime?
 
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
   payrollCategory PayrollCategory @relation(fields: [payrollCategoryId], references: [id])
   variableImport PayrollVariableImport @relation(fields: [variableImportId], references: [id])
   lines PayrollRunLine[]
+  paymentFiles PayrollPaymentFile[]
+  allocations PayrollAllocation[]
+  costPoolOutputs PayrollCostPoolOutput[]
 
   @@index([accountSetId, fiscalYear, periodNo])
 }
@@ -1733,4 +1744,90 @@ model PayrollRunLine {
   employeeProfile EmployeePayrollProfile @relation(fields: [employeeProfileId], references: [id])
 
   @@index([employeeProfileId])
+}
+
+model PayrollPaymentFile {
+  id              String   @id @default(uuid())
+  accountSetId    String
+  payrollRunId    String
+  bankAccountCode String
+  status          String   @default("prepared")
+  totalAmount     Float    @default(0)
+  lineCount       Int      @default(0)
+  createdBy       String
+  createdAt       DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id])
+  lines PayrollPaymentFileLine[]
+
+  @@index([accountSetId, payrollRunId])
+}
+
+model PayrollPaymentFileLine {
+  id                String @id @default(uuid())
+  paymentFileId     String
+  employeeProfileId String
+  employeeNo        String
+  employeeName      String
+  amount            Float  @default(0)
+  bankAccountNo     String?
+
+  paymentFile PayrollPaymentFile @relation(fields: [paymentFileId], references: [id])
+  employeeProfile EmployeePayrollProfile @relation(fields: [employeeProfileId], references: [id])
+}
+
+model PayrollAllocation {
+  id                   String   @id @default(uuid())
+  accountSetId          String
+  payrollRunId          String
+  fiscalYear            Int
+  periodNo              Int
+  status                String   @default("allocated")
+  totalAllocatedAmount  Float    @default(0)
+  approvalRequired      Boolean  @default(true)
+  voucherDraftJson      String
+  createdBy             String
+  createdAt             DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id])
+  lines PayrollAllocationLine[]
+  costPoolOutputs PayrollCostPoolOutput[]
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model PayrollAllocationLine {
+  id                  String @id @default(uuid())
+  payrollAllocationId String
+  departmentId        String
+  targetType          String
+  workOrderId         String?
+  costType            String
+  allocationRate      Float  @default(1)
+  allocatedAmount     Float  @default(0)
+
+  allocation PayrollAllocation @relation(fields: [payrollAllocationId], references: [id])
+}
+
+model PayrollCostPoolOutput {
+  id                  String   @id @default(uuid())
+  accountSetId        String
+  sourceRunId         String
+  payrollAllocationId String
+  fiscalYear          Int
+  periodNo            Int
+  departmentId        String
+  workOrderId         String?
+  costType            String
+  amount              Float    @default(0)
+  lockedAt            DateTime
+  createdAt           DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  sourceRun PayrollRun @relation(fields: [sourceRunId], references: [id])
+  allocation PayrollAllocation @relation(fields: [payrollAllocationId], references: [id])
+
+  @@index([accountSetId, fiscalYear, periodNo])
 }

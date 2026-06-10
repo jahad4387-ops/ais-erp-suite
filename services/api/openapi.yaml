@@ -3933,6 +3933,164 @@ paths:
               schema:
                 $ref: "#/components/schemas/PayrollRun"
 
+  /payroll-runs/{payrollRunId}/approve:
+    post:
+      summary: Approve a calculated Phase 4 payroll run.
+      x-permission: payroll_run.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: payrollRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Payroll run approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayrollRun"
+
+  /payroll-runs/{payrollRunId}/lock:
+    post:
+      summary: Lock an approved Phase 4 payroll run for payment and allocation.
+      x-permission: payroll_run.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: payrollRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Payroll run locked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayrollRun"
+
+  /payroll-payment-files:
+    get:
+      summary: List Phase 4 payroll bank payment files.
+      x-permission: payroll_payment.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payroll payment file list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PayrollPaymentFile"
+    post:
+      summary: Prepare a bank payment file from a locked payroll run.
+      x-permission: payroll_payment.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePayrollPaymentFileRequest"
+      responses:
+        "201":
+          description: Payroll payment file prepared.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayrollPaymentFile"
+
+  /payroll-allocations:
+    get:
+      summary: List Phase 4 payroll expense allocations and voucher drafts.
+      x-permission: payroll_allocation.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payroll allocation list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PayrollAllocation"
+    post:
+      summary: Allocate locked payroll costs and create a human-review voucher draft.
+      x-permission: payroll_allocation.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePayrollAllocationRequest"
+      responses:
+        "201":
+          description: Payroll allocation created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayrollAllocation"
+
+  /payroll-cost-pools:
+    get:
+      summary: List locked Phase 4 payroll cost-pool outputs for Phase 3 consumption.
+      x-permission: payroll_cost_pool.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: fiscalYear
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: periodNo
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Locked payroll cost-pool outputs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PayrollCostPoolOutput"
+
 components:
   parameters:
     AccountSetId:
@@ -7992,7 +8150,7 @@ components:
           type: integer
         status:
           type: string
-          enum: [calculated]
+          enum: [calculated, approved, locked]
         lineCount:
           type: integer
         totalGrossAmount:
@@ -8005,6 +8163,10 @@ components:
           type: number
         totalCompanyCost:
           type: number
+        approvedAt:
+          type: string
+        lockedAt:
+          type: string
         lines:
           type: array
           items:
@@ -8044,6 +8206,190 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PayrollManualAdjustment"
+
+    CreatePayrollPaymentFileRequest:
+      type: object
+      required: [accountSetId, payrollRunId, bankAccountCode]
+      properties:
+        accountSetId:
+          type: string
+        payrollRunId:
+          type: string
+        bankAccountCode:
+          type: string
+        createdBy:
+          type: string
+
+    PayrollPaymentFile:
+      type: object
+      required: [id, accountSetId, payrollRunId, bankAccountCode, status, totalAmount, lineCount, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        payrollRunId:
+          type: string
+        bankAccountCode:
+          type: string
+        status:
+          type: string
+          enum: [prepared]
+        totalAmount:
+          type: number
+        lineCount:
+          type: integer
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayrollPaymentFileLine"
+
+    PayrollPaymentFileLine:
+      type: object
+      required: [id, employeeProfileId, employeeNo, employeeName, amount]
+      properties:
+        id:
+          type: string
+        employeeProfileId:
+          type: string
+        employeeNo:
+          type: string
+        employeeName:
+          type: string
+        amount:
+          type: number
+        bankAccountNo:
+          type: string
+
+    CreatePayrollAllocationRequest:
+      type: object
+      required: [accountSetId, payrollRunId, fiscalYear, periodNo, rules]
+      properties:
+        accountSetId:
+          type: string
+        payrollRunId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayrollAllocationRule"
+
+    PayrollAllocationRule:
+      type: object
+      required: [departmentId, targetType, costType]
+      properties:
+        departmentId:
+          type: string
+        targetType:
+          type: string
+          enum: [department, work_order, cost_center]
+        workOrderId:
+          type: string
+        costType:
+          type: string
+          enum: [direct_labor, payroll_overhead]
+        allocationRate:
+          type: number
+        amount:
+          type: number
+
+    PayrollAllocation:
+      type: object
+      required: [id, accountSetId, payrollRunId, status, totalAllocatedAmount, approvalRequired, voucherDraft, lines, costPools]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        payrollRunId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [allocated]
+        totalAllocatedAmount:
+          type: number
+        approvalRequired:
+          type: boolean
+        voucherDraft:
+          type: object
+          required: [status, sourceType, sourceDocumentId, totalAmount, approvalRequired, lines]
+          properties:
+            status:
+              type: string
+              enum: [draft]
+            sourceType:
+              type: string
+              enum: [phase4_payroll_allocation]
+            sourceDocumentId:
+              type: string
+            sourceDocumentNo:
+              type: string
+            totalAmount:
+              type: number
+            approvalRequired:
+              type: boolean
+            lines:
+              type: array
+              items:
+                $ref: "#/components/schemas/CostVoucherDraftLine"
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayrollAllocationLine"
+        costPools:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayrollCostPoolOutput"
+
+    PayrollAllocationLine:
+      allOf:
+        - $ref: "#/components/schemas/PayrollAllocationRule"
+        - type: object
+          required: [id, payrollAllocationId, allocatedAmount]
+          properties:
+            id:
+              type: string
+            payrollAllocationId:
+              type: string
+            allocatedAmount:
+              type: number
+
+    PayrollCostPoolOutput:
+      type: object
+      required: [id, accountSetId, sourceRunId, payrollAllocationId, fiscalYear, periodNo, departmentId, costType, amount, lockedAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        sourceRunId:
+          type: string
+        payrollAllocationId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        departmentId:
+          type: string
+        workOrderId:
+          type: string
+        costType:
+          type: string
+        amount:
+          type: number
+        lockedAt:
+          type: string
 
     CreateAgentActionRequest:
       type: object

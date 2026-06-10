@@ -66,6 +66,10 @@ const phase4PayrollFoundationMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260611050000_phase4_payroll_foundation/migration.sql", import.meta.url)
 );
 const phase4PayrollFoundationMigrationText = phase4PayrollFoundationMigrationSql.toString("utf8");
+const phase4PayrollWorkflowMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260611060000_phase4_payroll_workflow/migration.sql", import.meta.url)
+);
+const phase4PayrollWorkflowMigrationText = phase4PayrollWorkflowMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -353,4 +357,17 @@ test("Phase 4 payroll foundation migration creates setup, import, and calculatio
   assert.match(phase4PayrollFoundationMigrationText, /CREATE UNIQUE INDEX "PayrollCategory_accountSetId_code_key"/);
   assert.match(phase4PayrollFoundationMigrationText, /CREATE INDEX "PayrollRun_accountSetId_fiscalYear_periodNo_idx"/);
   assert.match(phase4PayrollFoundationMigrationText, /CREATE INDEX "PayrollRunLine_employeeProfileId_idx"/);
+});
+
+test("Phase 4 payroll workflow migration creates approval, payment, allocation, and cost-pool outputs", () => {
+  for (const table of ["PayrollPaymentFile", "PayrollPaymentFileLine", "PayrollAllocation", "PayrollAllocationLine", "PayrollCostPoolOutput"]) {
+    assert.match(phase4PayrollWorkflowMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase4PayrollWorkflowMigrationText, /ALTER TABLE "PayrollRun" ADD COLUMN "approvedAt" DATETIME/, "Payroll runs must persist approval timestamp.");
+  assert.match(phase4PayrollWorkflowMigrationText, /ALTER TABLE "PayrollRun" ADD COLUMN "lockedAt" DATETIME/, "Payroll runs must persist lock timestamp.");
+  assert.match(phase4PayrollWorkflowMigrationText, /"voucherDraftJson" TEXT NOT NULL/, "Payroll allocations must keep human-review voucher draft payload.");
+  assert.match(phase4PayrollWorkflowMigrationText, /"approvalRequired" BOOLEAN NOT NULL DEFAULT true/, "Payroll allocation voucher drafts must require approval.");
+  assert.match(phase4PayrollWorkflowMigrationText, /"sourceRunId" TEXT NOT NULL/, "Cost-pool outputs must trace the locked payroll run.");
+  assert.match(phase4PayrollWorkflowMigrationText, /"lockedAt" DATETIME NOT NULL/, "Cost-pool outputs must be locked before Phase 3 can consume them.");
+  assert.match(phase4PayrollWorkflowMigrationText, /CREATE INDEX "PayrollCostPoolOutput_accountSetId_fiscalYear_periodNo_idx"/);
 });

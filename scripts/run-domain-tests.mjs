@@ -44,3 +44,4 @@ import "../apps/web/tests/costAllocationPages.test.mjs";
 import "../apps/web/tests/costVoucherReconciliationPages.test.mjs";
 import "../docs/tests/phase3AcceptanceReport.test.mjs";
 import "../apps/web/tests/payrollFoundationPages.test.mjs";
+import "../apps/web/tests/payrollWorkflowPages.test.mjs";

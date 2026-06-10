@@ -2891,6 +2891,167 @@ test("Phase 4 payroll foundation calculates imported variable pay with monthly c
   assert.ok(api.state.auditLogs.some((log) => log.action === "payroll_run.calculate" && log.objectId === secondRun.body.id));
 });
 
+test("Phase 4 payroll workflow approves, locks, pays, allocates, and outputs formal labor cost pools", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P4-PAY-WF",
+      name: "Phase 4 Payroll Workflow Set",
+      companyName: "Phase 4 Workflow Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase4-payroll-workflow-account-set"
+  );
+  const actorId = "phase4-payroll-workflow-actor";
+  api.state.permissionsByActor.set(
+    actorId,
+    new Set(["payroll_setup.manage", "payroll_run.manage", "payroll_payment.manage", "payroll_allocation.manage", "payroll_cost_pool.view"])
+  );
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+
+  const category = await api.handle({
+    method: "POST",
+    path: "/payroll-categories",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-wf-category" },
+    body: { accountSetId: accountSet.body.id, code: "MONTHLY", name: "Monthly payroll", createdBy: actorId }
+  });
+  const profile = await api.handle({
+    method: "POST",
+    path: "/employee-payroll-profiles",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-wf-profile" },
+    body: {
+      accountSetId: accountSet.body.id,
+      employeeNo: "E002",
+      employeeName: "Chen Wei",
+      departmentId: "D-PROD",
+      departmentName: "Production",
+      payrollCategoryId: category.body.id,
+      baseSalary: 10000,
+      personalSocialSecurity: 1000,
+      personalHousingFund: 500,
+      companySocialSecurity: 1600,
+      companyHousingFund: 1200,
+      monthlyTaxExemption: 5000,
+      createdBy: actorId
+    }
+  });
+  const variableImport = await api.handle({
+    method: "POST",
+    path: "/payroll-variable-imports",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-wf-import" },
+    body: {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      importType: "attendance_performance",
+      createdBy: actorId,
+      lines: [{ employeeProfileId: profile.body.id, workDays: 22, performancePay: 1000, allowance: 200, deduction: 100 }]
+    }
+  });
+  const run = await api.handle({
+    method: "POST",
+    path: "/payroll-runs/calculate",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-wf-run" },
+    body: {
+      accountSetId: accountSet.body.id,
+      runNo: "PAY-202601-WF",
+      payrollCategoryId: category.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      variableImportId: variableImport.body.id,
+      createdBy: actorId
+    }
+  });
+  api.state.workOrders.set("work-order:p4-payroll", {
+    id: "work-order:p4-payroll",
+    accountSetId: accountSet.body.id,
+    workOrderNo: "WO-P4-PAYROLL",
+    status: "closed",
+    fiscalYear: 2026,
+    periodNo: 1
+  });
+
+  const blockedPayment = await api.handle({
+    method: "POST",
+    path: "/payroll-payment-files",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-wf-payment-blocked" },
+    body: { accountSetId: accountSet.body.id, payrollRunId: run.body.id, bankAccountCode: "1002", createdBy: actorId }
+  });
+  const approved = await api.handle({
+    method: "POST",
+    path: `/payroll-runs/${run.body.id}/approve`,
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-wf-approve" },
+    body: { approvedBy: actorId }
+  });
+  const locked = await api.handle({
+    method: "POST",
+    path: `/payroll-runs/${run.body.id}/lock`,
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-wf-lock" },
+    body: { lockedBy: actorId }
+  });
+  const paymentFile = await api.handle({
+    method: "POST",
+    path: "/payroll-payment-files",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-wf-payment" },
+    body: { accountSetId: accountSet.body.id, payrollRunId: run.body.id, bankAccountCode: "1002", createdBy: actorId }
+  });
+  const allocation = await api.handle({
+    method: "POST",
+    path: "/payroll-allocations",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-wf-allocation" },
+    body: {
+      accountSetId: accountSet.body.id,
+      payrollRunId: run.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId,
+      rules: [{ departmentId: "D-PROD", targetType: "work_order", workOrderId: "work-order:p4-payroll", costType: "direct_labor", allocationRate: 1 }]
+    }
+  });
+  const costPools = await api.handle({
+    method: "GET",
+    path: `/payroll-cost-pools?accountSetId=${accountSet.body.id}&fiscalYear=2026&periodNo=1`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(run.body.totalCompanyCost, 14000);
+  assert.equal(blockedPayment.status, 409);
+  assert.equal(blockedPayment.body.code, "PAYROLL_RUN_NOT_LOCKED");
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.status, "approved");
+  assert.equal(locked.status, 200);
+  assert.equal(locked.body.status, "locked");
+  assert.equal(locked.body.lockedAt, "now");
+  assert.equal(paymentFile.status, 201);
+  assert.equal(paymentFile.body.totalAmount, run.body.totalNetPay);
+  assert.equal(paymentFile.body.lines[0].amount, run.body.lines[0].netPay);
+  assert.equal(allocation.status, 201);
+  assert.equal(allocation.body.status, "allocated");
+  assert.equal(allocation.body.totalAllocatedAmount, 14000);
+  assert.equal(allocation.body.voucherDraft.sourceType, "phase4_payroll_allocation");
+  assert.equal(allocation.body.voucherDraft.approvalRequired, true);
+  assert.deepEqual(allocation.body.voucherDraft.lines.map((line) => line.amount), [14000, -14000]);
+  assert.equal(costPools.status, 200);
+  assert.deepEqual(
+    costPools.body.map((pool) => ({
+      sourceRunId: pool.sourceRunId,
+      workOrderId: pool.workOrderId,
+      costType: pool.costType,
+      amount: pool.amount,
+      lockedAt: pool.lockedAt
+    })),
+    [{ sourceRunId: run.body.id, workOrderId: "work-order:p4-payroll", costType: "direct_labor", amount: 14000, lockedAt: "now" }]
+  );
+  assert.ok(api.state.auditLogs.some((log) => log.action === "payroll_run.lock" && log.objectId === run.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "payroll_allocation.create" && log.objectId === allocation.body.id));
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

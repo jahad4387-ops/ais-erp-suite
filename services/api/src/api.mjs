@@ -102,7 +102,10 @@ const DEFAULT_PERMISSION_CODES = [
   "cost_voucher.manage",
   "inventory_reconciliation.view",
   "payroll_setup.manage",
-  "payroll_run.manage"
+  "payroll_run.manage",
+  "payroll_payment.manage",
+  "payroll_allocation.manage",
+  "payroll_cost_pool.view"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -654,6 +657,15 @@ function permissionFor(request) {
   if (segments[0] === "payroll-variable-imports" || segments[0] === "payroll-runs") {
     return "payroll_run.manage";
   }
+  if (segments[0] === "payroll-payment-files") {
+    return "payroll_payment.manage";
+  }
+  if (segments[0] === "payroll-allocations") {
+    return "payroll_allocation.manage";
+  }
+  if (segments[0] === "payroll-cost-pools") {
+    return "payroll_cost_pool.view";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -795,6 +807,9 @@ function createState(options = {}) {
     payrollVariableImports: new Map(),
     payrollRuns: new Map(),
     payrollRunLines: new Map(),
+    payrollPaymentFiles: new Map(),
+    payrollAllocations: new Map(),
+    payrollCostPools: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1890,6 +1905,10 @@ function findPayrollVariableImportByIdentifier(state, identifier) {
   return state.payrollVariableImports.get(identifier) ?? null;
 }
 
+function findPayrollRunByIdentifier(state, identifier) {
+  return state.payrollRuns.get(identifier) ?? [...state.payrollRuns.values()].find((run) => run.runNo === identifier) ?? null;
+}
+
 function calculateSimpleMonthlyTax(taxableIncome, monthlyTaxExemption) {
   return roundAmount(Math.max(0, taxableIncome - monthlyTaxExemption) * 0.03);
 }
@@ -1985,6 +2004,139 @@ function buildPayrollRun(state, body, actorId) {
     state.payrollRunLines.set(line.id, line);
   }
   return { run };
+}
+
+function payrollRunLockedError(run) {
+  if (!run || run.status !== "locked" || !run.lockedAt) {
+    return errorResponse(409, "PAYROLL_RUN_NOT_LOCKED", "Payroll run must be locked before this operation.");
+  }
+  return null;
+}
+
+function buildPayrollPaymentFile(state, body, actorId) {
+  const run = findPayrollRunByIdentifier(state, body.payrollRunId);
+  if (!run || run.accountSetId !== body.accountSetId) {
+    return { error: errorResponse(404, "PAYROLL_RUN_NOT_FOUND", "Payroll run was not found.") };
+  }
+  const lockedError = payrollRunLockedError(run);
+  if (lockedError) return { error: lockedError };
+  const fileId = `payroll-payment-file:${randomUUID()}`;
+  const lines = (run.lines ?? []).map((line) => ({
+    id: `payroll-payment-file-line:${randomUUID()}`,
+    paymentFileId: fileId,
+    employeeProfileId: line.employeeProfileId,
+    employeeNo: line.employeeNo,
+    employeeName: line.employeeName,
+    amount: line.netPay,
+    bankAccountNo: line.bankAccountNo ?? null
+  }));
+  const paymentFile = {
+    id: fileId,
+    accountSetId: body.accountSetId,
+    payrollRunId: run.id,
+    runNo: run.runNo,
+    bankAccountCode: body.bankAccountCode,
+    status: "prepared",
+    totalAmount: roundAmount(lines.reduce((sum, line) => sum + line.amount, 0)),
+    lineCount: lines.length,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    lines
+  };
+  state.payrollPaymentFiles.set(paymentFile.id, paymentFile);
+  return { paymentFile };
+}
+
+function buildPayrollAllocation(state, body, actorId) {
+  const run = findPayrollRunByIdentifier(state, body.payrollRunId);
+  if (!run || run.accountSetId !== body.accountSetId) {
+    return { error: errorResponse(404, "PAYROLL_RUN_NOT_FOUND", "Payroll run was not found.") };
+  }
+  const lockedError = payrollRunLockedError(run);
+  if (lockedError) return { error: lockedError };
+  if (!Array.isArray(body.rules) || body.rules.length === 0) {
+    throw new Error("Allocation rules are required.");
+  }
+  const allocationId = `payroll-allocation:${randomUUID()}`;
+  const lines = body.rules.map((rule) => {
+    const amount = roundAmount(Number(rule.amount ?? run.totalCompanyCost * Number(rule.allocationRate ?? 0)));
+    return {
+      id: `payroll-allocation-line:${randomUUID()}`,
+      payrollAllocationId: allocationId,
+      departmentId: rule.departmentId,
+      targetType: rule.targetType ?? "department",
+      workOrderId: rule.workOrderId ?? null,
+      costType: rule.costType ?? "direct_labor",
+      allocationRate: Number(rule.allocationRate ?? (run.totalCompanyCost ? amount / run.totalCompanyCost : 0)),
+      allocatedAmount: amount
+    };
+  });
+  const totalAllocatedAmount = roundAmount(lines.reduce((sum, line) => sum + line.allocatedAmount, 0));
+  const voucherDraft = {
+    status: "draft",
+    sourceType: "phase4_payroll_allocation",
+    sourceDocumentId: allocationId,
+    sourceDocumentNo: run.runNo,
+    fiscalYear: Number(body.fiscalYear ?? run.fiscalYear),
+    periodNo: Number(body.periodNo ?? run.periodNo),
+    totalAmount: totalAllocatedAmount,
+    approvalRequired: true,
+    lines: [
+      {
+        lineNo: 1,
+        summary: `Payroll allocation for ${run.runNo}`,
+        amount: totalAllocatedAmount,
+        debit: totalAllocatedAmount,
+        credit: 0,
+        direction: "debit",
+        accountCode: "5001"
+      },
+      {
+        lineNo: 2,
+        summary: `Payroll payable clearing for ${run.runNo}`,
+        amount: roundAmount(-totalAllocatedAmount),
+        debit: 0,
+        credit: totalAllocatedAmount,
+        direction: "credit",
+        accountCode: "2211"
+      }
+    ]
+  };
+  const costPools = lines.map((line) => ({
+    id: `payroll-cost-pool:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    sourceRunId: run.id,
+    payrollAllocationId: allocationId,
+    fiscalYear: Number(body.fiscalYear ?? run.fiscalYear),
+    periodNo: Number(body.periodNo ?? run.periodNo),
+    departmentId: line.departmentId,
+    workOrderId: line.workOrderId,
+    costType: line.costType,
+    amount: line.allocatedAmount,
+    lockedAt: run.lockedAt,
+    createdAt: "now"
+  }));
+  const allocation = {
+    id: allocationId,
+    accountSetId: body.accountSetId,
+    payrollRunId: run.id,
+    runNo: run.runNo,
+    fiscalYear: Number(body.fiscalYear ?? run.fiscalYear),
+    periodNo: Number(body.periodNo ?? run.periodNo),
+    status: "allocated",
+    totalAllocatedAmount,
+    approvalRequired: true,
+    voucherDraft,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    lines,
+    costPools
+  };
+  state.payrollAllocations.set(allocation.id, allocation);
+  for (const pool of costPools) {
+    state.payrollCostPools.set(pool.id, pool);
+  }
+  return { allocation };
 }
 
 function normalizeOrderLines(lines = []) {
@@ -4359,6 +4511,86 @@ async function route(request, state) {
     } catch (error) {
       return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
     }
+  }
+
+  if (segments.length === 3 && segments[0] === "payroll-runs" && ["approve", "lock"].includes(segments[2]) && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    const run = findPayrollRunByIdentifier(state, segments[1]);
+    if (!run) return errorResponse(404, "PAYROLL_RUN_NOT_FOUND", "Payroll run was not found.");
+    if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) return accountSetAccessError(state, actorId, run.accountSetId);
+    if (segments[2] === "approve") {
+      if (run.status !== "calculated") return errorResponse(409, "PAYROLL_RUN_STATUS_INVALID", "Only calculated payroll runs can be approved.");
+      run.status = "approved";
+      run.approvedBy = body.approvedBy ?? actorId;
+      run.approvedAt = "now";
+      appendAuditLog(state, { actorId: run.approvedBy, action: "payroll_run.approve", objectType: "payroll_run", objectId: run.id });
+      return jsonResponse(200, { ...run });
+    }
+    if (run.status !== "approved") return errorResponse(409, "PAYROLL_RUN_STATUS_INVALID", "Only approved payroll runs can be locked.");
+    run.status = "locked";
+    run.lockedBy = body.lockedBy ?? actorId;
+    run.lockedAt = "now";
+    appendAuditLog(state, { actorId: run.lockedBy, action: "payroll_run.lock", objectType: "payroll_run", objectId: run.id });
+    return jsonResponse(200, { ...run });
+  }
+
+  if (segments.length === 1 && segments[0] === "payroll-payment-files") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, [...state.payrollPaymentFiles.values()].filter((file) => file.accountSetId === accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const result = buildPayrollPaymentFile(state, body, actorId);
+      if (result.error) return result.error;
+      appendAuditLog(state, { actorId: result.paymentFile.createdBy, action: "payroll_payment_file.create", objectType: "payroll_payment_file", objectId: result.paymentFile.id });
+      return jsonResponse(201, result.paymentFile);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "payroll-allocations") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, [...state.payrollAllocations.values()].filter((allocation) => allocation.accountSetId === accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      try {
+        const result = buildPayrollAllocation(state, body, actorId);
+        if (result.error) return result.error;
+        appendAuditLog(state, { actorId: result.allocation.createdBy, action: "payroll_allocation.create", objectType: "payroll_allocation", objectId: result.allocation.id });
+        return jsonResponse(201, result.allocation);
+      } catch (error) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "payroll-cost-pools" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const fiscalYear = query.get("fiscalYear");
+    const periodNo = query.get("periodNo");
+    if (!accountSetId) throw new Error("accountSetId is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+    return jsonResponse(
+      200,
+      [...state.payrollCostPools.values()]
+        .filter((pool) => pool.accountSetId === accountSetId)
+        .filter((pool) => !fiscalYear || pool.fiscalYear === Number(fiscalYear))
+        .filter((pool) => !periodNo || pool.periodNo === Number(periodNo))
+    );
   }
 
   if (request.method === "GET" && request.path === "/periods") {

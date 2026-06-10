@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Form, Input, InputNumber, Select, Table, Tabs, Tag } from 'antd';
-import { CalculatorOutlined, ImportOutlined, ReloadOutlined } from '@ant-design/icons';
+import { BankOutlined, CalculatorOutlined, CheckOutlined, ImportOutlined, LockOutlined, PartitionOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useAppContext } from '../context/AppContext';
 
@@ -21,10 +21,16 @@ type PayrollRun = {
   id: string;
   runNo: string;
   status: string;
+  fiscalYear: number;
+  periodNo: number;
   totalGrossAmount: number;
+  totalCompanyCost: number;
   totalNetPay: number;
   lines: PayrollRunLine[];
 };
+type PayrollPaymentFile = { id: string; payrollRunId: string; bankAccountCode: string; totalAmount: number; lineCount: number };
+type PayrollAllocation = { id: string; payrollRunId: string; totalAllocatedAmount: number; voucherDraft: { lines: Array<{ lineNo: number; accountCode: string; amount: number }> } };
+type PayrollCostPool = { id: string; sourceRunId: string; workOrderId?: string | null; costType: string; amount: number; lockedAt: string };
 
 export const PayrollRuns: React.FC = () => {
   const [importForm] = Form.useForm();
@@ -34,24 +40,33 @@ export const PayrollRuns: React.FC = () => {
   const [profiles, setProfiles] = useState<EmployeePayrollProfile[]>([]);
   const [imports, setImports] = useState<PayrollVariableImport[]>([]);
   const [runs, setRuns] = useState<PayrollRun[]>([]);
+  const [paymentFiles, setPaymentFiles] = useState<PayrollPaymentFile[]>([]);
+  const [allocations, setAllocations] = useState<PayrollAllocation[]>([]);
+  const [costPools, setCostPools] = useState<PayrollCostPool[]>([]);
 
   const fetchData = useCallback(async () => {
     if (!currentAccountSetId) return;
-    const [categoryRows, profileRows, importRows, runRows] = await Promise.all([
+    const [categoryRows, profileRows, importRows, runRows, paymentRows, allocationRows, costPoolRows] = await Promise.all([
       api.get(`/payroll-categories?accountSetId=${currentAccountSetId}`),
       api.get(`/employee-payroll-profiles?accountSetId=${currentAccountSetId}`),
       api.get(`/payroll-variable-imports?accountSetId=${currentAccountSetId}`),
       api.get(`/payroll-runs?accountSetId=${currentAccountSetId}`),
+      api.get(`/payroll-payment-files?accountSetId=${currentAccountSetId}`),
+      api.get(`/payroll-allocations?accountSetId=${currentAccountSetId}`),
+      api.get(`/payroll-cost-pools?accountSetId=${currentAccountSetId}&fiscalYear=${currentYear}&periodNo=${currentPeriod}`),
     ]);
     setCategories(categoryRows ?? []);
     setProfiles(profileRows ?? []);
     setImports(importRows ?? []);
     setRuns(runRows ?? []);
-  }, [currentAccountSetId]);
+    setPaymentFiles(paymentRows ?? []);
+    setAllocations(allocationRows ?? []);
+    setCostPools(costPoolRows ?? []);
+  }, [currentAccountSetId, currentPeriod, currentYear]);
 
   useEffect(() => {
     importForm.setFieldsValue({ fiscalYear: currentYear, periodNo: currentPeriod, importType: 'attendance_performance' });
-    runForm.setFieldsValue({ fiscalYear: currentYear, periodNo: currentPeriod });
+    runForm.setFieldsValue({ fiscalYear: currentYear, periodNo: currentPeriod, bankAccountCode: '1002', allocationRate: 1, costType: 'direct_labor', targetType: 'work_order' });
     void fetchData();
   }, [currentPeriod, currentYear, fetchData, importForm, runForm]);
 
@@ -75,8 +90,57 @@ export const PayrollRuns: React.FC = () => {
     await fetchData();
   };
 
+  const approveRun = async (run: PayrollRun) => {
+    await api.post(`/payroll-runs/${run.id}/approve`, { approvedBy: currentUser });
+    await fetchData();
+  };
+
+  const lockRun = async (run: PayrollRun) => {
+    await api.post(`/payroll-runs/${run.id}/lock`, { lockedBy: currentUser });
+    await fetchData();
+  };
+
+  const createPaymentFile = async (run: PayrollRun) => {
+    const values = await runForm.validateFields(['bankAccountCode']);
+    await api.post('/payroll-payment-files', {
+      accountSetId: currentAccountSetId,
+      payrollRunId: run.id,
+      bankAccountCode: values.bankAccountCode,
+      createdBy: currentUser,
+    });
+    await fetchData();
+  };
+
+  const createAllocation = async (run: PayrollRun) => {
+    const values = await runForm.validateFields(['allocationDepartmentId', 'allocationWorkOrderId', 'allocationRate', 'targetType', 'costType']);
+    await api.post('/payroll-allocations', {
+      accountSetId: currentAccountSetId,
+      payrollRunId: run.id,
+      fiscalYear: run.fiscalYear,
+      periodNo: run.periodNo,
+      createdBy: currentUser,
+      rules: [{
+        departmentId: values.allocationDepartmentId,
+        targetType: values.targetType,
+        workOrderId: values.allocationWorkOrderId,
+        costType: values.costType,
+        allocationRate: values.allocationRate,
+      }],
+    });
+    await fetchData();
+  };
+
   const calculateRun = async () => {
-    const values = await runForm.validateFields();
+    const values = await runForm.validateFields([
+      'runNo',
+      'payrollCategoryId',
+      'variableImportId',
+      'adjustmentEmployeeProfileId',
+      'taxOverride',
+      'adjustmentReason',
+      'fiscalYear',
+      'periodNo',
+    ]);
     const manualAdjustments = values.taxOverride === undefined || values.taxOverride === null
       ? []
       : [{ employeeProfileId: values.adjustmentEmployeeProfileId, field: 'individualIncomeTax', amount: values.taxOverride, reason: values.adjustmentReason ?? 'manual adjustment' }];
@@ -162,6 +226,18 @@ export const PayrollRuns: React.FC = () => {
                   <Form.Item name="periodNo" rules={[{ required: true }]}><InputNumber min={1} max={12} placeholder="Period" /></Form.Item>
                   <Button type="primary" icon={<CalculatorOutlined />} onClick={calculateRun}>Calculate</Button>
                 </Form>
+                <Form form={runForm} layout="inline" style={{ marginBottom: 16 }}>
+                  <Form.Item name="bankAccountCode" rules={[{ required: true }]}><Input placeholder="Bank account" /></Form.Item>
+                  <Form.Item name="allocationDepartmentId" rules={[{ required: true }]}><Input placeholder="Allocation department" /></Form.Item>
+                  <Form.Item name="targetType" rules={[{ required: true }]}>
+                    <Select style={{ width: 150 }} options={[{ value: 'work_order', label: 'Work order' }, { value: 'department', label: 'Department' }, { value: 'cost_center', label: 'Cost center' }]} />
+                  </Form.Item>
+                  <Form.Item name="allocationWorkOrderId"><Input placeholder="Work order id" /></Form.Item>
+                  <Form.Item name="costType" rules={[{ required: true }]}>
+                    <Select style={{ width: 150 }} options={[{ value: 'direct_labor', label: 'Direct labor' }, { value: 'payroll_overhead', label: 'Overhead' }]} />
+                  </Form.Item>
+                  <Form.Item name="allocationRate" rules={[{ required: true }]}><InputNumber min={0} max={1} step={0.01} placeholder="Rate" /></Form.Item>
+                </Form>
                 <Table
                   rowKey="id"
                   dataSource={runs}
@@ -187,7 +263,55 @@ export const PayrollRuns: React.FC = () => {
                     { title: 'Run no', dataIndex: 'runNo' },
                     { title: 'Status', render: (_, row) => <Tag color="blue">{row.status}</Tag> },
                     { title: 'Gross', dataIndex: 'totalGrossAmount' },
+                    { title: 'Company cost', dataIndex: 'totalCompanyCost' },
                     { title: 'Net pay', dataIndex: 'totalNetPay' },
+                    {
+                      title: 'Actions',
+                      render: (_, row) => (
+                        <>
+                          <Button size="small" icon={<CheckOutlined />} onClick={() => approveRun(row)}>Approve</Button>{' '}
+                          <Button size="small" icon={<LockOutlined />} onClick={() => lockRun(row)}>Lock</Button>{' '}
+                          <Button size="small" icon={<BankOutlined />} onClick={() => createPaymentFile(row)}>Pay file</Button>{' '}
+                          <Button size="small" icon={<PartitionOutlined />} onClick={() => createAllocation(row)}>Allocate</Button>
+                        </>
+                      ),
+                    },
+                  ]}
+                />
+                <Table
+                  rowKey="id"
+                  dataSource={paymentFiles}
+                  title={() => 'Payment files'}
+                  columns={[
+                    { title: 'Run', dataIndex: 'payrollRunId' },
+                    { title: 'Bank account', dataIndex: 'bankAccountCode' },
+                    { title: 'Lines', dataIndex: 'lineCount' },
+                    { title: 'Amount', dataIndex: 'totalAmount' },
+                  ]}
+                />
+                <Table
+                  rowKey="id"
+                  dataSource={allocations}
+                  title={() => 'Allocations and voucherDraft'}
+                  columns={[
+                    { title: 'Run', dataIndex: 'payrollRunId' },
+                    { title: 'Allocated', dataIndex: 'totalAllocatedAmount' },
+                    {
+                      title: 'Voucher draft',
+                      render: (_, row) => row.voucherDraft?.lines?.map((line) => `${line.accountCode} ${line.amount}`).join(' / ') ?? '-',
+                    },
+                  ]}
+                />
+                <Table
+                  rowKey="id"
+                  dataSource={costPools}
+                  title={() => 'Locked cost pools'}
+                  columns={[
+                    { title: 'Source run', dataIndex: 'sourceRunId' },
+                    { title: 'Work order', dataIndex: 'workOrderId' },
+                    { title: 'Cost type', dataIndex: 'costType' },
+                    { title: 'Amount', dataIndex: 'amount' },
+                    { title: 'Locked at', dataIndex: 'lockedAt' },
                   ]}
                 />
               </>
