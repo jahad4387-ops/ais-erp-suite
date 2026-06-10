@@ -36,6 +36,7 @@ model AccountSet {
   bankStatements     BankStatement[]
   bankRules          BankReconciliationRule[]
   reconciliations    BankReconciliation[]
+  partners           Partner[]
 }
 
 model User {
@@ -448,4 +449,24 @@ model AuditLog {
   occurredAt   DateTime @default(now())
 
   accountSet AccountSet? @relation(fields: [accountSetId], references: [id])
+}
+
+model Partner {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  partnerType      String
+  code             String
+  name             String
+  taxRate          Float    @default(0)
+  creditLimit      Float    @default(0)
+  paymentTerms     String?
+  settlementMethod String?
+  isEnabled        Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+
+  @@unique([accountSetId, code])
+  @@index([accountSetId, partnerType])
 }

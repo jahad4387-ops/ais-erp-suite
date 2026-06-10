@@ -615,6 +615,143 @@ test("account set user grants explicitly add users to an account set", async () 
   assert.deepEqual(afterGrant.body.map((item) => item.id), [accountSet.body.id]);
 });
 
+test("Phase 2 partners create, filter, update, and enforce account-set isolation", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P2-001",
+      name: "Phase 2 Partner Set",
+      companyName: "Phase 2 Trading Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase2-partner-account-set"
+  );
+  const role = await request(
+    api,
+    "POST",
+    "/roles",
+    {
+      name: "往来档案维护员",
+      permissionCodes: ["account_set.view", "partner.manage"]
+    },
+    "phase2-partner-role"
+  );
+  const alice = await request(
+    api,
+    "POST",
+    "/users",
+    {
+      username: "partner-alice",
+      password: "partner-password",
+      name: "Partner Alice",
+      roleId: role.body.id
+    },
+    "phase2-partner-alice"
+  );
+  const bob = await request(
+    api,
+    "POST",
+    "/users",
+    {
+      username: "partner-bob",
+      password: "partner-password",
+      name: "Partner Bob",
+      roleId: role.body.id
+    },
+    "phase2-partner-bob"
+  );
+  await request(
+    api,
+    "POST",
+    `/account-sets/${accountSet.body.id}/users`,
+    {
+      actorId: alice.body.id,
+      grantedBy: "system"
+    },
+    "phase2-partner-grant-alice"
+  );
+
+  const supplier = await api.handle({
+    method: "POST",
+    path: "/partners",
+    headers: { "Actor-Id": alice.body.id, "Idempotency-Key": "phase2-supplier-create" },
+    body: {
+      accountSetId: accountSet.body.id,
+      partnerType: "supplier",
+      code: "S001",
+      name: "North Supplier",
+      taxRate: 0.13,
+      creditLimit: 50000,
+      paymentTerms: "NET30",
+      settlementMethod: "bank_transfer"
+    }
+  });
+  const both = await api.handle({
+    method: "POST",
+    path: "/partners",
+    headers: { "Actor-Id": alice.body.id, "Idempotency-Key": "phase2-both-create" },
+    body: {
+      accountSetId: accountSet.body.id,
+      partnerType: "both",
+      code: "B001",
+      name: "Dual Role Partner",
+      taxRate: 0.06,
+      creditLimit: 80000,
+      paymentTerms: "NET15",
+      settlementMethod: "bank_acceptance"
+    }
+  });
+  const suppliers = await api.handle({
+    method: "GET",
+    path: `/partners?accountSetId=${accountSet.body.id}&partnerType=supplier`,
+    headers: { "Actor-Id": alice.body.id }
+  });
+  const updated = await api.handle({
+    method: "PATCH",
+    path: `/partners/${supplier.body.id}`,
+    headers: { "Actor-Id": alice.body.id, "Idempotency-Key": "phase2-supplier-update" },
+    body: {
+      creditLimit: 65000,
+      paymentTerms: "NET45",
+      settlementMethod: "bank_transfer",
+      isEnabled: false,
+      updatedBy: alice.body.id
+    }
+  });
+  const denied = await api.handle({
+    method: "GET",
+    path: `/partners?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": bob.body.id }
+  });
+
+  assert.equal(supplier.status, 201);
+  assert.equal(supplier.body.partnerType, "supplier");
+  assert.equal(supplier.body.paymentTerms, "NET30");
+  assert.equal(both.status, 201);
+  assert.equal(suppliers.status, 200);
+  assert.deepEqual(
+    suppliers.body.map((partner) => partner.code).sort(),
+    ["B001", "S001"]
+  );
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.creditLimit, 65000);
+  assert.equal(updated.body.paymentTerms, "NET45");
+  assert.equal(updated.body.isEnabled, false);
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.code, "ACCOUNT_SET_ACCESS_DENIED");
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "partner.create" && log.objectType === "partner" && log.objectId === supplier.body.id
+    )
+  );
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

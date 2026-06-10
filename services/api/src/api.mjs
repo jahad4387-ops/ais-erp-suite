@@ -70,7 +70,8 @@ const DEFAULT_PERMISSION_CODES = [
   "opening_balance.view",
   "account_set_user.manage",
   "user.manage",
-  "role.manage"
+  "role.manage",
+  "partner.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -381,6 +382,11 @@ function splitPath(path) {
   return path.split("?")[0].split("/").filter(Boolean);
 }
 
+function queryParamsFor(path) {
+  const [, query = ""] = path.split("?");
+  return new URLSearchParams(query);
+}
+
 function requireIdempotencyKey(request) {
   if (request.method === "POST" && request.path === "/auth/login") {
     return null;
@@ -538,6 +544,9 @@ function permissionFor(request) {
     return "bank_reconciliation.match";
   }
   if (request.method === "GET" && request.path === "/audit-logs") return "audit_log.view";
+  if (segments[0] === "partners") {
+    return "partner.manage";
+  }
   if (request.method === "POST" && request.path === "/attachments/upload") return "attachment.upload";
   if (request.method === "POST" && request.path === "/attachment-links") return "attachment.upload";
   if (request.method === "DELETE" && segments.length === 2 && segments[0] === "attachments") return "attachment.delete";
@@ -615,6 +624,7 @@ function createState(options = {}) {
     postingBatches: new Map(),
     bankStatements: new Map(),
     bankReconciliations: new Map(),
+    partners: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -892,6 +902,70 @@ function assertValidAccountSetStart(input) {
 
 function findAccountSetByIdentifier(state, identifier) {
   return [...state.accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier);
+}
+
+const PARTNER_TYPES = new Set(["supplier", "customer", "both"]);
+
+function normalizePartnerInput(input, current = {}) {
+  const partnerType = input.partnerType ?? current.partnerType;
+  if (!PARTNER_TYPES.has(partnerType)) {
+    throw new Error("partnerType must be supplier, customer, or both.");
+  }
+  const code = input.code ?? current.code;
+  const name = input.name ?? current.name;
+  if (typeof code !== "string" || code.trim() === "") {
+    throw new Error("code is required.");
+  }
+  if (typeof name !== "string" || name.trim() === "") {
+    throw new Error("name is required.");
+  }
+  const taxRate = Number(input.taxRate ?? current.taxRate ?? 0);
+  const creditLimit = Number(input.creditLimit ?? current.creditLimit ?? 0);
+  if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) {
+    throw new Error("taxRate must be a number from 0 to 1.");
+  }
+  if (!Number.isFinite(creditLimit) || creditLimit < 0) {
+    throw new Error("creditLimit must be a non-negative number.");
+  }
+  return {
+    partnerType,
+    code: code.trim(),
+    name: name.trim(),
+    taxRate,
+    creditLimit,
+    paymentTerms: input.paymentTerms ?? current.paymentTerms ?? "",
+    settlementMethod: input.settlementMethod ?? current.settlementMethod ?? "",
+    isEnabled: input.isEnabled ?? current.isEnabled ?? true
+  };
+}
+
+function partnerMatchesType(partner, partnerType) {
+  return !partnerType || partner.partnerType === partnerType || partner.partnerType === "both";
+}
+
+async function listPartners(state, accountSetId, partnerType = null) {
+  const persistedPartners = state.config.platformStore?.listPartners
+    ? await state.config.platformStore.listPartners(accountSetId, partnerType)
+    : [];
+  const partnersById = new Map(persistedPartners.map((partner) => [partner.id, partner]));
+  for (const partner of state.partners.values()) {
+    if (accountSetId && partner.accountSetId !== accountSetId) {
+      continue;
+    }
+    if (!partnerMatchesType(partner, partnerType)) {
+      continue;
+    }
+    partnersById.set(partner.id, partner);
+  }
+  return [...partnersById.values()].sort((left, right) => left.code.localeCompare(right.code));
+}
+
+async function findPartnerByIdentifier(state, identifier) {
+  const localPartner = [...state.partners.values()].find((partner) => partner.id === identifier || partner.code === identifier);
+  if (localPartner) {
+    return localPartner;
+  }
+  return state.config.platformStore?.findPartner ? state.config.platformStore.findPartner(identifier) : null;
 }
 
 async function enabledAccountSetLockError(state, accountSetId) {
@@ -1505,6 +1579,85 @@ async function route(request, state) {
       return jsonResponse(200, await platformStore.listAccountingPeriods());
     }
     return jsonResponse(200, [...state.periods.values()]);
+  }
+
+  if (segments.length === 1 && segments[0] === "partners") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      const partnerType = query.get("partnerType");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      if (partnerType && !PARTNER_TYPES.has(partnerType)) {
+        throw new Error("partnerType must be supplier, customer, or both.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, await listPartners(state, accountSetId, partnerType));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const validated = normalizePartnerInput(body);
+      const duplicate = (await listPartners(state, body.accountSetId)).find((partner) => partner.code === validated.code);
+      if (duplicate) {
+        return errorResponse(409, "PARTNER_CODE_EXISTS", "Partner code already exists in this account set.");
+      }
+      const partner = {
+        id: body.id ?? `partner:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        ...validated
+      };
+      const savedPartner = platformStore?.createPartner ? await platformStore.createPartner(partner) : partner;
+      state.partners.set(savedPartner.id, savedPartner);
+      appendAuditLog(state, {
+        actorId: body.createdBy ?? actorId,
+        action: "partner.create",
+        objectType: "partner",
+        objectId: savedPartner.id
+      });
+      return jsonResponse(201, savedPartner);
+    }
+  }
+
+  if (segments.length === 2 && segments[0] === "partners") {
+    const partner = await findPartnerByIdentifier(state, segments[1]);
+    if (!partner) {
+      return errorResponse(404, "PARTNER_NOT_FOUND", "Partner was not found.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, partner.accountSetId))) {
+      return accountSetAccessError(state, actorId, partner.accountSetId);
+    }
+
+    if (request.method === "GET") {
+      return jsonResponse(200, partner);
+    }
+
+    if (request.method === "PATCH") {
+      const validated = normalizePartnerInput(body, partner);
+      const updatedPartner = {
+        ...partner,
+        ...validated,
+        updatedBy: body.updatedBy ?? actorId,
+        updatedAt: "now"
+      };
+      const savedPartner = platformStore?.updatePartner ? await platformStore.updatePartner(updatedPartner) : updatedPartner;
+      state.partners.set(savedPartner.id, savedPartner);
+      appendAuditLog(state, {
+        actorId: updatedPartner.updatedBy,
+        action: "partner.update",
+        objectType: "partner",
+        objectId: savedPartner.id
+      });
+      return jsonResponse(200, savedPartner);
+    }
   }
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "periods" && segments[2] === "open") {

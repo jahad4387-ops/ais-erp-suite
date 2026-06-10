@@ -59,6 +59,21 @@ function accountSetUserToDto(grant) {
   };
 }
 
+function partnerToDto(partner) {
+  return {
+    id: partner.id,
+    accountSetId: partner.accountSetId,
+    partnerType: partner.partnerType,
+    code: partner.code,
+    name: partner.name,
+    taxRate: partner.taxRate,
+    creditLimit: partner.creditLimit,
+    paymentTerms: partner.paymentTerms ?? "",
+    settlementMethod: partner.settlementMethod ?? "",
+    isEnabled: partner.isEnabled
+  };
+}
+
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
@@ -527,6 +542,59 @@ export function createPlatformPersistence(prisma) {
         }
       });
       return Boolean(grant);
+    },
+
+    async createPartner(partner) {
+      const created = await prisma.partner.create({
+        data: {
+          id: partner.id,
+          accountSetId: partner.accountSetId,
+          partnerType: partner.partnerType,
+          code: partner.code,
+          name: partner.name,
+          taxRate: partner.taxRate ?? 0,
+          creditLimit: partner.creditLimit ?? 0,
+          paymentTerms: partner.paymentTerms ?? null,
+          settlementMethod: partner.settlementMethod ?? null,
+          isEnabled: partner.isEnabled ?? true
+        }
+      });
+      return partnerToDto(created);
+    },
+
+    async listPartners(accountSetId, partnerType = null) {
+      const partners = await prisma.partner.findMany({
+        where: accountSetId ? { accountSetId } : undefined
+      });
+      return partners
+        .map(partnerToDto)
+        .filter((partner) => !partnerType || partner.partnerType === partnerType || partner.partnerType === "both")
+        .sort((left, right) => left.code.localeCompare(right.code));
+    },
+
+    async findPartner(identifier) {
+      const partner = await prisma.partner.findFirst({
+        where: {
+          OR: [{ id: identifier }, { code: identifier }]
+        }
+      });
+      return partner ? partnerToDto(partner) : null;
+    },
+
+    async updatePartner(partner) {
+      const saved = await prisma.partner.update({
+        where: { id: partner.id },
+        data: {
+          partnerType: partner.partnerType,
+          name: partner.name,
+          taxRate: partner.taxRate ?? 0,
+          creditLimit: partner.creditLimit ?? 0,
+          paymentTerms: partner.paymentTerms ?? null,
+          settlementMethod: partner.settlementMethod ?? null,
+          isEnabled: partner.isEnabled ?? true
+        }
+      });
+      return partnerToDto(saved);
     },
 
     async createAccount(account) {

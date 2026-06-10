@@ -31,6 +31,7 @@ import { AccountCodeRules } from './pages/AccountCodeRules';
 import { PostingBatches } from './pages/PostingBatches';
 import { VoucherReview } from './pages/VoucherReview';
 import { DeploymentConfig } from './pages/DeploymentConfig';
+import { Partners } from './pages/Partners';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -190,6 +191,8 @@ const AppFrame: React.FC = () => {
                 icon: <UserOutlined />,
                 label: '基础档案',
                 children: [
+                  { key: 'suppliers', label: <Link to="/suppliers">供应商档案</Link> },
+                  { key: 'customers', label: <Link to="/customers">客户档案</Link> },
                   { key: 'accounts', label: <Link to="/accounts">会计科目</Link> },
                   { key: 'account-code-rules', label: <Link to="/account-code-rules">科目编码规则</Link> },
                   { key: 'auxiliaries', label: <Link to="/auxiliaries">辅助核算</Link> },
@@ -283,6 +286,8 @@ const AppFrame: React.FC = () => {
                 <Route path="/agent" element={<RequireAuth><AgentCenter /></RequireAuth>} />
                 <Route path="/login" element={<Login />} />
                 <Route path="/accounts" element={<RequireAuth><Accounts /></RequireAuth>} />
+                <Route path="/suppliers" element={<RequireAuth><Partners partnerType="supplier" /></RequireAuth>} />
+                <Route path="/customers" element={<RequireAuth><Partners partnerType="customer" /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />
                 <Route path="/auxiliaries" element={<RequireAuth><Auxiliaries /></RequireAuth>} />

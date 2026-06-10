@@ -1373,6 +1373,99 @@ paths:
                 items:
                   $ref: "#/components/schemas/AuditLog"
 
+  /partners:
+    get:
+      summary: List Phase 2 customer and supplier partner master data.
+      x-permission: partner.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: partnerType
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [supplier, customer, both]
+      responses:
+        "200":
+          description: Partner list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Partner"
+    post:
+      summary: Create a Phase 2 customer or supplier partner.
+      x-permission: partner.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PartnerCreateRequest"
+      responses:
+        "201":
+          description: Partner created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Partner"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /partners/{partnerId}:
+    get:
+      summary: Get one Phase 2 partner.
+      x-permission: partner.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/PartnerId"
+      responses:
+        "200":
+          description: Partner detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Partner"
+    patch:
+      summary: Update customer or supplier partner master data.
+      x-permission: partner.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/PartnerId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PartnerUpdateRequest"
+      responses:
+        "200":
+          description: Partner updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Partner"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /attachments/upload:
     post:
       summary: Upload an attachment and return its central status.
@@ -1934,6 +2027,12 @@ components:
       required: true
       schema:
         type: string
+    PartnerId:
+      name: partnerId
+      in: path
+      required: true
+      schema:
+        type: string
     AttachmentId:
       name: attachmentId
       in: path
@@ -2249,6 +2348,81 @@ components:
         grantedAt:
           type: string
           format: date-time
+
+    PartnerCreateRequest:
+      type: object
+      required: [accountSetId, partnerType, code, name]
+      properties:
+        accountSetId:
+          type: string
+        partnerType:
+          type: string
+          enum: [supplier, customer, both]
+        code:
+          type: string
+        name:
+          type: string
+        taxRate:
+          type: number
+          minimum: 0
+          maximum: 1
+        creditLimit:
+          type: number
+          minimum: 0
+        paymentTerms:
+          type: string
+        settlementMethod:
+          type: string
+
+    PartnerUpdateRequest:
+      type: object
+      properties:
+        partnerType:
+          type: string
+          enum: [supplier, customer, both]
+        name:
+          type: string
+        taxRate:
+          type: number
+          minimum: 0
+          maximum: 1
+        creditLimit:
+          type: number
+          minimum: 0
+        paymentTerms:
+          type: string
+        settlementMethod:
+          type: string
+        isEnabled:
+          type: boolean
+        updatedBy:
+          type: string
+
+    Partner:
+      type: object
+      required: [id, accountSetId, partnerType, code, name, taxRate, creditLimit, paymentTerms, settlementMethod, isEnabled]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        partnerType:
+          type: string
+          enum: [supplier, customer, both]
+        code:
+          type: string
+        name:
+          type: string
+        taxRate:
+          type: number
+        creditLimit:
+          type: number
+        paymentTerms:
+          type: string
+        settlementMethod:
+          type: string
+        isEnabled:
+          type: boolean
 
     AccountingPeriod:
       type: object

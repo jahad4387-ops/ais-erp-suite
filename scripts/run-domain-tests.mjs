@@ -27,3 +27,4 @@ import "../apps/web/tests/accountSetHeaderSync.test.mjs";
 import "../apps/web/tests/apiErrorLocalization.test.mjs";
 import "../apps/web/tests/authGuard.test.mjs";
 import "../apps/web/tests/rolePermissionEditing.test.mjs";
+import "../apps/web/tests/partnerMasterDataPage.test.mjs";

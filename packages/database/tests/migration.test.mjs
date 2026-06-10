@@ -6,6 +6,10 @@ const migrationSql = readFileSync(
   new URL("../prisma/migrations/20260607120000_phase1_init/migration.sql", import.meta.url)
 );
 const migrationText = migrationSql.toString("utf8");
+const phase2PartnerMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610090000_phase2_partner_master_data/migration.sql", import.meta.url)
+);
+const phase2PartnerMigrationText = phase2PartnerMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -48,4 +52,16 @@ test("Phase 1 migration lock targets SQLite", () => {
 test("User persistence stores password hashes instead of plaintext passwords", () => {
   assert.match(migrationText, /"passwordHash" TEXT NOT NULL/, "User table must persist passwordHash.");
   assert.doesNotMatch(migrationText, /"password" TEXT NOT NULL/, "User table must not persist plaintext password.");
+});
+
+test("Phase 2 partner migration creates account-set scoped partner master data", () => {
+  assert.match(phase2PartnerMigrationText, /CREATE TABLE "Partner"/, "Partner table must be created.");
+  assert.match(phase2PartnerMigrationText, /"partnerType" TEXT NOT NULL/, "Partner type must be persisted.");
+  assert.match(phase2PartnerMigrationText, /"paymentTerms" TEXT/, "Payment terms must be persisted.");
+  assert.match(phase2PartnerMigrationText, /"settlementMethod" TEXT/, "Settlement method must be persisted.");
+  assert.match(
+    phase2PartnerMigrationText,
+    /CREATE UNIQUE INDEX "Partner_accountSetId_code_key"/,
+    "Partner code must be unique inside an account set."
+  );
 });

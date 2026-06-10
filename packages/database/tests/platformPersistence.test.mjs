@@ -12,6 +12,7 @@ function createFakePrisma() {
   const users = new Map();
   const accountSets = new Map();
   const accountSetUsers = new Map();
+  const partners = new Map();
   const periods = new Map();
   const chartOfAccounts = new Map();
   const auxiliaryTypes = new Map();
@@ -163,6 +164,26 @@ function createFakePrisma() {
             accountSetUsers.delete(key);
           }
         }
+      }
+    },
+    partner: {
+      create: async ({ data }) => {
+        const partner = { ...data };
+        partners.set(partner.id, partner);
+        return partner;
+      },
+      findMany: async ({ where } = {}) => {
+        const rows = [...partners.values()];
+        return where?.accountSetId ? rows.filter((partner) => partner.accountSetId === where.accountSetId) : rows;
+      },
+      findFirst: async ({ where }) =>
+        [...partners.values()].find(
+          (partner) => where.OR.some((condition) => partner.id === condition.id || partner.code === condition.code)
+        ) ?? null,
+      update: async ({ where, data }) => {
+        const partner = { ...partners.get(where.id), ...data };
+        partners.set(where.id, partner);
+        return partner;
       }
     },
     accountingPeriod: {
@@ -590,6 +611,59 @@ test("Prisma platform persistence stores account sets and scoped user grants", a
   assert.equal(updated.baseCurrency, "USD");
   assert.equal(updated.startYear, 2027);
   assert.equal(updated.startPeriod, 2);
+});
+
+test("Prisma platform persistence stores Phase 2 partners by account set", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  const accountSet = await store.createAccountSet({
+    id: "account-set:phase2-partners",
+    code: "P2P",
+    name: "Phase 2 Partners",
+    companyName: "Phase 2 Co.",
+    baseCurrency: "CNY",
+    accountingStandard: "Small Business Accounting Standards",
+    startYear: 2026,
+    startPeriod: 1,
+    status: "draft",
+    createdBy: "system"
+  });
+
+  const supplier = await store.createPartner({
+    id: "partner:supplier-1",
+    accountSetId: accountSet.id,
+    partnerType: "supplier",
+    code: "S001",
+    name: "North Supplier",
+    taxRate: 0.13,
+    creditLimit: 50000,
+    paymentTerms: "NET30",
+    settlementMethod: "bank_transfer",
+    isEnabled: true
+  });
+  await store.createPartner({
+    id: "partner:customer-1",
+    accountSetId: accountSet.id,
+    partnerType: "customer",
+    code: "C001",
+    name: "East Customer",
+    taxRate: 0.06,
+    creditLimit: 100000,
+    paymentTerms: "NET15",
+    settlementMethod: "bank_acceptance",
+    isEnabled: true
+  });
+  const updated = await store.updatePartner({
+    ...supplier,
+    creditLimit: 65000,
+    paymentTerms: "NET45",
+    isEnabled: false
+  });
+  const suppliers = await store.listPartners(accountSet.id, "supplier");
+
+  assert.equal(updated.creditLimit, 65000);
+  assert.equal(updated.paymentTerms, "NET45");
+  assert.equal(updated.isEnabled, false);
+  assert.deepEqual(suppliers.map((partner) => partner.code), ["S001"]);
 });
 
 test("Prisma platform persistence stores accounting periods and lifecycle status", async () => {
