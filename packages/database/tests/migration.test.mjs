@@ -58,6 +58,10 @@ const phase3CostAllocationMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260611030000_phase3_cost_allocation/migration.sql", import.meta.url)
 );
 const phase3CostAllocationMigrationText = phase3CostAllocationMigrationSql.toString("utf8");
+const phase3VoucherReconciliationMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260611040000_phase3_voucher_reconciliation/migration.sql", import.meta.url)
+);
+const phase3VoucherReconciliationMigrationText = phase3VoucherReconciliationMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -313,4 +317,15 @@ test("Phase 3 cost allocation migration creates mock cost inputs, allocations, a
   assert.match(phase3CostAllocationMigrationText, /"warningCodesJson" TEXT/, "Allocation warnings must persist Phase 4 source limitations.");
   assert.match(phase3CostAllocationMigrationText, /CREATE INDEX "MockCostInput_workOrderId_idx"/);
   assert.match(phase3CostAllocationMigrationText, /CREATE INDEX "InventoryCostAdjustment_accountSetId_itemId_idx"/);
+});
+
+test("Phase 3 voucher reconciliation migration creates cost voucher drafts and reconciliation runs", () => {
+  for (const table of ["CostVoucherDraft", "InventoryReconciliationRun"]) {
+    assert.match(phase3VoucherReconciliationMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase3VoucherReconciliationMigrationText, /"voucherDraftJson" TEXT NOT NULL/, "Cost voucher drafts must keep human-review voucher draft payload.");
+  assert.match(phase3VoucherReconciliationMigrationText, /"inventoryBalanceTotal" REAL NOT NULL DEFAULT 0/, "Reconciliation must persist inventory balance total.");
+  assert.match(phase3VoucherReconciliationMigrationText, /"differenceAmount" REAL NOT NULL DEFAULT 0/, "Reconciliation must persist difference amount.");
+  assert.match(phase3VoucherReconciliationMigrationText, /CREATE INDEX "CostVoucherDraft_accountSetId_fiscalYear_periodNo_idx"/);
+  assert.match(phase3VoucherReconciliationMigrationText, /CREATE INDEX "InventoryReconciliationRun_accountSetId_fiscalYear_periodNo_idx"/);
 });

@@ -53,6 +53,8 @@ import { MaterialRequisitions } from './pages/MaterialRequisitions';
 import { ProductReceipts } from './pages/ProductReceipts';
 import { MockCostInputs } from './pages/MockCostInputs';
 import { CostAllocations } from './pages/CostAllocations';
+import { CostVoucherDrafts } from './pages/CostVoucherDrafts';
+import { InventoryReconciliation } from './pages/InventoryReconciliation';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -241,6 +243,8 @@ const AppFrame: React.FC = () => {
                   { key: 'product-receipts', label: <Link to="/product-receipts">完工入库</Link> },
                   { key: 'mock-cost-inputs', label: <Link to="/mock-cost-inputs">成本输入</Link> },
                   { key: 'cost-allocations', label: <Link to="/cost-allocations">成本分摊</Link> },
+                  { key: 'cost-voucher-drafts', label: <Link to="/cost-voucher-drafts">成本凭证</Link> },
+                  { key: 'inventory-reconciliation', label: <Link to="/inventory-reconciliation">库存对账</Link> },
                   { key: 'inventory-ledger', label: <Link to="/inventory-ledger">收发存查询</Link> },
                 ],
               },
@@ -366,6 +370,8 @@ const AppFrame: React.FC = () => {
                 <Route path="/product-receipts" element={<RequireAuth><ProductReceipts /></RequireAuth>} />
                 <Route path="/mock-cost-inputs" element={<RequireAuth><MockCostInputs /></RequireAuth>} />
                 <Route path="/cost-allocations" element={<RequireAuth><CostAllocations /></RequireAuth>} />
+                <Route path="/cost-voucher-drafts" element={<RequireAuth><CostVoucherDrafts /></RequireAuth>} />
+                <Route path="/inventory-reconciliation" element={<RequireAuth><InventoryReconciliation /></RequireAuth>} />
                 <Route path="/inventory-ledger" element={<RequireAuth><InventoryLedger /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />

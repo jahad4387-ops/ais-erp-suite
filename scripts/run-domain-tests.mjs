@@ -41,3 +41,5 @@ import "../apps/web/tests/inventoryFoundationPages.test.mjs";
 import "../apps/web/tests/inventoryMovementPages.test.mjs";
 import "../apps/web/tests/productionWorkflowPages.test.mjs";
 import "../apps/web/tests/costAllocationPages.test.mjs";
+import "../apps/web/tests/costVoucherReconciliationPages.test.mjs";
+import "../docs/tests/phase3AcceptanceReport.test.mjs";

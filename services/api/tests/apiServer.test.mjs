@@ -2660,6 +2660,100 @@ test("Phase 3 cost allocation uses locked mock inputs and adjusts finished-goods
   assert.ok(api.state.auditLogs.some((log) => log.action === "cost_allocation.commit" && log.objectId === allocation.body.id));
 });
 
+test("Phase 3 cost voucher drafts and inventory reconciliation close the self-test costing loop", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P3-FINAL",
+      name: "Phase 3 Final Set",
+      companyName: "Phase 3 Final Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase3-final-account-set"
+  );
+  const actorId = "phase3-final-actor";
+  api.state.permissionsByActor.set(
+    actorId,
+    new Set(["inventory_item.manage", "warehouse.manage", "inventory_balance.manage", "cost_allocation.manage", "cost_voucher.manage", "inventory_reconciliation.view"])
+  );
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+  const product = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-final-item" },
+    body: { accountSetId: accountSet.body.id, code: "FG-FINAL", name: "Final Costed Good", unit: "pcs", costMethod: "moving_average", isManufactured: true, createdBy: actorId }
+  });
+  const warehouse = await api.handle({
+    method: "POST",
+    path: "/warehouses",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-final-warehouse" },
+    body: { accountSetId: accountSet.body.id, code: "WH-FINAL", name: "Final Warehouse", createdBy: actorId }
+  });
+  await api.handle({
+    method: "POST",
+    path: "/inventory-opening-balances",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-final-opening" },
+    body: { accountSetId: accountSet.body.id, itemId: product.body.id, warehouseId: warehouse.body.id, fiscalYear: 2026, periodNo: 1, quantity: 4, amount: 120, createdBy: actorId }
+  });
+  api.state.workOrders.set("work-order:final", {
+    id: "work-order:final",
+    accountSetId: accountSet.body.id,
+    workOrderNo: "WO-FINAL",
+    productItemId: product.body.id,
+    productItemCode: product.body.code,
+    plannedQuantity: 4,
+    completedQuantity: 4,
+    directMaterialCost: 80,
+    status: "closed",
+    fiscalYear: 2026,
+    periodNo: 1
+  });
+  api.state.costAllocations.set("cost-allocation:final", {
+    id: "cost-allocation:final",
+    accountSetId: accountSet.body.id,
+    workOrderId: "work-order:final",
+    workOrderNo: "WO-FINAL",
+    fiscalYear: 2026,
+    periodNo: 1,
+    dryRun: false,
+    status: "committed",
+    totalAllocatedAmount: 40,
+    warningCodes: ["PHASE4_SOURCE_MISSING"],
+    lines: [{ id: "line:final", costType: "direct_labor", allocatedAmount: 40 }],
+    adjustments: [{ id: "adj:final", itemId: product.body.id, itemCode: product.body.code, amount: 40 }]
+  });
+
+  const draft = await api.handle({
+    method: "POST",
+    path: "/cost-voucher-drafts",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-final-draft" },
+    body: { accountSetId: accountSet.body.id, costAllocationId: "cost-allocation:final", fiscalYear: 2026, periodNo: 1, createdBy: actorId }
+  });
+  const reconciliation = await api.handle({
+    method: "GET",
+    path: `/inventory-reconciliation?accountSetId=${accountSet.body.id}&fiscalYear=2026&periodNo=1`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(draft.status, 201);
+  assert.equal(draft.body.approvalRequired, true);
+  assert.equal(draft.body.voucherDraft.sourceType, "phase3_cost_allocation");
+  assert.equal(draft.body.voucherDraft.totalAmount, 120);
+  assert.deepEqual(draft.body.voucherDraft.lines.map((line) => line.amount), [120, -120]);
+  assert.deepEqual(draft.body.warningCodes, ["PHASE4_SOURCE_MISSING"]);
+  assert.equal(reconciliation.status, 200);
+  assert.equal(reconciliation.body.inventoryBalanceTotal, 120);
+  assert.equal(reconciliation.body.differenceAmount, 0);
+  assert.deepEqual(reconciliation.body.rows.map((row) => ({ itemCode: row.itemCode, amount: row.amount })), [{ itemCode: "FG-FINAL", amount: 120 }]);
+  assert.ok(api.state.auditLogs.some((log) => log.action === "cost_voucher_draft.create" && log.objectId === draft.body.id));
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

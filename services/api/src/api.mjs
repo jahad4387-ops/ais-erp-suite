@@ -98,7 +98,9 @@ const DEFAULT_PERMISSION_CODES = [
   "material_requisition.manage",
   "product_receipt.manage",
   "mock_cost_input.manage",
-  "cost_allocation.manage"
+  "cost_allocation.manage",
+  "cost_voucher.manage",
+  "inventory_reconciliation.view"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -638,6 +640,12 @@ function permissionFor(request) {
   if (segments[0] === "cost-allocations") {
     return "cost_allocation.manage";
   }
+  if (segments[0] === "cost-voucher-drafts") {
+    return "cost_voucher.manage";
+  }
+  if (segments[0] === "inventory-reconciliation") {
+    return "inventory_reconciliation.view";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -771,6 +779,8 @@ function createState(options = {}) {
     mockCostInputs: new Map(),
     costAllocations: new Map(),
     inventoryCostAdjustments: new Map(),
+    costVoucherDrafts: new Map(),
+    inventoryReconciliationRuns: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1716,6 +1726,124 @@ function buildCostAllocation(state, body, actorId, { dryRun }) {
   }
   state.costAllocations.set(allocation.id, allocation);
   return { allocation };
+}
+
+function listCostVoucherDrafts(state, accountSetId) {
+  return [...state.costVoucherDrafts.values()]
+    .filter((draft) => draft.accountSetId === accountSetId)
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+}
+
+function findCostAllocationByIdentifier(state, identifier) {
+  return (
+    state.costAllocations.get(identifier) ??
+    [...state.costAllocations.values()].find((allocation) => allocation.id === identifier) ??
+    null
+  );
+}
+
+function buildCostVoucherDraft(state, body, actorId) {
+  const allocation = findCostAllocationByIdentifier(state, body.costAllocationId);
+  if (!allocation || allocation.accountSetId !== body.accountSetId) {
+    return { error: errorResponse(404, "COST_ALLOCATION_NOT_FOUND", "Cost allocation was not found.") };
+  }
+  if (allocation.status !== "committed" || allocation.dryRun) {
+    return { error: errorResponse(409, "COST_ALLOCATION_NOT_COMMITTED", "Cost allocation must be committed before voucher draft creation.") };
+  }
+
+  const workOrder = findWorkOrderByIdentifier(state, allocation.workOrderId);
+  if (!workOrder || workOrder.accountSetId !== body.accountSetId) {
+    return { error: errorResponse(404, "WORK_ORDER_NOT_FOUND", "Work order was not found.") };
+  }
+
+  const fiscalYear = Number(body.fiscalYear ?? allocation.fiscalYear);
+  const periodNo = Number(body.periodNo ?? allocation.periodNo);
+  const directMaterialCost = roundAmount(workOrder.directMaterialCost ?? 0);
+  const allocatedCost = roundAmount(allocation.totalAllocatedAmount ?? 0);
+  const totalAmount = roundAmount(directMaterialCost + allocatedCost);
+  const warningCodes = [...new Set(allocation.warningCodes ?? [])];
+  const voucherDraft = {
+    status: "draft",
+    sourceType: "phase3_cost_allocation",
+    sourceDocumentId: allocation.id,
+    sourceDocumentNo: allocation.workOrderNo,
+    fiscalYear,
+    periodNo,
+    totalAmount,
+    approvalRequired: true,
+    lines: [
+      {
+        lineNo: 1,
+        summary: `Capitalize production cost for ${allocation.workOrderNo}`,
+        amount: totalAmount,
+        debit: totalAmount,
+        credit: 0,
+        direction: "debit",
+        accountCode: "1405"
+      },
+      {
+        lineNo: 2,
+        summary: `Clear direct material and allocated cost for ${allocation.workOrderNo}`,
+        amount: roundAmount(-totalAmount),
+        debit: 0,
+        credit: totalAmount,
+        direction: "credit",
+        accountCode: "5001"
+      }
+    ]
+  };
+  const draft = {
+    id: `cost-voucher-draft:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    costAllocationId: allocation.id,
+    workOrderId: workOrder.id,
+    workOrderNo: workOrder.workOrderNo,
+    fiscalYear,
+    periodNo,
+    status: "draft",
+    totalAmount,
+    directMaterialCost,
+    allocatedCost,
+    warningCodes,
+    approvalRequired: true,
+    voucherDraft,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now"
+  };
+  state.costVoucherDrafts.set(draft.id, draft);
+  return { draft };
+}
+
+function buildInventoryReconciliation(state, accountSetId, { fiscalYear, periodNo }) {
+  const balances = listInventoryBalances(state, accountSetId);
+  const rows = balances.map((balance) => ({
+    itemId: balance.itemId,
+    itemCode: balance.itemCode,
+    warehouseId: balance.warehouseId,
+    warehouseCode: balance.warehouseCode,
+    batchNo: balance.batchNo,
+    quantity: balance.quantity,
+    amount: balance.amount
+  }));
+  const inventoryBalanceTotal = roundAmount(rows.reduce((sum, row) => sum + row.amount, 0));
+  const costAdjustmentTotal = roundAmount(
+    [...state.inventoryCostAdjustments.values()]
+      .filter((adjustment) => adjustment.accountSetId === accountSetId)
+      .reduce((sum, adjustment) => sum + adjustment.amount, 0)
+  );
+  const run = {
+    id: `inventory-reconciliation:${randomUUID()}`,
+    accountSetId,
+    fiscalYear: Number(fiscalYear),
+    periodNo: Number(periodNo),
+    inventoryBalanceTotal,
+    costAdjustmentTotal,
+    differenceAmount: 0,
+    rows,
+    createdAt: "now"
+  };
+  state.inventoryReconciliationRuns.set(run.id, run);
+  return run;
 }
 
 function normalizeOrderLines(lines = []) {
@@ -3881,6 +4009,44 @@ async function route(request, state) {
     } catch (error) {
       return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
     }
+  }
+
+  if (segments.length === 1 && segments[0] === "cost-voucher-drafts") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, listCostVoucherDrafts(state, accountSetId).map((draft) => ({ ...draft })));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const result = buildCostVoucherDraft(state, body, actorId);
+      if (result.error) return result.error;
+      appendAuditLog(state, {
+        actorId: result.draft.createdBy,
+        action: "cost_voucher_draft.create",
+        objectType: "cost_voucher_draft",
+        objectId: result.draft.id
+      });
+      return jsonResponse(201, { ...result.draft });
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "inventory-reconciliation" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const fiscalYear = query.get("fiscalYear");
+    const periodNo = query.get("periodNo");
+    if (!accountSetId) throw new Error("accountSetId is required.");
+    if (!fiscalYear) throw new Error("fiscalYear is required.");
+    if (!periodNo) throw new Error("periodNo is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+    return jsonResponse(200, buildInventoryReconciliation(state, accountSetId, { fiscalYear, periodNo }));
   }
 
   if (request.method === "GET" && request.path === "/periods") {

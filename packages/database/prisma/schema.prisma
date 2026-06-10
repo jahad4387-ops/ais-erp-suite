@@ -67,6 +67,8 @@ model AccountSet {
   mockCostInputs     MockCostInput[]
   costAllocations    CostAllocation[]
   inventoryCostAdjustments InventoryCostAdjustment[]
+  costVoucherDrafts  CostVoucherDraft[]
+  inventoryReconciliationRuns InventoryReconciliationRun[]
 }
 
 model User {
@@ -1369,6 +1371,7 @@ model WorkOrder {
   mockCostInputs       MockCostInput[]
   costAllocations      CostAllocation[]
   inventoryCostAdjustments InventoryCostAdjustment[]
+  costVoucherDrafts    CostVoucherDraft[]
 
   @@unique([accountSetId, workOrderNo])
   @@index([accountSetId, status])
@@ -1493,6 +1496,7 @@ model CostAllocation {
   workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
   lines       CostAllocationLine[]
   adjustments InventoryCostAdjustment[]
+  costVoucherDrafts CostVoucherDraft[]
 
   @@index([workOrderId])
 }
@@ -1530,4 +1534,41 @@ model InventoryCostAdjustment {
   location       WarehouseLocation? @relation(fields: [locationId], references: [id])
 
   @@index([accountSetId, itemId])
+}
+
+model CostVoucherDraft {
+  id                String   @id @default(uuid())
+  accountSetId      String
+  costAllocationId  String
+  workOrderId       String
+  fiscalYear        Int
+  periodNo          Int
+  totalAmount       Float    @default(0)
+  approvalRequired  Boolean  @default(true)
+  warningCodesJson  String?
+  voucherDraftJson  String
+  createdBy         String
+  createdAt         DateTime @default(now())
+
+  accountSet     AccountSet @relation(fields: [accountSetId], references: [id])
+  costAllocation CostAllocation @relation(fields: [costAllocationId], references: [id])
+  workOrder      WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model InventoryReconciliationRun {
+  id                    String   @id @default(uuid())
+  accountSetId          String
+  fiscalYear            Int
+  periodNo              Int
+  inventoryBalanceTotal Float    @default(0)
+  costAdjustmentTotal   Float    @default(0)
+  differenceAmount      Float    @default(0)
+  rowsJson              String
+  createdAt             DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+
+  @@index([accountSetId, fiscalYear, periodNo])
 }

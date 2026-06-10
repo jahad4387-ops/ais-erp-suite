@@ -3649,6 +3649,78 @@ paths:
               schema:
                 $ref: "#/components/schemas/CostAllocation"
 
+  /cost-voucher-drafts:
+    get:
+      summary: List Phase 3 cost voucher drafts awaiting human review.
+      x-permission: cost_voucher.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cost voucher draft list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CostVoucherDraft"
+    post:
+      summary: Create a Phase 3 cost voucher draft from committed cost allocation.
+      x-permission: cost_voucher.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCostVoucherDraftRequest"
+      responses:
+        "201":
+          description: Cost voucher draft created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CostVoucherDraft"
+
+  /inventory-reconciliation:
+    get:
+      summary: Reconcile Phase 3 inventory balance totals against costing adjustments.
+      x-permission: inventory_reconciliation.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: fiscalYear
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: periodNo
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Inventory reconciliation run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryReconciliation"
+
 components:
   parameters:
     AccountSetId:
@@ -7310,6 +7382,144 @@ components:
           type: number
         reason:
           type: string
+
+    CreateCostVoucherDraftRequest:
+      type: object
+      required: [accountSetId, costAllocationId, fiscalYear, periodNo]
+      properties:
+        accountSetId:
+          type: string
+        costAllocationId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+
+    CostVoucherDraft:
+      type: object
+      required: [id, accountSetId, costAllocationId, workOrderId, fiscalYear, periodNo, status, totalAmount, warningCodes, approvalRequired, voucherDraft]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        costAllocationId:
+          type: string
+        workOrderId:
+          type: string
+        workOrderNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [draft]
+        totalAmount:
+          type: number
+        directMaterialCost:
+          type: number
+        allocatedCost:
+          type: number
+        warningCodes:
+          type: array
+          items:
+            type: string
+            enum: [PHASE4_SOURCE_MISSING]
+        approvalRequired:
+          type: boolean
+        voucherDraft:
+          type: object
+          required: [status, sourceType, sourceDocumentId, totalAmount, approvalRequired, lines]
+          properties:
+            status:
+              type: string
+              enum: [draft]
+            sourceType:
+              type: string
+              enum: [phase3_cost_allocation]
+            sourceDocumentId:
+              type: string
+            sourceDocumentNo:
+              type: string
+            fiscalYear:
+              type: integer
+            periodNo:
+              type: integer
+            totalAmount:
+              type: number
+            approvalRequired:
+              type: boolean
+            lines:
+              type: array
+              items:
+                $ref: "#/components/schemas/CostVoucherDraftLine"
+
+    CostVoucherDraftLine:
+      type: object
+      required: [lineNo, summary, amount, debit, credit, direction, accountCode]
+      properties:
+        lineNo:
+          type: integer
+        summary:
+          type: string
+        amount:
+          type: number
+        debit:
+          type: number
+        credit:
+          type: number
+        direction:
+          type: string
+          enum: [debit, credit]
+        accountCode:
+          type: string
+
+    InventoryReconciliation:
+      type: object
+      required: [id, accountSetId, fiscalYear, periodNo, inventoryBalanceTotal, costAdjustmentTotal, differenceAmount, rows]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        inventoryBalanceTotal:
+          type: number
+        costAdjustmentTotal:
+          type: number
+        differenceAmount:
+          type: number
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryReconciliationRow"
+
+    InventoryReconciliationRow:
+      type: object
+      required: [itemId, itemCode, warehouseId, warehouseCode, quantity, amount]
+      properties:
+        itemId:
+          type: string
+        itemCode:
+          type: string
+        warehouseId:
+          type: string
+        warehouseCode:
+          type: string
+        batchNo:
+          type: string
+        quantity:
+          type: number
+        amount:
+          type: number
 
     CreateAgentActionRequest:
       type: object

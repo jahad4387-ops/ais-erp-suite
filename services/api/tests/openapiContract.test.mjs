@@ -96,7 +96,8 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/mock-cost-inputs:",
     "/mock-cost-inputs/{costInputId}/lock:",
     "/cost-allocations/dry-run:",
-    "/cost-allocations:"
+    "/cost-allocations:",
+    "/cost-voucher-drafts:"
   ];
 
   for (const path of writePaths) {
@@ -177,6 +178,8 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "CostAllocation:",
     "CostAllocationLine:",
     "InventoryCostAdjustment:",
+    "CostVoucherDraft:",
+    "InventoryReconciliation:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -331,6 +334,18 @@ test("Phase 3 cost allocation endpoints document mock cost inputs, locking, dry-
   assert.match(allocationBlock, /CostAllocation/);
   assert.match(contract, /PHASE4_SOURCE_MISSING/, "Allocation contract must disclose temporary Phase 4 source limitation.");
   assert.match(contract, /InventoryCostAdjustment/, "Committed allocations must expose inventory cost adjustments.");
+});
+
+test("Phase 3 final endpoints document cost voucher drafts and inventory reconciliation", () => {
+  const draftBlock = blockAfter("  /cost-voucher-drafts:");
+  const reconciliationBlock = blockAfter("  /inventory-reconciliation:");
+
+  assert.match(draftBlock, /x-permission: cost_voucher\.manage/);
+  assert.match(draftBlock, /CostVoucherDraft/);
+  assert.match(reconciliationBlock, /x-permission: inventory_reconciliation\.view/);
+  assert.match(reconciliationBlock, /InventoryReconciliation/);
+  assert.match(contract, /approvalRequired:/, "Cost voucher drafts must require human approval.");
+  assert.match(contract, /differenceAmount:/, "Inventory reconciliation must expose differences.");
 });
 
 test("deployment configuration check endpoint is documented", () => {
