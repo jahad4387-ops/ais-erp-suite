@@ -57,6 +57,8 @@ import { CostVoucherDrafts } from './pages/CostVoucherDrafts';
 import { InventoryReconciliation } from './pages/InventoryReconciliation';
 import { PayrollSetup } from './pages/PayrollSetup';
 import { PayrollRuns } from './pages/PayrollRuns';
+import { FixedAssetSetup } from './pages/FixedAssetSetup';
+import { FixedAssets } from './pages/FixedAssets';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -257,6 +259,8 @@ const AppFrame: React.FC = () => {
                 children: [
                   { key: 'payroll-setup', label: <Link to="/payroll-setup">薪资基础</Link> },
                   { key: 'payroll-runs', label: <Link to="/payroll-runs">工资批次</Link> },
+                  { key: 'fixed-asset-setup', label: <Link to="/fixed-asset-setup">固资基础</Link> },
+                  { key: 'fixed-assets', label: <Link to="/fixed-assets">资产卡片</Link> },
                 ],
               },
               {
@@ -386,6 +390,8 @@ const AppFrame: React.FC = () => {
                 <Route path="/inventory-ledger" element={<RequireAuth><InventoryLedger /></RequireAuth>} />
                 <Route path="/payroll-setup" element={<RequireAuth><PayrollSetup /></RequireAuth>} />
                 <Route path="/payroll-runs" element={<RequireAuth><PayrollRuns /></RequireAuth>} />
+                <Route path="/fixed-asset-setup" element={<RequireAuth><FixedAssetSetup /></RequireAuth>} />
+                <Route path="/fixed-assets" element={<RequireAuth><FixedAssets /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />
                 <Route path="/auxiliaries" element={<RequireAuth><Auxiliaries /></RequireAuth>} />

@@ -4091,6 +4091,176 @@ paths:
                 items:
                   $ref: "#/components/schemas/PayrollCostPoolOutput"
 
+  /depreciation-methods:
+    get:
+      summary: List Phase 4 fixed asset depreciation methods.
+      x-permission: fixed_asset_setup.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Depreciation method list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DepreciationMethod"
+    post:
+      summary: Create a Phase 4 fixed asset depreciation method.
+      x-permission: fixed_asset_setup.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDepreciationMethodRequest"
+      responses:
+        "201":
+          description: Depreciation method created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepreciationMethod"
+
+  /asset-categories:
+    get:
+      summary: List Phase 4 fixed asset categories.
+      x-permission: fixed_asset_setup.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Asset category list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssetCategory"
+    post:
+      summary: Create a Phase 4 fixed asset category.
+      x-permission: fixed_asset_setup.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetCategoryRequest"
+      responses:
+        "201":
+          description: Asset category created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetCategory"
+
+  /fixed-assets:
+    get:
+      summary: List Phase 4 fixed asset cards.
+      x-permission: fixed_asset_card.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Fixed asset list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FixedAsset"
+    post:
+      summary: Create a Phase 4 fixed asset card; new_asset_next_month controls first depreciation period.
+      x-permission: fixed_asset_card.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFixedAssetRequest"
+      responses:
+        "201":
+          description: Fixed asset card created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FixedAsset"
+
+  /asset-transfers:
+    post:
+      summary: Transfer a fixed asset; month_end_department owns the whole month's depreciation.
+      x-permission: fixed_asset_transfer.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetTransferRequest"
+      responses:
+        "201":
+          description: Asset transfer created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetTransfer"
+
+  /asset-value-changes:
+    post:
+      summary: Record a fixed asset original value change.
+      x-permission: fixed_asset_card.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetValueChangeRequest"
+      responses:
+        "201":
+          description: Asset value change created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetValueChange"
+
 components:
   parameters:
     AccountSetId:
@@ -8390,6 +8560,274 @@ components:
           type: number
         lockedAt:
           type: string
+
+    CreateDepreciationMethodRequest:
+      type: object
+      required: [accountSetId, code, name, methodType]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        methodType:
+          type: string
+          enum: [straight_line, workload]
+        createdBy:
+          type: string
+
+    DepreciationMethod:
+      type: object
+      required: [id, accountSetId, code, name, methodType, status]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        methodType:
+          type: string
+        status:
+          type: string
+
+    CreateAssetCategoryRequest:
+      type: object
+      required: [accountSetId, code, name]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        depreciationMethodId:
+          type: string
+        defaultUsefulLifeMonths:
+          type: integer
+        defaultSalvageRate:
+          type: number
+        assetAccountCode:
+          type: string
+        accumulatedDepreciationAccountCode:
+          type: string
+        depreciationExpenseAccountCode:
+          type: string
+        createdBy:
+          type: string
+
+    AssetCategory:
+      type: object
+      required: [id, accountSetId, code, name, defaultUsefulLifeMonths, defaultSalvageRate, status]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        depreciationMethodId:
+          type: string
+        defaultUsefulLifeMonths:
+          type: integer
+        defaultSalvageRate:
+          type: number
+        assetAccountCode:
+          type: string
+        accumulatedDepreciationAccountCode:
+          type: string
+        depreciationExpenseAccountCode:
+          type: string
+        status:
+          type: string
+
+    CreateFixedAssetRequest:
+      type: object
+      required: [accountSetId, assetNo, name, categoryId, acquisitionDate, originalValue, usefulLifeMonths, departmentId]
+      properties:
+        accountSetId:
+          type: string
+        assetNo:
+          type: string
+        name:
+          type: string
+        categoryId:
+          type: string
+        depreciationMethodId:
+          type: string
+        acquisitionType:
+          type: string
+          enum: [purchase, construction_transfer, inventory_surplus, other]
+        acquisitionDate:
+          type: string
+          format: date
+        originalValue:
+          type: number
+        accumulatedDepreciation:
+          type: number
+        salvageValue:
+          type: number
+        usefulLifeMonths:
+          type: integer
+        departmentId:
+          type: string
+        departmentName:
+          type: string
+        responsiblePerson:
+          type: string
+        createdBy:
+          type: string
+
+    FixedAsset:
+      type: object
+      required: [id, accountSetId, assetNo, name, categoryId, depreciationMethodId, originalValue, accumulatedDepreciation, netValue, salvageValue, usefulLifeMonths, serviceStartYear, serviceStartPeriod, currentDepartmentId, depreciationTimelineRule, depreciationDepartmentRule]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        assetNo:
+          type: string
+        name:
+          type: string
+        categoryId:
+          type: string
+        depreciationMethodId:
+          type: string
+        acquisitionType:
+          type: string
+        acquisitionDate:
+          type: string
+        originalValue:
+          type: number
+        accumulatedDepreciation:
+          type: number
+        netValue:
+          type: number
+        salvageValue:
+          type: number
+        usefulLifeMonths:
+          type: integer
+        serviceStartYear:
+          type: integer
+        serviceStartPeriod:
+          type: integer
+        depreciationTimelineRule:
+          type: string
+          enum: [new_asset_next_month]
+        depreciationDepartmentRule:
+          type: string
+          enum: [month_end_department]
+        currentDepartmentId:
+          type: string
+        currentDepartmentName:
+          type: string
+        responsiblePerson:
+          type: string
+        usageStatus:
+          type: string
+        lastTransferAt:
+          type: string
+
+    CreateAssetTransferRequest:
+      type: object
+      required: [accountSetId, fixedAssetId, transferDate, toDepartmentId]
+      properties:
+        accountSetId:
+          type: string
+        fixedAssetId:
+          type: string
+        transferDate:
+          type: string
+          format: date
+        fromDepartmentId:
+          type: string
+        fromDepartmentName:
+          type: string
+        toDepartmentId:
+          type: string
+        toDepartmentName:
+          type: string
+        responsiblePerson:
+          type: string
+        createdBy:
+          type: string
+
+    AssetTransfer:
+      type: object
+      required: [id, accountSetId, fixedAssetId, transferDate, toDepartmentId, depreciationDepartmentRule]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fixedAssetId:
+          type: string
+        transferDate:
+          type: string
+        fromDepartmentId:
+          type: string
+        toDepartmentId:
+          type: string
+        toDepartmentName:
+          type: string
+        depreciationDepartmentRule:
+          type: string
+          enum: [month_end_department]
+        fixedAsset:
+          $ref: "#/components/schemas/FixedAsset"
+
+    CreateAssetValueChangeRequest:
+      type: object
+      required: [accountSetId, fixedAssetId, changeDate, changeType, amount]
+      properties:
+        accountSetId:
+          type: string
+        fixedAssetId:
+          type: string
+        changeDate:
+          type: string
+          format: date
+        changeType:
+          type: string
+        amount:
+          type: number
+        reason:
+          type: string
+        createdBy:
+          type: string
+
+    AssetValueChange:
+      type: object
+      required: [id, accountSetId, fixedAssetId, changeDate, changeType, amount, originalValueBefore, originalValueAfter, netValueAfter]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fixedAssetId:
+          type: string
+        changeDate:
+          type: string
+        changeType:
+          type: string
+        amount:
+          type: number
+        originalValueBefore:
+          type: number
+        originalValueAfter:
+          type: number
+        netValueAfter:
+          type: number
+        reason:
+          type: string
+        fixedAsset:
+          $ref: "#/components/schemas/FixedAsset"
 
     CreateAgentActionRequest:
       type: object

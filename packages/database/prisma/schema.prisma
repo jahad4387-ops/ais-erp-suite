@@ -78,6 +78,11 @@ model AccountSet {
   payrollPaymentFiles PayrollPaymentFile[]
   payrollAllocations PayrollAllocation[]
   payrollCostPoolOutputs PayrollCostPoolOutput[]
+  assetCategories  AssetCategory[]
+  depreciationMethods DepreciationMethod[]
+  fixedAssets      FixedAsset[]
+  assetTransfers   AssetTransfer[]
+  assetValueChanges AssetValueChange[]
 }
 
 model User {
@@ -1830,4 +1835,118 @@ model PayrollCostPoolOutput {
   allocation PayrollAllocation @relation(fields: [payrollAllocationId], references: [id])
 
   @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model AssetCategory {
+  id                                  String   @id @default(uuid())
+  accountSetId                        String
+  code                                String
+  name                                String
+  depreciationMethodId                String?
+  defaultUsefulLifeMonths             Int      @default(60)
+  defaultSalvageRate                  Float    @default(0)
+  assetAccountCode                    String?
+  accumulatedDepreciationAccountCode  String?
+  depreciationExpenseAccountCode      String?
+  status                              String   @default("active")
+  createdBy                           String
+  createdAt                           DateTime @default(now())
+
+  accountSet          AccountSet @relation(fields: [accountSetId], references: [id])
+  depreciationMethod  DepreciationMethod? @relation(fields: [depreciationMethodId], references: [id])
+  fixedAssets         FixedAsset[]
+
+  @@unique([accountSetId, code])
+}
+
+model DepreciationMethod {
+  id           String   @id @default(uuid())
+  accountSetId String
+  code         String
+  name         String
+  methodType   String   @default("straight_line")
+  status       String   @default("active")
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  categories AssetCategory[]
+  fixedAssets FixedAsset[]
+
+  @@unique([accountSetId, code])
+}
+
+model FixedAsset {
+  id                         String   @id @default(uuid())
+  accountSetId               String
+  assetNo                    String
+  name                       String
+  categoryId                 String
+  depreciationMethodId       String
+  acquisitionType            String   @default("purchase")
+  acquisitionDate            DateTime
+  originalValue              Float
+  accumulatedDepreciation    Float    @default(0)
+  netValue                   Float
+  salvageValue               Float    @default(0)
+  usefulLifeMonths           Int
+  serviceStartYear           Int
+  serviceStartPeriod         Int
+  depreciationTimelineRule   String   @default("new_asset_next_month")
+  depreciationDepartmentRule String   @default("month_end_department")
+  currentDepartmentId        String
+  currentDepartmentName      String?
+  responsiblePerson          String?
+  usageStatus                String   @default("in_use")
+  lastTransferAt             DateTime?
+  createdBy                  String
+  createdAt                  DateTime @default(now())
+
+  accountSet         AccountSet @relation(fields: [accountSetId], references: [id])
+  category           AssetCategory @relation(fields: [categoryId], references: [id])
+  depreciationMethod DepreciationMethod @relation(fields: [depreciationMethodId], references: [id])
+  transfers          AssetTransfer[]
+  valueChanges       AssetValueChange[]
+
+  @@unique([accountSetId, assetNo])
+}
+
+model AssetTransfer {
+  id                         String   @id @default(uuid())
+  accountSetId               String
+  fixedAssetId               String
+  transferDate               DateTime
+  fromDepartmentId           String
+  fromDepartmentName         String?
+  toDepartmentId             String
+  toDepartmentName           String?
+  responsiblePerson          String?
+  depreciationDepartmentRule String   @default("month_end_department")
+  createdBy                  String
+  createdAt                  DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  fixedAsset FixedAsset @relation(fields: [fixedAssetId], references: [id])
+
+  @@index([fixedAssetId, transferDate])
+}
+
+model AssetValueChange {
+  id                  String   @id @default(uuid())
+  accountSetId        String
+  fixedAssetId        String
+  changeDate          DateTime
+  changeType          String
+  amount              Float
+  originalValueBefore Float
+  originalValueAfter  Float
+  netValueAfter       Float
+  reason              String?
+  createdBy           String
+  createdAt           DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  fixedAsset FixedAsset @relation(fields: [fixedAssetId], references: [id])
+
+  @@index([fixedAssetId, changeDate])
 }

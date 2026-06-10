@@ -105,7 +105,10 @@ const DEFAULT_PERMISSION_CODES = [
   "payroll_run.manage",
   "payroll_payment.manage",
   "payroll_allocation.manage",
-  "payroll_cost_pool.view"
+  "payroll_cost_pool.view",
+  "fixed_asset_setup.manage",
+  "fixed_asset_card.manage",
+  "fixed_asset_transfer.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -666,6 +669,15 @@ function permissionFor(request) {
   if (segments[0] === "payroll-cost-pools") {
     return "payroll_cost_pool.view";
   }
+  if (segments[0] === "asset-categories" || segments[0] === "depreciation-methods") {
+    return "fixed_asset_setup.manage";
+  }
+  if (segments[0] === "fixed-assets" || segments[0] === "asset-value-changes") {
+    return "fixed_asset_card.manage";
+  }
+  if (segments[0] === "asset-transfers") {
+    return "fixed_asset_transfer.manage";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -810,6 +822,11 @@ function createState(options = {}) {
     payrollPaymentFiles: new Map(),
     payrollAllocations: new Map(),
     payrollCostPools: new Map(),
+    assetCategories: new Map(),
+    depreciationMethods: new Map(),
+    fixedAssets: new Map(),
+    assetTransfers: new Map(),
+    assetValueChanges: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -2137,6 +2154,49 @@ function buildPayrollAllocation(state, body, actorId) {
     state.payrollCostPools.set(pool.id, pool);
   }
   return { allocation };
+}
+
+function listAssetCategories(state, accountSetId) {
+  return [...state.assetCategories.values()].filter((row) => row.accountSetId === accountSetId).sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function listDepreciationMethods(state, accountSetId) {
+  return [...state.depreciationMethods.values()].filter((row) => row.accountSetId === accountSetId).sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function listFixedAssets(state, accountSetId) {
+  return [...state.fixedAssets.values()].filter((row) => row.accountSetId === accountSetId).sort((left, right) => left.assetNo.localeCompare(right.assetNo));
+}
+
+function findAssetCategoryByIdentifier(state, identifier) {
+  return state.assetCategories.get(identifier) ?? [...state.assetCategories.values()].find((row) => row.code === identifier) ?? null;
+}
+
+function findDepreciationMethodByIdentifier(state, identifier) {
+  return state.depreciationMethods.get(identifier) ?? [...state.depreciationMethods.values()].find((row) => row.code === identifier) ?? null;
+}
+
+function findFixedAssetByIdentifier(state, identifier) {
+  return state.fixedAssets.get(identifier) ?? [...state.fixedAssets.values()].find((row) => row.assetNo === identifier) ?? null;
+}
+
+function nextServicePeriod(acquisitionDate) {
+  const date = new Date(`${String(acquisitionDate).slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("acquisitionDate must be a valid date.");
+  }
+  const month = date.getUTCMonth() + 1;
+  if (month === 12) {
+    return { serviceStartYear: date.getUTCFullYear() + 1, serviceStartPeriod: 1 };
+  }
+  return { serviceStartYear: date.getUTCFullYear(), serviceStartPeriod: month + 1 };
+}
+
+function createAssetSnapshot(asset) {
+  return {
+    ...asset,
+    netValue: roundAmount(Number(asset.originalValue ?? 0) - Number(asset.accumulatedDepreciation ?? 0))
+  };
 }
 
 function normalizeOrderLines(lines = []) {
@@ -4591,6 +4651,188 @@ async function route(request, state) {
         .filter((pool) => !fiscalYear || pool.fiscalYear === Number(fiscalYear))
         .filter((pool) => !periodNo || pool.periodNo === Number(periodNo))
     );
+  }
+
+  if (segments.length === 1 && segments[0] === "depreciation-methods") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, listDepreciationMethods(state, accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const duplicate = listDepreciationMethods(state, body.accountSetId).find((method) => method.code === body.code);
+      if (duplicate) return errorResponse(409, "DEPRECIATION_METHOD_EXISTS", "Depreciation method code already exists in this account set.");
+      const method = {
+        id: body.id ?? `depreciation-method:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        code: String(body.code),
+        name: String(body.name),
+        methodType: body.methodType ?? "straight_line",
+        status: body.status ?? "active",
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now"
+      };
+      state.depreciationMethods.set(method.id, method);
+      appendAuditLog(state, { actorId: method.createdBy, action: "depreciation_method.create", objectType: "depreciation_method", objectId: method.id });
+      return jsonResponse(201, method);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "asset-categories") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, listAssetCategories(state, accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const duplicate = listAssetCategories(state, body.accountSetId).find((category) => category.code === body.code);
+      if (duplicate) return errorResponse(409, "ASSET_CATEGORY_EXISTS", "Asset category code already exists in this account set.");
+      const method = body.depreciationMethodId ? findDepreciationMethodByIdentifier(state, body.depreciationMethodId) : null;
+      if (body.depreciationMethodId && (!method || method.accountSetId !== body.accountSetId)) {
+        return errorResponse(404, "DEPRECIATION_METHOD_NOT_FOUND", "Depreciation method was not found.");
+      }
+      const category = {
+        id: body.id ?? `asset-category:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        code: String(body.code),
+        name: String(body.name),
+        depreciationMethodId: method?.id ?? null,
+        depreciationMethodCode: method?.code ?? null,
+        defaultUsefulLifeMonths: Number(body.defaultUsefulLifeMonths ?? 60),
+        defaultSalvageRate: Number(body.defaultSalvageRate ?? 0),
+        assetAccountCode: body.assetAccountCode ?? null,
+        accumulatedDepreciationAccountCode: body.accumulatedDepreciationAccountCode ?? null,
+        depreciationExpenseAccountCode: body.depreciationExpenseAccountCode ?? null,
+        status: body.status ?? "active",
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now"
+      };
+      state.assetCategories.set(category.id, category);
+      appendAuditLog(state, { actorId: category.createdBy, action: "asset_category.create", objectType: "asset_category", objectId: category.id });
+      return jsonResponse(201, category);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "fixed-assets") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, listFixedAssets(state, accountSetId).map(createAssetSnapshot));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const duplicate = listFixedAssets(state, body.accountSetId).find((asset) => asset.assetNo === body.assetNo);
+      if (duplicate) return errorResponse(409, "FIXED_ASSET_EXISTS", "Fixed asset number already exists in this account set.");
+      const category = findAssetCategoryByIdentifier(state, body.categoryId);
+      if (!category || category.accountSetId !== body.accountSetId) return errorResponse(404, "ASSET_CATEGORY_NOT_FOUND", "Asset category was not found.");
+      const method = findDepreciationMethodByIdentifier(state, body.depreciationMethodId ?? category.depreciationMethodId);
+      if (!method || method.accountSetId !== body.accountSetId) return errorResponse(404, "DEPRECIATION_METHOD_NOT_FOUND", "Depreciation method was not found.");
+      const serviceStart = nextServicePeriod(body.acquisitionDate);
+      const originalValue = roundAmount(body.originalValue ?? 0);
+      const accumulatedDepreciation = roundAmount(body.accumulatedDepreciation ?? 0);
+      const asset = {
+        id: body.id ?? `fixed-asset:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        assetNo: String(body.assetNo),
+        name: String(body.name),
+        categoryId: category.id,
+        categoryCode: category.code,
+        depreciationMethodId: method.id,
+        depreciationMethodCode: method.code,
+        acquisitionType: body.acquisitionType ?? "purchase",
+        acquisitionDate: String(body.acquisitionDate).slice(0, 10),
+        originalValue,
+        accumulatedDepreciation,
+        netValue: roundAmount(originalValue - accumulatedDepreciation),
+        salvageValue: roundAmount(body.salvageValue ?? originalValue * Number(category.defaultSalvageRate ?? 0)),
+        usefulLifeMonths: Number(body.usefulLifeMonths ?? category.defaultUsefulLifeMonths ?? 60),
+        ...serviceStart,
+        depreciationTimelineRule: "new_asset_next_month",
+        depreciationDepartmentRule: "month_end_department",
+        currentDepartmentId: String(body.departmentId ?? body.currentDepartmentId),
+        currentDepartmentName: body.departmentName ?? body.currentDepartmentName ?? null,
+        responsiblePerson: body.responsiblePerson ?? null,
+        usageStatus: body.usageStatus ?? "in_use",
+        lastTransferAt: null,
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now"
+      };
+      state.fixedAssets.set(asset.id, asset);
+      appendAuditLog(state, { actorId: asset.createdBy, action: "fixed_asset.create", objectType: "fixed_asset", objectId: asset.id });
+      return jsonResponse(201, createAssetSnapshot(asset));
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "asset-transfers" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+    const asset = findFixedAssetByIdentifier(state, body.fixedAssetId);
+    if (!asset || asset.accountSetId !== body.accountSetId) return errorResponse(404, "FIXED_ASSET_NOT_FOUND", "Fixed asset was not found.");
+    const transfer = {
+      id: body.id ?? `asset-transfer:${randomUUID()}`,
+      accountSetId: body.accountSetId,
+      fixedAssetId: asset.id,
+      assetNo: asset.assetNo,
+      transferDate: String(body.transferDate).slice(0, 10),
+      fromDepartmentId: body.fromDepartmentId ?? asset.currentDepartmentId,
+      fromDepartmentName: body.fromDepartmentName ?? asset.currentDepartmentName ?? null,
+      toDepartmentId: String(body.toDepartmentId),
+      toDepartmentName: body.toDepartmentName ?? null,
+      responsiblePerson: body.responsiblePerson ?? asset.responsiblePerson ?? null,
+      depreciationDepartmentRule: "month_end_department",
+      createdBy: body.createdBy ?? actorId,
+      createdAt: "now"
+    };
+    asset.currentDepartmentId = transfer.toDepartmentId;
+    asset.currentDepartmentName = transfer.toDepartmentName;
+    asset.responsiblePerson = transfer.responsiblePerson;
+    asset.lastTransferAt = transfer.transferDate;
+    state.assetTransfers.set(transfer.id, transfer);
+    appendAuditLog(state, { actorId: transfer.createdBy, action: "asset_transfer.create", objectType: "asset_transfer", objectId: transfer.id });
+    return jsonResponse(201, { ...transfer, fixedAsset: createAssetSnapshot(asset) });
+  }
+
+  if (segments.length === 1 && segments[0] === "asset-value-changes" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+    const asset = findFixedAssetByIdentifier(state, body.fixedAssetId);
+    if (!asset || asset.accountSetId !== body.accountSetId) return errorResponse(404, "FIXED_ASSET_NOT_FOUND", "Fixed asset was not found.");
+    const originalValueBefore = roundAmount(asset.originalValue);
+    const amount = roundAmount(body.amount ?? 0);
+    asset.originalValue = roundAmount(originalValueBefore + amount);
+    asset.netValue = roundAmount(asset.originalValue - Number(asset.accumulatedDepreciation ?? 0));
+    const change = {
+      id: body.id ?? `asset-value-change:${randomUUID()}`,
+      accountSetId: body.accountSetId,
+      fixedAssetId: asset.id,
+      assetNo: asset.assetNo,
+      changeDate: String(body.changeDate).slice(0, 10),
+      changeType: body.changeType ?? "original_value_change",
+      amount,
+      originalValueBefore,
+      originalValueAfter: asset.originalValue,
+      netValueAfter: asset.netValue,
+      reason: body.reason ?? null,
+      createdBy: body.createdBy ?? actorId,
+      createdAt: "now"
+    };
+    state.assetValueChanges.set(change.id, change);
+    appendAuditLog(state, { actorId: change.createdBy, action: "asset_value_change.create", objectType: "asset_value_change", objectId: change.id });
+    return jsonResponse(201, { ...change, fixedAsset: createAssetSnapshot(asset) });
   }
 
   if (request.method === "GET" && request.path === "/periods") {

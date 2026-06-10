@@ -3052,6 +3052,141 @@ test("Phase 4 payroll workflow approves, locks, pays, allocates, and outputs for
   assert.ok(api.state.auditLogs.some((log) => log.action === "payroll_allocation.create" && log.objectId === allocation.body.id));
 });
 
+test("Phase 4 fixed asset foundation manages cards, additions, value changes, and month-end department ownership", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P4-FA",
+      name: "Phase 4 Fixed Asset Set",
+      companyName: "Phase 4 Fixed Asset Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase4-fixed-asset-account-set"
+  );
+  const actorId = "phase4-fixed-asset-actor";
+  api.state.permissionsByActor.set(actorId, new Set(["fixed_asset_setup.manage", "fixed_asset_card.manage", "fixed_asset_transfer.manage"]));
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+
+  const depreciationMethod = await api.handle({
+    method: "POST",
+    path: "/depreciation-methods",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-method" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "SL",
+      name: "Straight line",
+      methodType: "straight_line",
+      createdBy: actorId
+    }
+  });
+  const category = await api.handle({
+    method: "POST",
+    path: "/asset-categories",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-category" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "MACHINE",
+      name: "Production machinery",
+      depreciationMethodId: depreciationMethod.body.id,
+      defaultUsefulLifeMonths: 60,
+      defaultSalvageRate: 0.05,
+      assetAccountCode: "1601",
+      accumulatedDepreciationAccountCode: "1602",
+      depreciationExpenseAccountCode: "5101",
+      createdBy: actorId
+    }
+  });
+  const fixedAsset = await api.handle({
+    method: "POST",
+    path: "/fixed-assets",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-card" },
+    body: {
+      accountSetId: accountSet.body.id,
+      assetNo: "FA-2026-001",
+      name: "CNC machine",
+      categoryId: category.body.id,
+      depreciationMethodId: depreciationMethod.body.id,
+      acquisitionType: "purchase",
+      acquisitionDate: "2026-01-15",
+      originalValue: 120000,
+      salvageValue: 6000,
+      usefulLifeMonths: 60,
+      departmentId: "D-MFG",
+      departmentName: "Manufacturing",
+      responsiblePerson: "Zhao",
+      createdBy: actorId
+    }
+  });
+  const transfer = await api.handle({
+    method: "POST",
+    path: "/asset-transfers",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-transfer" },
+    body: {
+      accountSetId: accountSet.body.id,
+      fixedAssetId: fixedAsset.body.id,
+      transferDate: "2026-02-15",
+      fromDepartmentId: "D-MFG",
+      fromDepartmentName: "Manufacturing",
+      toDepartmentId: "D-QA",
+      toDepartmentName: "Quality Assurance",
+      responsiblePerson: "Qian",
+      createdBy: actorId
+    }
+  });
+  const valueChange = await api.handle({
+    method: "POST",
+    path: "/asset-value-changes",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-value-change" },
+    body: {
+      accountSetId: accountSet.body.id,
+      fixedAssetId: fixedAsset.body.id,
+      changeDate: "2026-02-20",
+      changeType: "improvement",
+      amount: 10000,
+      reason: "Capitalized improvement",
+      createdBy: actorId
+    }
+  });
+  const assets = await api.handle({
+    method: "GET",
+    path: `/fixed-assets?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(depreciationMethod.status, 201);
+  assert.equal(category.status, 201);
+  assert.equal(fixedAsset.status, 201);
+  assert.equal(fixedAsset.body.serviceStartYear, 2026);
+  assert.equal(fixedAsset.body.serviceStartPeriod, 2);
+  assert.equal(fixedAsset.body.depreciationTimelineRule, "new_asset_next_month");
+  assert.equal(fixedAsset.body.netValue, 120000);
+  assert.equal(transfer.status, 201);
+  assert.equal(transfer.body.depreciationDepartmentRule, "month_end_department");
+  assert.equal(transfer.body.fixedAsset.currentDepartmentId, "D-QA");
+  assert.equal(transfer.body.fixedAsset.lastTransferAt, "2026-02-15");
+  assert.equal(valueChange.status, 201);
+  assert.equal(valueChange.body.fixedAsset.originalValue, 130000);
+  assert.equal(valueChange.body.fixedAsset.netValue, 130000);
+  assert.deepEqual(
+    assets.body.map((asset) => ({
+      assetNo: asset.assetNo,
+      currentDepartmentId: asset.currentDepartmentId,
+      serviceStartPeriod: asset.serviceStartPeriod,
+      depreciationDepartmentRule: asset.depreciationDepartmentRule
+    })),
+    [{ assetNo: "FA-2026-001", currentDepartmentId: "D-QA", serviceStartPeriod: 2, depreciationDepartmentRule: "month_end_department" }]
+  );
+  assert.ok(api.state.auditLogs.some((log) => log.action === "fixed_asset.create" && log.objectId === fixedAsset.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "asset_transfer.create" && log.objectId === transfer.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "asset_value_change.create" && log.objectId === valueChange.body.id));
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

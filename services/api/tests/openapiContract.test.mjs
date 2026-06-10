@@ -97,7 +97,12 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/mock-cost-inputs/{costInputId}/lock:",
     "/cost-allocations/dry-run:",
     "/cost-allocations:",
-    "/cost-voucher-drafts:"
+    "/cost-voucher-drafts:",
+    "/asset-categories:",
+    "/depreciation-methods:",
+    "/fixed-assets:",
+    "/asset-transfers:",
+    "/asset-value-changes:"
   ];
 
   for (const path of writePaths) {
@@ -180,6 +185,19 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "InventoryCostAdjustment:",
     "CostVoucherDraft:",
     "InventoryReconciliation:",
+    "PayrollCategory:",
+    "PayrollItem:",
+    "EmployeePayrollProfile:",
+    "PayrollVariableImport:",
+    "PayrollRun:",
+    "PayrollPaymentFile:",
+    "PayrollAllocation:",
+    "PayrollCostPoolOutput:",
+    "AssetCategory:",
+    "DepreciationMethod:",
+    "FixedAsset:",
+    "AssetTransfer:",
+    "AssetValueChange:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -385,6 +403,28 @@ test("Phase 4 payroll workflow endpoints document approval, locking, payment, al
   assert.match(contract, /phase4_payroll_allocation/, "Payroll allocations must identify their voucher source.");
   assert.match(contract, /sourceRunId:/, "Cost pools must trace the locked payroll run.");
   assert.match(contract, /lockedAt:/, "Cost pools must expose lock status.");
+});
+
+test("Phase 4 fixed asset foundation endpoints document setup, cards, transfers, and value changes", () => {
+  const categoryBlock = blockAfter("  /asset-categories:");
+  const methodBlock = blockAfter("  /depreciation-methods:");
+  const fixedAssetBlock = blockAfter("  /fixed-assets:");
+  const transferBlock = blockAfter("  /asset-transfers:");
+  const valueChangeBlock = blockAfter("  /asset-value-changes:");
+
+  assert.match(categoryBlock, /x-permission: fixed_asset_setup\.manage/);
+  assert.match(categoryBlock, /AssetCategory/);
+  assert.match(methodBlock, /x-permission: fixed_asset_setup\.manage/);
+  assert.match(methodBlock, /DepreciationMethod/);
+  assert.match(fixedAssetBlock, /x-permission: fixed_asset_card\.manage/);
+  assert.match(fixedAssetBlock, /FixedAsset/);
+  assert.match(transferBlock, /x-permission: fixed_asset_transfer\.manage/);
+  assert.match(transferBlock, /AssetTransfer/);
+  assert.match(valueChangeBlock, /x-permission: fixed_asset_card\.manage/);
+  assert.match(valueChangeBlock, /AssetValueChange/);
+  assert.match(contract, /serviceStartPeriod:/, "Fixed assets must expose the first depreciation period.");
+  assert.match(contract, /new_asset_next_month/, "Fixed assets must document the new-asset depreciation timeline rule.");
+  assert.match(contract, /month_end_department/, "Fixed asset transfers must document month-end department ownership.");
 });
 
 test("deployment configuration check endpoint is documented", () => {

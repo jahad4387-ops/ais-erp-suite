@@ -72,6 +72,14 @@ const phase4PayrollWorkflowMigrationSql = readFileSync(
 const phase4PayrollWorkflowMigrationText = phase4PayrollWorkflowMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
+function readMigrationText(relativePath) {
+  try {
+    return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+  } catch (error) {
+    assert.fail(`Migration ${relativePath} must exist and be readable: ${error.message}`);
+  }
+}
+
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
   assert.notDeepEqual([...migrationSql.subarray(0, 2)], [0xff, 0xfe], "migration.sql must not be UTF-16 LE.");
   assert.match(migrationText, /^﻿?-- CreateTable/, "migration.sql must start with SQL text.");
@@ -370,4 +378,22 @@ test("Phase 4 payroll workflow migration creates approval, payment, allocation, 
   assert.match(phase4PayrollWorkflowMigrationText, /"sourceRunId" TEXT NOT NULL/, "Cost-pool outputs must trace the locked payroll run.");
   assert.match(phase4PayrollWorkflowMigrationText, /"lockedAt" DATETIME NOT NULL/, "Cost-pool outputs must be locked before Phase 3 can consume them.");
   assert.match(phase4PayrollWorkflowMigrationText, /CREATE INDEX "PayrollCostPoolOutput_accountSetId_fiscalYear_periodNo_idx"/);
+});
+
+test("Phase 4 fixed asset foundation migration creates categories, methods, cards, and change timelines", () => {
+  const migrationText = readMigrationText("../prisma/migrations/20260611070000_phase4_fixed_asset_foundation/migration.sql");
+
+  for (const table of ["AssetCategory", "DepreciationMethod", "FixedAsset", "AssetValueChange", "AssetTransfer"]) {
+    assert.match(migrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(migrationText, /"originalValue" REAL NOT NULL/, "Fixed assets must persist original value.");
+  assert.match(migrationText, /"accumulatedDepreciation" REAL NOT NULL DEFAULT 0/, "Fixed assets must persist accumulated depreciation.");
+  assert.match(migrationText, /"netValue" REAL NOT NULL/, "Fixed assets must persist net value.");
+  assert.match(migrationText, /"salvageValue" REAL NOT NULL DEFAULT 0/, "Fixed assets must persist estimated salvage value.");
+  assert.match(migrationText, /"serviceStartPeriod" INTEGER NOT NULL/, "Fixed assets must persist the first depreciation period.");
+  assert.match(migrationText, /"currentDepartmentId" TEXT NOT NULL/, "Fixed assets must expose month-end department ownership.");
+  assert.match(migrationText, /"lastTransferAt" DATETIME/, "Fixed assets must retain the latest transfer date.");
+  assert.match(migrationText, /CREATE UNIQUE INDEX "AssetCategory_accountSetId_code_key"/);
+  assert.match(migrationText, /CREATE UNIQUE INDEX "FixedAsset_accountSetId_assetNo_key"/);
+  assert.match(migrationText, /CREATE INDEX "AssetTransfer_fixedAssetId_transferDate_idx"/);
 });
