@@ -1185,7 +1185,8 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
         "payment_block.manage",
         "customer_receipt.manage",
         "collection_plan.view",
-        "credit_exposure.view"
+        "credit_exposure.view",
+        "ap_settlement.manage"
       ]
     },
     "phase2-invoice-role"
@@ -1459,6 +1460,33 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
       evidenceRefs: ["attachment:bank-slip"]
     }
   });
+  const apSettlement = await api.handle({
+    method: "POST",
+    path: "/ap-settlements",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-ap-settlement" },
+    body: {
+      accountSetId: accountSet.body.id,
+      counterpartyLedgerEntryId: payableLedger.body[0].id,
+      supplierPaymentId: supplierPayment.body.id,
+      settlementDate: "2026-04-20",
+      settlementType: "payment_to_bill",
+      settledAmount: 600,
+      differenceAmount: 10,
+      differenceReason: "Bank fee difference",
+      createdBy: actor.body.id,
+      evidenceRefs: ["attachment:ap-settlement"]
+    }
+  });
+  const apSettlements = await api.handle({
+    method: "GET",
+    path: `/ap-settlements?accountSetId=${accountSet.body.id}&supplierId=${supplier.body.id}`,
+    headers: { "Actor-Id": actor.body.id }
+  });
+  const settledPayableLedger = await api.handle({
+    method: "GET",
+    path: `/counterparty-ledger?accountSetId=${accountSet.body.id}&direction=ap`,
+    headers: { "Actor-Id": actor.body.id }
+  });
   const approvedPaymentRequests = await api.handle({
     method: "GET",
     path: `/payment-requests?accountSetId=${accountSet.body.id}&status=approved`,
@@ -1560,6 +1588,17 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
   assert.equal(supplierPayment.body.status, "paid");
   assert.equal(supplierPayment.body.paymentRequestNo, paymentRequest.body.requestNo);
   assert.equal(supplierPayment.body.paidAmount, 600);
+  assert.equal(apSettlement.status, 201);
+  assert.equal(apSettlement.body.settlementType, "payment_to_bill");
+  assert.equal(apSettlement.body.sourceNo, purchaseInvoice.body.invoiceNo);
+  assert.equal(apSettlement.body.supplierPaymentNo, supplierPayment.body.paymentNo);
+  assert.equal(apSettlement.body.settledAmount, 600);
+  assert.equal(apSettlement.body.differenceAmount, 10);
+  assert.equal(apSettlement.body.differenceReason, "Bank fee difference");
+  assert.deepEqual(apSettlements.body.map((settlement) => settlement.settlementNo), [apSettlement.body.settlementNo]);
+  assert.equal(settledPayableLedger.body[0].settledAmount, 600);
+  assert.equal(settledPayableLedger.body[0].remainingAmount, 560);
+  assert.equal(settledPayableLedger.body[0].status, "partially_settled");
   assert.deepEqual(approvedPaymentRequests.body.map((request) => request.requestNo), [paymentRequest.body.requestNo]);
   assert.deepEqual(supplierPayments.body.map((payment) => payment.paymentNo), [supplierPayment.body.paymentNo]);
   assert.equal(blockedLedger.status, 200);
@@ -1571,6 +1610,7 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
   assert.ok(api.state.auditLogs.some((log) => log.action === "sales_invoice.confirm" && log.objectId === salesInvoice.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "payment_request.approve" && log.objectId === paymentRequest.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "supplier_payment.create" && log.objectId === supplierPayment.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "ap_settlement.create" && log.objectId === apSettlement.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "customer_receipt.create" && log.objectId === customerReceipt.body.id));
 });
 

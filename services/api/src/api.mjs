@@ -84,7 +84,8 @@ const DEFAULT_PERMISSION_CODES = [
   "payment_block.manage",
   "customer_receipt.manage",
   "collection_plan.view",
-  "credit_exposure.view"
+  "credit_exposure.view",
+  "ap_settlement.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -597,6 +598,9 @@ function permissionFor(request) {
   if (segments[0] === "credit-exposures") {
     return "credit_exposure.view";
   }
+  if (segments[0] === "ap-settlements") {
+    return "ap_settlement.manage";
+  }
   if (request.method === "POST" && request.path === "/attachments/upload") return "attachment.upload";
   if (request.method === "POST" && request.path === "/attachment-links") return "attachment.upload";
   if (request.method === "DELETE" && segments.length === 2 && segments[0] === "attachments") return "attachment.delete";
@@ -686,6 +690,7 @@ function createState(options = {}) {
     supplierPayments: new Map(),
     customerReceipts: new Map(),
     collectionPlans: new Map(),
+    apSettlements: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1285,6 +1290,14 @@ async function updateCounterpartyLedgerPaymentBlock(state, entryId, updates) {
   return savedEntry;
 }
 
+async function updateCounterpartyLedgerSettlement(state, entryId, updates) {
+  const savedEntry = state.config.platformStore?.updateCounterpartyLedgerSettlement
+    ? await state.config.platformStore.updateCounterpartyLedgerSettlement(entryId, updates)
+    : { ...(await findCounterpartyLedgerEntryById(state, entryId)), ...updates };
+  state.counterpartyLedgerEntries.set(savedEntry.id, savedEntry);
+  return savedEntry;
+}
+
 async function listPaymentRequests(state, accountSetId, filters = {}) {
   const persistedRequests = state.config.platformStore?.listPaymentRequests
     ? await state.config.platformStore.listPaymentRequests(accountSetId, filters)
@@ -1344,6 +1357,37 @@ async function createSupplierPayment(state, payment) {
     : payment;
   state.supplierPayments.set(savedPayment.id, savedPayment);
   return savedPayment;
+}
+
+async function findSupplierPaymentById(state, paymentId) {
+  const payment = state.supplierPayments.get(paymentId);
+  if (payment) return payment;
+  const persistedPayments = state.config.platformStore?.listSupplierPayments
+    ? await state.config.platformStore.listSupplierPayments(null, {})
+    : [];
+  return persistedPayments.find((item) => item.id === paymentId) ?? null;
+}
+
+async function listApSettlements(state, accountSetId, filters = {}) {
+  const persistedSettlements = state.config.platformStore?.listApSettlements
+    ? await state.config.platformStore.listApSettlements(accountSetId, filters)
+    : [];
+  const settlementsById = new Map(persistedSettlements.map((settlement) => [settlement.id, settlement]));
+  for (const settlement of state.apSettlements.values()) {
+    if (accountSetId && settlement.accountSetId !== accountSetId) continue;
+    if (filters.status && settlement.status !== filters.status) continue;
+    if (filters.supplierId && settlement.supplierId !== filters.supplierId) continue;
+    settlementsById.set(settlement.id, settlement);
+  }
+  return [...settlementsById.values()].sort((left, right) => left.settlementNo.localeCompare(right.settlementNo));
+}
+
+async function createApSettlement(state, settlement) {
+  const savedSettlement = state.config.platformStore?.createApSettlement
+    ? await state.config.platformStore.createApSettlement(settlement)
+    : settlement;
+  state.apSettlements.set(savedSettlement.id, savedSettlement);
+  return savedSettlement;
 }
 
 async function listCustomerReceipts(state, accountSetId, filters = {}) {
@@ -2931,6 +2975,98 @@ async function route(request, state) {
         objectId: savedPayment.id
       });
       return jsonResponse(201, savedPayment);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "ap-settlements") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(
+        200,
+        await listApSettlements(state, accountSetId, {
+          status: query.get("status") ?? null,
+          supplierId: query.get("supplierId") ?? null
+        })
+      );
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const entry = await findCounterpartyLedgerEntryById(state, body.counterpartyLedgerEntryId);
+      if (!entry || entry.accountSetId !== body.accountSetId) {
+        return errorResponse(404, "COUNTERPARTY_LEDGER_ENTRY_NOT_FOUND", "Counterparty ledger entry was not found.");
+      }
+      if (entry.direction !== "ap") {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "AP settlements can only be created from payable entries.");
+      }
+      const settlementType = body.settlementType ?? "payment_to_bill";
+      if (!["payment_to_bill", "prepayment_to_bill", "refund", "credit_note_to_bill", "ar_ap_netting"].includes(settlementType)) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", "settlementType is not supported.");
+      }
+      const supplierPayment = body.supplierPaymentId ? await findSupplierPaymentById(state, body.supplierPaymentId) : null;
+      if (settlementType === "payment_to_bill") {
+        if (!supplierPayment || supplierPayment.accountSetId !== body.accountSetId) {
+          return errorResponse(404, "SUPPLIER_PAYMENT_NOT_FOUND", "Supplier payment was not found.");
+        }
+        if (supplierPayment.supplierId !== entry.partnerId) {
+          return errorResponse(409, "BUSINESS_RULE_FAILED", "Supplier payment does not belong to the payable supplier.");
+        }
+      }
+      const settledAmount = Number(body.settledAmount);
+      if (!Number.isFinite(settledAmount) || settledAmount <= 0) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", "settledAmount must be greater than 0.");
+      }
+      if (settledAmount > Number(entry.remainingAmount ?? 0)) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "settledAmount exceeds remaining payable amount.");
+      }
+      const existingSettlements = await listApSettlements(state, body.accountSetId);
+      const settlementDate = body.settlementDate ?? new Date().toISOString().slice(0, 10);
+      const settlement = {
+        id: body.id ?? `ap-settlement:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        supplierId: entry.partnerId,
+        supplierName: entry.partnerName ?? null,
+        counterpartyLedgerEntryId: entry.id,
+        sourceNo: entry.sourceNo,
+        supplierPaymentId: supplierPayment?.id ?? null,
+        supplierPaymentNo: supplierPayment?.paymentNo ?? null,
+        settlementNo:
+          body.settlementNo ?? nextFulfillmentNo("AP-SET", body.accountSetId, settlementDate, existingSettlements, "settlementNo"),
+        settlementDate,
+        settlementType,
+        settledAmount,
+        differenceAmount: Number(body.differenceAmount ?? 0),
+        differenceReason: body.differenceReason ?? null,
+        status: "settled",
+        createdBy: body.createdBy ?? actorId,
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : []
+      };
+      const savedSettlement = await createApSettlement(state, settlement);
+      const nextSettledAmount = Number((Number(entry.settledAmount ?? 0) + settledAmount).toFixed(2));
+      const nextRemainingAmount = Number((Number(entry.remainingAmount ?? 0) - settledAmount).toFixed(2));
+      await updateCounterpartyLedgerSettlement(state, entry.id, {
+        settledAmount: nextSettledAmount,
+        remainingAmount: nextRemainingAmount,
+        status: nextRemainingAmount <= 0 ? "settled" : "partially_settled"
+      });
+      appendAuditLog(state, {
+        actorId: savedSettlement.createdBy,
+        action: "ap_settlement.create",
+        objectType: "ap_settlement",
+        objectId: savedSettlement.id
+      });
+      return jsonResponse(201, savedSettlement);
     }
   }
 

@@ -34,6 +34,10 @@ const phase2ReceiptMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610150000_phase2_receipt_workflow/migration.sql", import.meta.url)
 );
 const phase2ReceiptMigrationText = phase2ReceiptMigrationSql.toString("utf8");
+const phase2ApSettlementMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610160000_phase2_ap_settlement_workflow/migration.sql", import.meta.url)
+);
+const phase2ApSettlementMigrationText = phase2ApSettlementMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -185,4 +189,20 @@ test("Phase 2 receipt migration creates customer receipts and collection plans",
   assert.match(phase2ReceiptMigrationText, /"plannedAmount" REAL NOT NULL DEFAULT 0/, "Collection plans must retain planned amounts.");
   assert.match(phase2ReceiptMigrationText, /CREATE INDEX "CustomerReceipt_accountSetId_status_idx"/);
   assert.match(phase2ReceiptMigrationText, /CREATE INDEX "CollectionPlan_accountSetId_status_idx"/);
+});
+
+test("Phase 2 AP settlement migration creates payable settlement source chain and difference fields", () => {
+  assert.match(phase2ApSettlementMigrationText, /CREATE TABLE "ApSettlement"/, "AP settlements must be persisted.");
+  assert.match(
+    phase2ApSettlementMigrationText,
+    /"settlementType" TEXT NOT NULL/,
+    "Settlement type must distinguish payment, prepayment, credit note, refund, and netting."
+  );
+  assert.match(phase2ApSettlementMigrationText, /"counterpartyLedgerEntryId" TEXT NOT NULL/);
+  assert.match(phase2ApSettlementMigrationText, /"supplierPaymentId" TEXT/);
+  assert.match(phase2ApSettlementMigrationText, /"settledAmount" REAL NOT NULL DEFAULT 0/);
+  assert.match(phase2ApSettlementMigrationText, /"differenceAmount" REAL NOT NULL DEFAULT 0/);
+  assert.match(phase2ApSettlementMigrationText, /"differenceReason" TEXT/);
+  assert.match(phase2ApSettlementMigrationText, /CREATE INDEX "ApSettlement_accountSetId_status_idx"/);
+  assert.match(phase2ApSettlementMigrationText, /CREATE INDEX "ApSettlement_counterpartyLedgerEntryId_idx"/);
 });

@@ -2252,6 +2252,61 @@ paths:
                 items:
                   $ref: "#/components/schemas/CreditExposure"
 
+  /ap-settlements:
+    get:
+      summary: List Phase 2 AP settlements.
+      x-permission: ap_settlement.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [settled, voided]
+        - name: supplierId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: AP settlement list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApSettlement"
+    post:
+      summary: Create an AP settlement from a payable entry and payment/prepayment/credit-note source.
+      x-permission: ap_settlement.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApSettlementCreateRequest"
+      responses:
+        "201":
+          description: AP settlement created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApSettlement"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /attachments/upload:
     post:
       summary: Upload an attachment and return its central status.
@@ -4097,6 +4152,81 @@ components:
         status:
           type: string
           enum: [within_limit, over_limit]
+
+    ApSettlementCreateRequest:
+      type: object
+      required: [accountSetId, counterpartyLedgerEntryId, settlementDate, settlementType, settledAmount, createdBy]
+      properties:
+        accountSetId:
+          type: string
+        counterpartyLedgerEntryId:
+          type: string
+        supplierPaymentId:
+          type: string
+        settlementNo:
+          type: string
+        settlementDate:
+          type: string
+          format: date
+        settlementType:
+          type: string
+          enum: [payment_to_bill, prepayment_to_bill, refund, credit_note_to_bill, ar_ap_netting]
+        settledAmount:
+          type: number
+        differenceAmount:
+          type: number
+        differenceReason:
+          type: string
+        createdBy:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+
+    ApSettlement:
+      type: object
+      required: [id, accountSetId, supplierId, counterpartyLedgerEntryId, settlementNo, settlementDate, settlementType, settledAmount, differenceAmount, status, createdBy, evidenceRefs]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        counterpartyLedgerEntryId:
+          type: string
+        sourceNo:
+          type: string
+        supplierPaymentId:
+          type: string
+        supplierPaymentNo:
+          type: string
+        settlementNo:
+          type: string
+        settlementDate:
+          type: string
+          format: date
+        settlementType:
+          type: string
+          enum: [payment_to_bill, prepayment_to_bill, refund, credit_note_to_bill, ar_ap_netting]
+        settledAmount:
+          type: number
+        differenceAmount:
+          type: number
+        differenceReason:
+          type: string
+        status:
+          type: string
+          enum: [settled, voided]
+        createdBy:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
 
     AccountingPeriod:
       type: object

@@ -48,6 +48,7 @@ model AccountSet {
   supplierPayments   SupplierPayment[]
   customerReceipts   CustomerReceipt[]
   collectionPlans    CollectionPlan[]
+  apSettlements      ApSettlement[]
 }
 
 model User {
@@ -488,6 +489,7 @@ model Partner {
   supplierPayments  SupplierPayment[] @relation("SupplierPaymentSupplier")
   customerReceipts  CustomerReceipt[] @relation("CustomerReceiptCustomer")
   collectionPlans   CollectionPlan[]  @relation("CollectionPlanCustomer")
+  apSettlements     ApSettlement[]    @relation("ApSettlementSupplier")
 
   @@unique([accountSetId, code])
   @@index([accountSetId, partnerType])
@@ -801,6 +803,7 @@ model CounterpartyLedgerEntry {
   supplierPayments SupplierPayment[]
   customerReceipts CustomerReceipt[]
   collectionPlan   CollectionPlan?
+  apSettlements    ApSettlement[]
 
   @@unique([sourceType, sourceId])
   @@index([accountSetId, direction, status])
@@ -861,6 +864,7 @@ model SupplierPayment {
   paymentRequest          PaymentRequest          @relation(fields: [paymentRequestId], references: [id])
   counterpartyLedgerEntry CounterpartyLedgerEntry @relation(fields: [counterpartyLedgerEntryId], references: [id])
   supplier                Partner                 @relation("SupplierPaymentSupplier", fields: [supplierId], references: [id])
+  apSettlements           ApSettlement[]
 
   @@unique([accountSetId, paymentNo])
   @@index([accountSetId, status])
@@ -894,6 +898,36 @@ model CustomerReceipt {
   @@index([accountSetId, status])
   @@index([customerId])
   @@index([counterpartyLedgerEntryId])
+}
+
+model ApSettlement {
+  id                        String   @id @default(uuid())
+  accountSetId              String
+  supplierId                String
+  counterpartyLedgerEntryId String
+  supplierPaymentId         String?
+  settlementNo              String
+  settlementDate            DateTime
+  settlementType            String
+  settledAmount             Float    @default(0)
+  differenceAmount          Float    @default(0)
+  differenceReason          String?
+  status                    String   @default("settled")
+  createdBy                 String
+  evidenceRefsJson          String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  accountSet              AccountSet              @relation(fields: [accountSetId], references: [id])
+  supplier                Partner                 @relation("ApSettlementSupplier", fields: [supplierId], references: [id])
+  counterpartyLedgerEntry CounterpartyLedgerEntry @relation(fields: [counterpartyLedgerEntryId], references: [id])
+  supplierPayment         SupplierPayment?        @relation(fields: [supplierPaymentId], references: [id])
+
+  @@unique([accountSetId, settlementNo])
+  @@index([accountSetId, status])
+  @@index([counterpartyLedgerEntryId])
+  @@index([supplierId])
+  @@index([supplierPaymentId])
 }
 
 model CollectionPlan {

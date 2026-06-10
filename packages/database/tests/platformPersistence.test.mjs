@@ -24,6 +24,7 @@ function createFakePrisma() {
   const supplierPayments = new Map();
   const customerReceipts = new Map();
   const collectionPlans = new Map();
+  const apSettlements = new Map();
   const periods = new Map();
   const chartOfAccounts = new Map();
   const auxiliaryTypes = new Map();
@@ -403,6 +404,25 @@ function createFakePrisma() {
         if (where?.status) rows = rows.filter((payment) => payment.status === where.status);
         if (where?.supplierId) rows = rows.filter((payment) => payment.supplierId === where.supplierId);
         return rows.map((payment) => (include?.supplier ? payment : { ...payment, supplier: undefined }));
+      }
+    },
+    apSettlement: {
+      create: async ({ data, include }) => {
+        const settlement = {
+          ...data,
+          supplier: partners.get(data.supplierId),
+          counterpartyLedgerEntry: counterpartyLedgerEntries.get(data.counterpartyLedgerEntryId),
+          supplierPayment: data.supplierPaymentId ? supplierPayments.get(data.supplierPaymentId) : null
+        };
+        apSettlements.set(settlement.id, settlement);
+        return include?.supplier ? settlement : { ...settlement, supplier: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        let rows = [...apSettlements.values()];
+        if (where?.accountSetId) rows = rows.filter((settlement) => settlement.accountSetId === where.accountSetId);
+        if (where?.status) rows = rows.filter((settlement) => settlement.status === where.status);
+        if (where?.supplierId) rows = rows.filter((settlement) => settlement.supplierId === where.supplierId);
+        return rows.map((settlement) => (include?.supplier ? settlement : { ...settlement, supplier: undefined }));
       }
     },
     customerReceipt: {
@@ -1290,6 +1310,27 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
     glVoucherId: null,
     evidenceRefs: ["attachment:bank-slip"]
   });
+  const apSettlement = await store.createApSettlement({
+    id: "ap-settlement:1",
+    accountSetId: accountSet.id,
+    supplierId: supplier.id,
+    counterpartyLedgerEntryId: payableLedger[0].id,
+    supplierPaymentId: supplierPayment.id,
+    settlementNo: "AP-SET-202603-001",
+    settlementDate: "2026-03-24",
+    settlementType: "payment_to_bill",
+    settledAmount: 600,
+    differenceAmount: 10,
+    differenceReason: "Bank fee difference",
+    status: "settled",
+    createdBy: "ap",
+    evidenceRefs: ["attachment:settlement"]
+  });
+  const settledPayable = await store.updateCounterpartyLedgerSettlement(payableLedger[0].id, {
+    settledAmount: 600,
+    remainingAmount: 560,
+    status: "partially_settled"
+  });
   const collectionPlan = await store.createCollectionPlan({
     id: "collection-plan:1",
     accountSetId: accountSet.id,
@@ -1335,6 +1376,7 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
   });
   const paymentRequests = await store.listPaymentRequests(accountSet.id, { status: "approved" });
   const supplierPayments = await store.listSupplierPayments(accountSet.id, { supplierId: supplier.id });
+  const apSettlements = await store.listApSettlements(accountSet.id, { supplierId: supplier.id });
   const collectionPlans = await store.listCollectionPlans(accountSet.id, { customerId: customer.id });
   const customerReceipts = await store.listCustomerReceipts(accountSet.id, { customerId: customer.id });
 
@@ -1367,6 +1409,14 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
   assert.equal(supplierPayment.paymentNo, "PAY-202603-001");
   assert.equal(supplierPayment.paidAmount, 600);
   assert.deepEqual(supplierPayments.map((row) => row.paymentNo), ["PAY-202603-001"]);
+  assert.equal(apSettlement.settlementNo, "AP-SET-202603-001");
+  assert.equal(apSettlement.sourceNo, "PI-202603-001");
+  assert.equal(apSettlement.supplierPaymentNo, "PAY-202603-001");
+  assert.equal(apSettlement.settledAmount, 600);
+  assert.equal(apSettlement.differenceAmount, 10);
+  assert.equal(settledPayable.remainingAmount, 560);
+  assert.equal(settledPayable.status, "partially_settled");
+  assert.deepEqual(apSettlements.map((row) => row.settlementNo), ["AP-SET-202603-001"]);
   assert.equal(collectionPlan.sourceNo, "SI-202603-001");
   assert.equal(collectionPlan.plannedAmount, 2120);
   assert.equal(collectionPlan.plannedReceiptDate, "2026-03-21");

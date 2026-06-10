@@ -45,6 +45,7 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/supplier-payments:",
     "/counterparty-ledger/{counterpartyLedgerEntryId}/block-payment:",
     "/customer-receipts:",
+    "/ap-settlements:",
     "/accounts:",
     "/accounts/{accountId}:",
     "/accounts/import:",
@@ -107,6 +108,7 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "CustomerReceipt:",
     "CollectionPlan:",
     "CreditExposure:",
+    "ApSettlement:",
     "AccountingPeriod:",
     "Account:",
     "AccountCodeRule:",
@@ -174,6 +176,16 @@ test("Phase 2 receipt workflow endpoints are documented with collection and cred
   assert.match(creditBlock, /x-permission: credit_exposure\.view/);
   assert.match(creditBlock, /CreditExposure/);
   assert.match(contract, /availableCredit:/, "Credit exposure schema must expose remaining credit.");
+});
+
+test("Phase 2 AP settlement workflow endpoint is documented with difference handling", () => {
+  const block = blockAfter("  /ap-settlements:");
+
+  assert.match(block, /x-permission: ap_settlement\.manage/);
+  assert.match(block, /ApSettlement/);
+  assert.match(contract, /settlementType:/);
+  assert.match(contract, /differenceAmount:/);
+  assert.match(contract, /differenceReason:/);
 });
 
 test("deployment configuration check endpoint is documented", () => {

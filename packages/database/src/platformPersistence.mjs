@@ -334,6 +334,28 @@ function supplierPaymentToDto(payment) {
   };
 }
 
+function apSettlementToDto(settlement) {
+  return {
+    id: settlement.id,
+    accountSetId: settlement.accountSetId,
+    supplierId: settlement.supplierId,
+    supplierName: settlement.supplier?.name ?? null,
+    counterpartyLedgerEntryId: settlement.counterpartyLedgerEntryId,
+    sourceNo: settlement.counterpartyLedgerEntry?.sourceNo ?? null,
+    supplierPaymentId: settlement.supplierPaymentId ?? null,
+    supplierPaymentNo: settlement.supplierPayment?.paymentNo ?? null,
+    settlementNo: settlement.settlementNo,
+    settlementDate: dateOnly(settlement.settlementDate),
+    settlementType: settlement.settlementType,
+    settledAmount: settlement.settledAmount,
+    differenceAmount: settlement.differenceAmount,
+    differenceReason: settlement.differenceReason ?? null,
+    status: settlement.status,
+    createdBy: settlement.createdBy,
+    evidenceRefs: evidenceRefsFromJson(settlement.evidenceRefsJson)
+  };
+}
+
 function customerReceiptToDto(receipt) {
   return {
     id: receipt.id,
@@ -392,6 +414,14 @@ function receiptWorkflowWhere(accountSetId, filters = {}) {
     ...(accountSetId ? { accountSetId } : {}),
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.customerId ? { customerId: filters.customerId } : {})
+  };
+}
+
+function settlementWorkflowWhere(accountSetId, filters = {}) {
+  return {
+    ...(accountSetId ? { accountSetId } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.supplierId ? { supplierId: filters.supplierId } : {})
   };
 }
 
@@ -1369,6 +1399,50 @@ export function createPlatformPersistence(prisma) {
         include: { supplier: true, paymentRequest: true, counterpartyLedgerEntry: true }
       });
       return payments.map(supplierPaymentToDto).sort((left, right) => left.paymentNo.localeCompare(right.paymentNo));
+    },
+
+    async createApSettlement(settlement) {
+      const saved = await prisma.apSettlement.create({
+        data: {
+          id: settlement.id,
+          accountSetId: settlement.accountSetId,
+          supplierId: settlement.supplierId,
+          counterpartyLedgerEntryId: settlement.counterpartyLedgerEntryId,
+          supplierPaymentId: settlement.supplierPaymentId ?? null,
+          settlementNo: settlement.settlementNo,
+          settlementDate: dateTime(settlement.settlementDate),
+          settlementType: settlement.settlementType,
+          settledAmount: settlement.settledAmount,
+          differenceAmount: settlement.differenceAmount ?? 0,
+          differenceReason: settlement.differenceReason ?? null,
+          status: settlement.status ?? "settled",
+          createdBy: settlement.createdBy,
+          evidenceRefsJson: JSON.stringify(settlement.evidenceRefs ?? [])
+        },
+        include: { supplier: true, supplierPayment: true, counterpartyLedgerEntry: true }
+      });
+      return apSettlementToDto(saved);
+    },
+
+    async listApSettlements(accountSetId, filters = {}) {
+      const settlements = await prisma.apSettlement.findMany({
+        where: settlementWorkflowWhere(accountSetId, filters),
+        include: { supplier: true, supplierPayment: true, counterpartyLedgerEntry: true }
+      });
+      return settlements.map(apSettlementToDto).sort((left, right) => left.settlementNo.localeCompare(right.settlementNo));
+    },
+
+    async updateCounterpartyLedgerSettlement(entryId, updates) {
+      const saved = await prisma.counterpartyLedgerEntry.update({
+        where: { id: entryId },
+        data: {
+          settledAmount: updates.settledAmount,
+          remainingAmount: updates.remainingAmount,
+          status: updates.status
+        },
+        include: { partner: true }
+      });
+      return counterpartyLedgerEntryToDto(saved);
     },
 
     async createCustomerReceipt(receipt) {
