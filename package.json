@@ -4,9 +4,15 @@
   "private": true,
   "description": "AIS/ERP finance suite based on the textbook functional boundary, with safe AI and Agent workflows.",
   "type": "module",
+  "main": "desktop/main.mjs",
   "scripts": {
     "test": "node scripts/run-domain-tests.mjs",
     "test:domain": "node scripts/run-domain-tests.mjs",
+    "dev:api": "node services/api/src/server.mjs",
+    "build:web": "npm run build --workspace apps/web",
+    "prepare:desktop-prisma": "node scripts/prepare-electron-prisma.mjs",
+    "desktop": "electron .",
+    "dist:exe": "npm run build:web && npm run prepare:desktop-prisma && electron-builder --win portable",
     "format": "prettier --write \"**/*.{js,mjs,ts,json,md}\""
   },
   "workspaces": [
@@ -14,5 +20,37 @@
     "services/*",
     "packages/*"
   ],
-  "packageManager": "pnpm@9.1.0"
+  "packageManager": "pnpm@9.1.0",
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.2"
+  },
+  "build": {
+    "appId": "com.ais.erp.suite",
+    "productName": "AIS ERP 财务套件",
+    "directories": {
+      "output": "release"
+    },
+    "asar": false,
+    "afterPack": "scripts/electron-after-pack.cjs",
+    "files": [
+      "desktop/**/*",
+      "apps/web/dist/**/*",
+      "services/**/*",
+      "packages/**/*",
+      "node_modules/**/*",
+      "node_modules/.prisma/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ]
+    }
+  }
 }

@@ -1,0 +1,3 @@
+voucher_date,voucher_type,summary,line_no,account_code,line_summary,debit_amount,credit_amount,department,employee,customer,supplier,project,attachment_file
+2026-01-15,J,购买办公用品,1,660201,购买办公用品,500,0,ADMIN,,,,,invoice-001.pdf
+2026-01-15,J,购买办公用品,2,1002,银行付款,0,500,,,,,,invoice-001.pdf

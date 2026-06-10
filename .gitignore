@@ -10,6 +10,13 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+*.db
+*.db-journal
+*.db.backup-*
+*.db-journal.backup-*
+*write-delete-probe.txt
+.attachment-storage/
+data/attachments/
 preview-server.*
 .turbo/
 .next/

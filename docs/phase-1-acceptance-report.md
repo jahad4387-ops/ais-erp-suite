@@ -1,0 +1,149 @@
+# Phase 1 Acceptance Progress Report
+
+Last updated: 2026-06-09
+
+## Verified In This Worktree
+
+- Domain/API/database/frontend compatibility tests: `npm test` passes with 137 tests.
+- Web lint: `npm run lint --workspace apps/web` passes.
+- Web production build: `npm run build --workspace apps/web` passes with the existing Vite large chunk warning.
+- Prisma schema: `DATABASE_URL=file:./dev.db npx prisma validate --schema prisma/schema.prisma` passes from `packages/database`.
+- Administrator password-hash utility: `AIS_ADMIN_PASSWORD=... npm run admin:hash --workspace packages/database` emits a seed-compatible `sha256:<salt>:<digest>` hash.
+- Final acceptance traceability matrix is recorded in `docs/phase-1-acceptance-matrix.md`.
+- Phase 1 migration SQL is UTF-8 and contains the required accounting tables.
+- Phase 1 migration SQL was executed against an in-memory SQLite database with Python `sqlite3` and created 28 tables; `User` contains `passwordHash` and no plaintext `password` column, and `AccountSetUser` persists grant metadata.
+- `prisma migrate deploy` was verified against a temporary SQLite database with elevated target-runtime permissions and applied `20260607120000_phase1_init`; the resulting database contained 29 tables including `_prisma_migrations`, `JournalEntry`, and `AccountPeriodBalance`.
+- Prisma Client was regenerated after the `User.passwordHash` and platform-scope schema changes.
+- Local runtime smoke:
+  - `http://127.0.0.1:5173/` returns 200.
+  - `http://127.0.0.1:5173/api/account-sets` returns 200 through the Vite proxy.
+- Browser-rendered visual QA screenshots captured for 14 Phase 1 web routes under `docs/qa/phase-1-visual-smoke/screenshots/`, plus a regression screenshot for the binary attachment upload control.
+- Clean browser session after UI compatibility fixes shows no Ant Design deprecation warnings and no runtime errors.
+
+## Phase 1 Coverage Added
+
+- Account set detail, update, enable, and disable lifecycle API.
+- Enabled account sets lock start-year/start-period changes, master-data account creation/import, opening-balance changes, and accounting-period generation with `ACCOUNT_SET_ENABLED_LOCKED`.
+- Accounting period API: open, close, lock, and set-current with exactly one current period.
+- Account-set period API lists accounting periods scoped to one account set.
+- Period close API can generate a profit-and-loss carry-forward voucher draft from posted revenue and expense activity; the draft remains subject to normal submit, approve, and post workflow.
+- Voucher maintenance API supports detail lookup, draft/rejected update, copy-to-draft, delete-as-void, submit, approve, reject, void, post, and reversal draft creation.
+- Voucher draft update supports optional `expectedRevision` optimistic locking, returns `VOUCHER_UPDATE_CONFLICT` when a stale editor attempts to save, and persists the returned `revision` through the Prisma platform store.
+- Voucher creation auto-generates sequential voucher numbers in the `JV-YYYYPP-0001` format for each account set, fiscal year, and period.
+- Voucher lifecycle status logs cover create, submit, approve, reject, void, post, delete-as-void, and reversal draft creation.
+- Posting API supports single-voucher posting through the plan-compatible `/posting/post-voucher/{voucherId}` path, batch posting of approved vouchers, and posting batch list/detail queries.
+- Single-voucher posting returns `VOUCHER_ALREADY_POSTED` for duplicate post attempts and does not create duplicate journal entries or balances.
+- Batch posting records partial failures when a voucher is no longer eligible for posting and keeps the failed voucher in its original status.
+- Ledger and report query APIs for general ledger, Phase 1 sub-ledger, account balances, and trial balance, including plan-compatible `/ledger/sub-ledger`, `/reports/account-balances`, and `/reports/trial-balance` paths.
+- OpenAPI metadata for Phase 1 write idempotency, permissions, risk level, and Agent safety flags.
+- Web app shell with fixed account set, organization, accounting period, and user identity context.
+- Navigation coverage for platform management, master data, general ledger, reports, and Agent center.
+- Deployment configuration API reports deployment mode, platform store mode, database provider/configuration state, and attachment storage provider/configuration state through `/deployment/config`.
+- Deployment configuration page is reachable from platform management navigation and checks database plus attachment storage settings.
+- Voucher list filters for period, status, maker, and account/summary, with copy/delete workflow actions.
+- Voucher detail expansion loads formal voucher status logs through `/vouchers/{voucherId}/status-logs` instead of showing a hard-coded state chain.
+- Voucher review workbench is reachable from general-ledger navigation and supports period, status, maker, and account/summary filters plus batch approve/reject actions for submitted vouchers in open periods.
+- Voucher management page includes a batch posting workbench that selects approved vouchers in open periods and posts them through `/posting/post-batch`.
+- Posting batch results page is reachable from general-ledger navigation, lists `/posting/batches`, and loads per-voucher batch detail through `/posting/batches/{postingBatchId}`.
+- Voucher entry route with fixed debit total, credit total, and difference controls.
+- Voucher draft creation and update reject invalid line amounts: a line cannot have both debit and credit, cannot have neither side, and cannot use negative amounts.
+- Reports page for general ledger, sub-ledger/detail ledger, account balances, and trial balance.
+- Reports page supports voucher drill-through from sub-ledger rows into voucher detail and voucher lines.
+- Bank reconciliation page with bank statement and journal-entry side-by-side view.
+- Bank reconciliation API imports bank statement rows, creates reconciliation runs, auto-matches statement rows to posted bank journal entries, updates statement status, writes audit logs, and exposes plan-compatible `/bank/statements`, `/bank/reconcile`, and `/bank/reconcile/auto` paths.
+- Prisma schema and migration for Phase 1 platform, permissions, periods, chart of accounts, auxiliaries, vouchers, attachments, posting, balances, bank reconciliation, and audit logs.
+- Idempotent platform seed script for permissions, role templates, and optional initial administrator creation from `User.passwordHash`.
+- Administrator password hash utility generates seed-compatible `sha256:<salt>:<digest>` values and verifies them for initial setup or password-hash rotation.
+- Standard chart-of-accounts and voucher import templates.
+- ER diagram document.
+- AI voucher suggestion endpoints return dry-run draft suggestions with evidence references and uploaded attachment ids, reject unavailable attachment evidence, and do not create formal vouchers automatically, including plan-compatible `/ai/voucher-drafts` create/detail/convert paths.
+- Login API issues signed bearer tokens and rejects invalid credentials.
+- Successful and failed login attempts append audit logs without storing credential material.
+- API authorization accepts bearer tokens while keeping the local `Actor-Id` fallback for MVP smoke tests.
+- AI voucher suggestions can be converted into formal voucher drafts only after human review; the created voucher records the source `aiDraftId`, and reviewed attachment evidence is linked with `attachmentCount` synchronized.
+- OpenAPI documents `/auth/login` and the human-confirmed AI suggestion conversion endpoint.
+- Web login page stores the bearer token for subsequent API calls.
+- Web Agent center uploads attachment evidence, generates dry-run voucher suggestions, and provides a manual confirmation action that creates a formal voucher draft.
+- Attachment API supports metadata upload, base64 binary upload to local object storage, content retrieval, status query, voucher binding, voucher attachment listing, and delete.
+- Posted voucher attachments are protected from deletion and return `POSTED_VOUCHER_ATTACHMENT_DELETE_BLOCKED`.
+- Attachment retention policy writes `retentionUntil` when `AIS_ATTACHMENT_RETENTION_DAYS` is configured and blocks delete attempts with `ATTACHMENT_RETENTION_DELETE_BLOCKED` until retention expires.
+- Voucher posting rechecks linked attachment status and returns `VOUCHER_ATTACHMENT_NOT_AVAILABLE` when any linked attachment is no longer available.
+- OpenAPI documents the Phase 1 attachment endpoints and `Attachment` / `AttachmentContent` / `AttachmentLink` / `AttachmentStatus` schemas.
+- Voucher entry can select a local file, upload its binary content, and bind it when saving a draft.
+- Voucher details display linked attachments and expose deletion only for non-posted vouchers.
+- Reports page exports the current general ledger, detail ledger, account balance, or trial balance view as CSV or Excel-compatible `.xls`.
+- Chart-of-accounts page lists accounts through the tree endpoint and creates or edits leaf/manual-entry accounts with cash/bank flags and required auxiliary metadata.
+- Chart-of-accounts API imports standard account rows, returns account detail/tree views, updates accounts, enables/disables accounts, soft-deletes unused accounts, persists disabled/manual-entry state, blocks account deletion when the account is referenced by vouchers, and blocks voucher submission when a disabled or manual-entry-locked account is used.
+- Chart-of-accounts page includes standard account import, CSV/text import preview, confirmed import through `/accounts/import`, account edit, account enable/disable, and soft-delete actions.
+- Account code rules page is reachable from master data navigation and saves segment-based code rules such as `4-2-2-2` through `/account-code-rules`.
+- Accounting periods page lists periods through the account-set period endpoint and supports open, close, lock, and set-current operations.
+- Accounting periods page includes an action to generate a profit-and-loss carry-forward draft for an open period.
+- Voucher write APIs require an open accounting period; closed and locked periods block voucher creation, update, delete, and workflow mutations with `VOUCHER_PERIOD_CLOSED`.
+- RBAC API lists permissions, creates roles with explicit permission codes, creates users assigned to roles, and logs in those users with inherited permissions.
+- OpenAPI documents RBAC endpoints and `Permission` / `Role` / sanitized `AuthUser` schemas.
+- User and role permission pages are reachable from platform management navigation.
+- Audit log page is reachable from platform management navigation and filters logs by actor, module, and action.
+- Deployment configuration page is reachable from platform management navigation and displays runtime database/storage readiness.
+- Platform seed script includes `user.manage` and `role.manage` for Phase 1 platform administration.
+- Auxiliary accounting API supports auxiliary types, auxiliary item create/update/delete, account auxiliary requirements, and audit logs.
+- Opening balance API supports balance row save/list and opening trial-balance difference checks.
+- OpenAPI documents auxiliary and opening-balance initialization endpoints and schemas.
+- Auxiliary accounting and opening balance pages are reachable from master data navigation.
+- Auxiliary accounting page supports auxiliary item create, edit, enable, and disable maintenance actions.
+- Platform seed script includes `auxiliary.manage`, `opening_balance.manage`, and `opening_balance.view`.
+- Phase 1 operation manual documents account-set setup, master data, auxiliary accounting, opening balances, periods, vouchers, attachments, reports, AI suggestions, and known MVP limits.
+- Phase 1 deployment manual documents local run, environment, deployment configuration checks, database validation, build, smoke tests, deployment modes, and production hardening items.
+- User creation stores password hashes instead of plaintext passwords in API state and in the Prisma platform persistence model.
+- Access tokens can be signed with an injected/environment-managed token secret via `AIS_JWT_SECRET`.
+- Production-like deployment modes require an explicit `AIS_JWT_SECRET` at runtime and fail startup instead of using the local development fallback secret.
+- JWT rotation supports an `AIS_JWT_PREVIOUS_SECRETS` grace window: old tokens can be verified during rotation while new tokens are signed only with the current `AIS_JWT_SECRET`.
+- Production-like JWT previous-secret rotation requires approver, future expiry, monitoring reference, and rollback reference metadata before runtime startup, and `/deployment/config` reports those checks without exposing secret values.
+- Production-like deployment modes require explicit attachment storage configuration through either a durable `AIS_ATTACHMENT_STORAGE_ROOT` or `AIS_ATTACHMENT_STORAGE_PROVIDER=external`.
+- External attachment storage mode rejects local `contentBase64` binary uploads and accepts pre-uploaded object metadata through `storageProvider` / `storageKey` only when a `sha256:` checksum is supplied.
+- Production-like external attachment storage requires endpoint, bucket, credential-reference, and positive retention-day configuration before runtime startup, and `/deployment/config` reports those readiness checks without exposing credential material.
+- External metadata upload can verify the target object-storage service with authenticated HTTP `HEAD`, rejects missing objects with `ATTACHMENT_EXTERNAL_OBJECT_NOT_FOUND`, and compares object size/checksum metadata before accepting attachment records. `AIS_ATTACHMENT_EXTERNAL_CREDENTIAL_REF=env:ENV_VAR` resolves a bearer token, while `header:x-api-key=env:ENV_VAR` resolves a provider-specific API-key header, without exposing secret values through `/deployment/config`.
+- Platform persistence slice supports Prisma-backed permissions, roles, users, password-hash login identity loading, account sets, account-set updates, account-set user grants, scoped account-set listing, accounting period generation/listing/status updates, chart-of-accounts creation/listing, auxiliary accounting master data and account auxiliary requirements, opening-balance upsert/listing/trial-balance totals, voucher draft creation/listing with voucher lines, voucher status updates, voucher status logs, posting journal entries, account-period balances, bank statement import/status updates, bank reconciliation runs, and an `AIS_PLATFORM_STORE=prisma` API runtime switch.
+- Account-set scoped authorization filters visible account sets and vouchers by explicit user grants, blocks period-generation writes for unauthorized account sets, and records account-set access denial attempts in the audit log.
+- Account-set user grant API and OpenAPI contract document explicit account-set membership.
+- User and role permission page includes a front-end account-set grant action.
+- Frontend compatibility regression test blocks deprecated Ant Design v6 props (`Space.direction`, `Alert.message`, `Statistic.valueStyle`).
+- Browser visual smoke report documents dashboard, login, account set, account, period, auxiliary, opening balance, access control, voucher, voucher entry, report, bank reconciliation, and Agent center routes.
+- Attachment upload regression tests verify binary content persistence, checksum generation, size mismatch rejection, external object metadata-only uploads with checksum enforcement, posting blocked by uploading linked attachments, and front-end file-picker usage.
+- The final account-set-to-posting flow regression test verifies the exact 2026-01 500 CNY voucher, linked and downloadable invoice attachment, posted status, general-ledger rows, detail-ledger entries, account-balance rows, balanced trial balance, formal status logs, and attachment-link audit evidence.
+- Agent center regression tests verify attachment evidence upload, AI draft `attachmentIds`, unavailable attachment rejection, manual conversion boundaries, and attachment link preservation during reviewed AI conversion.
+- Prisma platform persistence regression tests verify role permission mapping, sanitized user creation, persisted login identity loading, account-set persistence/update, account-set grant persistence, scoped account-set access checks, accounting-period persistence/lifecycle updates, chart-of-accounts persistence, auxiliary accounting persistence, opening-balance persistence, voucher draft revision persistence, voucher status-log persistence, and posting journal-entry/balance persistence.
+- Account master-data regression tests verify account import, tree/detail lookup, account update audit logs, enable/disable/delete audit logs, used-account delete blocking, Prisma account-state updates, OpenAPI contracts, and voucher submission rejection for disabled or manual-entry-locked accounts.
+- Platform seed regression tests verify idempotent permission/role seeding, stable non-corrupt role template names, initial administrator role assignment, rejection of admin seed requests that omit a password hash, and administrator password-hash generation/verification.
+- Bank reconciliation regression tests verify statement import, bank-account validation, journal-entry matching, reconciliation status, statement status updates, audit logs, OpenAPI schemas, and Prisma persistence coverage.
+- Period-close regression tests verify profit-and-loss carry-forward draft generation, the plan-compatible `/posting/period-end/transfer-pl` path, `period_close` voucher source metadata, balanced generated lines, audit logs, OpenAPI contracts, and period-close blocking until the generated draft is posted.
+- Period-state regression tests verify that closed and locked periods block voucher creation and draft updates.
+- Posting regression tests verify batch posting success counts, posted voucher status updates, posting batch list/detail queries, OpenAPI contracts, audit logs, and unique default voucher ids for same-user same-period drafts.
+- API flow regression tests verify duplicate post attempts are rejected without duplicating journal entries.
+- Batch posting regression tests verify `partial_failed` results when a selected voucher status changes before posting.
+- Voucher numbering regression tests verify sequential auto-generated voucher numbers on voucher creation.
+- Voucher draft regression tests verify invalid line amount combinations are rejected before workflow submission.
+- Report-route regression tests verify that the web reports page uses the Phase 1 planned `/ledger/sub-ledger`, `/reports/account-balances`, and `/reports/trial-balance` endpoints.
+- Report export regression tests verify that the web reports page exposes CSV and Excel-compatible exports with debit and credit amount columns.
+- Report URL regression tests verify that stable report URLs open the matching tab and that `/reports/export-center` is recognized as the export entry.
+- Plan-path regression tests verify that every API endpoint explicitly listed in the Phase 1 detailed plan is represented in OpenAPI after normalizing path parameter names.
+- Auxiliary accounting page regression tests verify that auxiliary item edit and disable actions remain wired to the maintenance API.
+- Audit log page regression tests verify that the web route, navigation, refresh control, and `/audit-logs` API wiring remain present.
+- Account-set authorization regression tests verify that cross-account-set access attempts return 403 and write an `account_set.access_denied` audit log.
+- Report drill-through regression tests verify that sub-ledger voucher rows can load voucher detail through `/vouchers/{voucherId}`.
+- Voucher workbench regression tests verify that the web UI exposes batch posting controls, wires them to `/posting/post-batch`, and hides formal write actions when the voucher period is not open.
+- Account code rule page regression tests verify that the web route, master-data navigation, segment parsing, default `4-2-2-2` pattern, and `/account-code-rules` save action remain wired.
+- Posting batch result page regression tests verify that the web route, general-ledger navigation, batch list, refresh control, and batch detail API wiring remain present.
+- Voucher review workbench regression tests verify that the review route, general-ledger navigation, planned filters, batch approve action, batch reject action, and non-open-period write protection remain wired.
+- Deployment configuration regression tests verify the API status payload, OpenAPI contract, platform-management route, refresh/check control, and front-end database/storage/external-storage readiness wiring.
+- Server configuration regression tests verify Prisma runtime switching, production-like JWT secret enforcement, JWT previous-secret rotation behavior, JWT rotation runbook metadata enforcement, and production-like local/external attachment storage configuration enforcement.
+- Voucher detail regression tests verify that expanded voucher rows load formal status logs from the voucher status-log API.
+- Voucher detail regression tests verify that expanded AI-sourced vouchers display the source AI draft chain.
+- Voucher maintenance regression tests verify stale draft updates are rejected through the revision optimistic-lock check.
+- Chart-of-accounts import preview regression tests verify that custom import rows are previewed before confirming the `/accounts/import` call.
+- Account-set lifecycle regression tests verify that enabled account sets block start-year/start-period, master-data, opening-balance, and period-generation mutation paths.
+
+## Remaining Target-Deployment Inputs
+
+- No local functional acceptance blocker remains in the current worktree matrix. The items below are target-deployment inputs that must be filled by the deployment owner before a production-like rollout.
+- Fill target-site JWT rotation values for approver identity, expiry window, monitoring reference, and rollback runbook reference before enabling `AIS_JWT_PREVIOUS_SECRETS`; runtime validation now enforces that those values exist and are time-bounded.
+- Fill target deployment-specific object-storage gateway or cloud-SDK details if bearer/API-key authenticated HTTP `HEAD` is not sufficient for that provider. The runtime now validates endpoint, bucket, credential-reference, and retention-day configuration, resolves bearer or custom-header credentials from environment references, verifies external objects with HTTP `HEAD`, and enforces the configured retention window at the attachment-record delete boundary.

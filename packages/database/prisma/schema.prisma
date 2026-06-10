@@ -1,0 +1,451 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model AccountSet {
+  id                 String   @id @default(uuid())
+  code               String   @unique
+  name               String
+  companyName        String
+  baseCurrency       String
+  accountingStandard String
+  startYear          Int
+  startPeriod        Int
+  status             String
+  createdBy          String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  users              AccountSetUser[]
+  periods            AccountingPeriod[]
+  accountCodeRules   AccountCodeRule[]
+  accounts           ChartOfAccount[]
+  auxiliaryTypes     AuxiliaryType[]
+  auxiliaryItems     AuxiliaryItem[]
+  vouchers           Voucher[]
+  attachments        Attachment[]
+  postingBatches     PostingBatch[]
+  journalEntries     JournalEntry[]
+  balances           AccountPeriodBalance[]
+  auditLogs          AuditLog[]
+  bankStatements     BankStatement[]
+  bankRules          BankReconciliationRule[]
+  reconciliations    BankReconciliation[]
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  passwordHash String
+  name      String
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+
+  accountSets AccountSetUser[]
+  userRoles   UserRole[]
+}
+
+model Role {
+  id          String  @id @default(uuid())
+  name        String  @unique
+  description String?
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+}
+
+model Permission {
+  id          String  @id @default(uuid())
+  code        String  @unique
+  description String?
+
+  rolePermissions RolePermission[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+}
+
+model AccountSetUser {
+  accountSetId String
+  userId       String
+  grantedBy    String?
+  grantedAt    DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  user       User       @relation(fields: [userId], references: [id])
+
+  @@id([accountSetId, userId])
+}
+
+model AccountingPeriod {
+  id           String   @id @default(uuid())
+  accountSetId String
+  fiscalYear   Int
+  periodNo     Int
+  startDate    DateTime
+  endDate      DateTime
+  status       String
+  isCurrent    Boolean  @default(false)
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  vouchers   Voucher[]
+
+  @@unique([accountSetId, fiscalYear, periodNo])
+}
+
+model AccountCodeRule {
+  id           String   @id @default(uuid())
+  accountSetId String
+  segmentsJson String
+  createdAt    DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+
+  @@unique([accountSetId])
+}
+
+model ChartOfAccount {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  code             String
+  name             String
+  parentId         String?
+  level            Int
+  accountType      String
+  normalBalance    String
+  isLeaf           Boolean  @default(true)
+  isCash           Boolean  @default(false)
+  isBank           Boolean  @default(false)
+  isEnabled        Boolean  @default(true)
+  allowManualEntry Boolean  @default(true)
+  createdAt        DateTime @default(now())
+
+  accountSet            AccountSet                    @relation(fields: [accountSetId], references: [id])
+  parent                ChartOfAccount?               @relation("AccountParentChild", fields: [parentId], references: [id])
+  children              ChartOfAccount[]              @relation("AccountParentChild")
+  auxiliaryRequirements AccountAuxiliaryRequirement[]
+  openingBalances       OpeningBalance[]
+  voucherLines          VoucherLine[]
+  journalEntries        JournalEntry[]
+  balances              AccountPeriodBalance[]
+  bankStatements        BankStatement[]
+
+  @@unique([accountSetId, code])
+}
+
+model AuxiliaryType {
+  id           String   @id @default(uuid())
+  accountSetId String
+  code         String
+  name         String
+  category     String
+  isEnabled    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  accountSet   AccountSet                    @relation(fields: [accountSetId], references: [id])
+  items        AuxiliaryItem[]
+  requirements AccountAuxiliaryRequirement[]
+  lineLinks    VoucherLineAuxiliary[]
+
+  @@unique([accountSetId, code])
+}
+
+model AuxiliaryItem {
+  id              String   @id @default(uuid())
+  accountSetId    String
+  auxiliaryTypeId String
+  code            String
+  name            String
+  isEnabled       Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  accountSet    AccountSet             @relation(fields: [accountSetId], references: [id])
+  auxiliaryType AuxiliaryType           @relation(fields: [auxiliaryTypeId], references: [id])
+  lineLinks     VoucherLineAuxiliary[]
+
+  @@unique([auxiliaryTypeId, code])
+}
+
+model AccountAuxiliaryRequirement {
+  accountId       String
+  auxiliaryTypeId String
+  required        Boolean @default(true)
+
+  account       ChartOfAccount @relation(fields: [accountId], references: [id])
+  auxiliaryType AuxiliaryType  @relation(fields: [auxiliaryTypeId], references: [id])
+
+  @@id([accountId, auxiliaryTypeId])
+}
+
+model OpeningBalance {
+  id            String @id @default(uuid())
+  accountId     String
+  fiscalYear    Int
+  periodNo      Int
+  openingDebit  Float  @default(0)
+  openingCredit Float  @default(0)
+
+  account ChartOfAccount @relation(fields: [accountId], references: [id])
+
+  @@unique([accountId, fiscalYear, periodNo])
+}
+
+model Voucher {
+  id              String    @id @default(uuid())
+  accountSetId    String
+  fiscalYear      Int
+  periodNo        Int
+  periodId        String?
+  voucherType     String    @default("J")
+  voucherNo       String
+  voucherDate     DateTime
+  status          String
+  summary         String?
+  attachmentCount Int       @default(0)
+  createdBy       String
+  submittedBy     String?
+  approvedBy      String?
+  postedBy        String?
+  postedAt        DateTime?
+  sourceType      String    @default("manual")
+  aiDraftId       String?
+  version         Int       @default(1)
+  revision        Int       @default(1)
+
+  sourceModule        String?
+  sourceDocumentType  String?
+  sourceDocumentId    String?
+  externalReferenceId String?
+  businessPartnerId   String?
+  settlementMethod    String?
+  currencyId          String?
+  exchangeRate        Float?  @default(1)
+
+  accountSet     AccountSet             @relation(fields: [accountSetId], references: [id])
+  period         AccountingPeriod?      @relation(fields: [periodId], references: [id])
+  lines          VoucherLine[]
+  logs           VoucherStatusLog[]
+  attachmentLinks AttachmentLink[]
+  journalEntries JournalEntry[]
+
+  @@unique([accountSetId, fiscalYear, periodNo, voucherType, voucherNo])
+}
+
+model VoucherLine {
+  id             String @id @default(uuid())
+  voucherId      String
+  lineNo         Int
+  summary        String
+  accountId      String
+  debitAmount    Float  @default(0)
+  creditAmount   Float  @default(0)
+  currency       String @default("CNY")
+  exchangeRate   Float  @default(1)
+  originalAmount Float?
+  quantity       Float?
+  unitPrice      Float?
+
+  voucher      Voucher                @relation(fields: [voucherId], references: [id])
+  account      ChartOfAccount         @relation(fields: [accountId], references: [id])
+  auxiliaries  VoucherLineAuxiliary[]
+  journalEntry JournalEntry?
+
+  @@unique([voucherId, lineNo])
+}
+
+model VoucherLineAuxiliary {
+  voucherLineId   String
+  auxiliaryTypeId String
+  auxiliaryItemId String
+
+  voucherLine   VoucherLine   @relation(fields: [voucherLineId], references: [id])
+  auxiliaryType AuxiliaryType @relation(fields: [auxiliaryTypeId], references: [id])
+  auxiliaryItem AuxiliaryItem @relation(fields: [auxiliaryItemId], references: [id])
+
+  @@id([voucherLineId, auxiliaryTypeId])
+}
+
+model VoucherStatusLog {
+  id         String   @id @default(uuid())
+  voucherId  String
+  action     String
+  fromStatus String?
+  toStatus   String
+  actorId    String
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  voucher Voucher @relation(fields: [voucherId], references: [id])
+}
+
+model VoucherNumberSequence {
+  id           String @id @default(uuid())
+  accountSetId String
+  fiscalYear   Int
+  periodNo     Int
+  voucherType  String
+  currentNo    Int    @default(0)
+
+  @@unique([accountSetId, fiscalYear, periodNo, voucherType])
+}
+
+model Attachment {
+  id              String   @id @default(uuid())
+  accountSetId    String
+  fileName        String
+  fileSize        Int
+  mimeType        String
+  storageProvider String
+  storageKey      String
+  hash            String
+  status          String
+  uploadedBy      String
+  uploadedAt      DateTime @default(now())
+
+  accountSet AccountSet       @relation(fields: [accountSetId], references: [id])
+  links      AttachmentLink[]
+}
+
+model AttachmentLink {
+  attachmentId String
+  objectType   String
+  objectId     String
+  voucherId    String?
+  linkedAt     DateTime @default(now())
+
+  attachment Attachment @relation(fields: [attachmentId], references: [id])
+  voucher    Voucher?   @relation(fields: [voucherId], references: [id])
+
+  @@id([attachmentId, objectType, objectId])
+}
+
+model PostingBatch {
+  id           String   @id @default(uuid())
+  accountSetId String
+  fiscalYear   Int
+  periodNo     Int
+  status       String
+  voucherCount Int
+  postedBy     String
+  postedAt     DateTime @default(now())
+
+  accountSet     AccountSet      @relation(fields: [accountSetId], references: [id])
+  journalEntries JournalEntry[]
+}
+
+model JournalEntry {
+  id                    String   @id @default(uuid())
+  accountSetId          String
+  voucherId             String
+  voucherLineId         String   @unique
+  fiscalYear            Int
+  periodNo              Int
+  entryDate             DateTime
+  accountId             String
+  summary               String
+  debitAmount           Float    @default(0)
+  creditAmount          Float    @default(0)
+  auxiliarySnapshotJson String?
+  postedBatchId         String
+
+  accountSet  AccountSet     @relation(fields: [accountSetId], references: [id])
+  voucher     Voucher        @relation(fields: [voucherId], references: [id])
+  voucherLine VoucherLine    @relation(fields: [voucherLineId], references: [id])
+  account     ChartOfAccount @relation(fields: [accountId], references: [id])
+  batch       PostingBatch   @relation(fields: [postedBatchId], references: [id])
+}
+
+model AccountPeriodBalance {
+  id                String @id @default(uuid())
+  accountSetId      String
+  fiscalYear        Int
+  periodNo          Int
+  accountId         String
+  openingDebit      Float  @default(0)
+  openingCredit     Float  @default(0)
+  periodDebit       Float  @default(0)
+  periodCredit      Float  @default(0)
+  cumulativeDebit   Float  @default(0)
+  cumulativeCredit  Float  @default(0)
+  closingDebit      Float  @default(0)
+  closingCredit     Float  @default(0)
+
+  accountSet AccountSet     @relation(fields: [accountSetId], references: [id])
+  account    ChartOfAccount @relation(fields: [accountId], references: [id])
+
+  @@unique([accountSetId, fiscalYear, periodNo, accountId])
+}
+
+model BankStatement {
+  id              String   @id @default(uuid())
+  accountSetId    String
+  bankAccountId   String
+  transactionDate DateTime
+  description     String
+  amount          Float
+  balance         Float?
+  status          String   @default("unreconciled")
+
+  accountSet AccountSet     @relation(fields: [accountSetId], references: [id])
+  bankAccount ChartOfAccount @relation(fields: [bankAccountId], references: [id])
+}
+
+model BankReconciliationRule {
+  id           String   @id @default(uuid())
+  accountSetId String
+  name         String
+  matchPattern String
+  isEnabled    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+}
+
+model BankReconciliation {
+  id           String   @id @default(uuid())
+  accountSetId String
+  fiscalYear   Int
+  periodNo     Int
+  status       String
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  accountSetId String?
+  actorId      String
+  action       String
+  objectType   String
+  objectId     String
+  beforeJson   String?
+  afterJson    String?
+  traceId      String?
+  occurredAt   DateTime @default(now())
+
+  accountSet AccountSet? @relation(fields: [accountSetId], references: [id])
+}

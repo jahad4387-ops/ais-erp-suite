@@ -1,207 +1,1929 @@
 openapi: 3.1.0
 info:
   title: AIS ERP Suite API
-  version: 0.1.0
-  description: First contract for accounting, business documents, reports, AI suggestions, and safe Agent operations.
+  version: 0.2.0
+  description: Phase 1 contract for platform setup, general ledger, AI voucher suggestions, and safe Agent operations.
 servers:
   - url: http://localhost:3000
 paths:
+  /auth/login:
+    post:
+      summary: Authenticate a Phase 1 user and issue a bearer token.
+      x-permission: public
+      x-risk-level: low
+      x-agent-allowed: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials.
+
+  /permissions:
+    get:
+      summary: List permission codes available in Phase 1.
+      x-permission: role.manage
+      x-risk-level: low
+      x-agent-allowed: false
+      responses:
+        "200":
+          description: Permission list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Permission"
+
+  /deployment/config:
+    get:
+      summary: Inspect deployment configuration.
+      x-permission: account_set.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Deployment configuration status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeploymentConfig"
+
+  /roles:
+    get:
+      summary: List roles and assigned permission codes.
+      x-permission: role.manage
+      x-risk-level: low
+      x-agent-allowed: false
+      responses:
+        "200":
+          description: Role list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Role"
+    post:
+      summary: Create a role from explicit permission codes.
+      x-permission: role.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRoleRequest"
+      responses:
+        "201":
+          description: Role created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+          "409":
+            $ref: "#/components/responses/Conflict"
+
+  /roles/{roleId}:
+    patch:
+      summary: Update an existing role and its permission codes.
+      x-permission: role.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - name: roleId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoleRequest"
+      responses:
+        "200":
+          description: Role updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Role"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /users:
+    get:
+      summary: List sanitized users.
+      x-permission: user.manage
+      x-risk-level: low
+      x-agent-allowed: false
+      responses:
+        "200":
+          description: User list without password fields.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuthUser"
+    post:
+      summary: Create a user and assign role permissions.
+      x-permission: user.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /users/{userId}:
+    delete:
+      summary: Delete a non-system user and remove related grants.
+      x-permission: user.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteUserRequest"
+      responses:
+        "200":
+          description: User deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /account-sets:
     post:
       summary: Create an account set.
+      x-permission: account_set.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccountSetRequest"
       responses:
         "201":
           description: Account set created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountSet"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: ATTACHMENT_EXTERNAL_STORAGE_REQUIRED or ATTACHMENT_EXTERNAL_OBJECT_NOT_FOUND
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      summary: List account sets visible to the current user.
+      x-permission: account_set.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Account set list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountSet"
+
+  /account-sets/{accountSetId}:
+    get:
+      summary: Get an account set.
+      x-permission: account_set.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AccountSetId"
+      responses:
+        "200":
+          description: Account set detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountSet"
+        "404":
+          description: ACCOUNT_SET_NOT_FOUND
+    patch:
+      summary: Update an account set.
+      x-permission: account_set.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountSetId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAccountSetRequest"
+      responses:
+        "200":
+          description: Account set updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountSet"
+        "404":
+          description: ACCOUNT_SET_NOT_FOUND
+
+  /account-sets/{accountSetId}/enable:
+    post:
+      summary: Enable an account set after setup checks pass.
+      x-permission: account_set.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountSetId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Account set enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountSet"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /account-sets/{accountSetId}/disable:
+    post:
+      summary: Disable an account set without deleting Phase 1 financial data.
+      x-permission: account_set.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountSetId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Account set disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountSet"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /account-sets/{accountSetId}/users:
+    get:
+      summary: List users explicitly granted access to an account set.
+      x-permission: account_set.manage
+      x-risk-level: low
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountSetId"
+      responses:
+        "200":
+          description: Account set user grants.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountSetUserGrant"
+    post:
+      summary: Grant a user access to an account set.
+      x-permission: account_set_user.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountSetId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrantAccountSetUserRequest"
+      responses:
+        "201":
+          description: User granted access to the account set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountSetUserGrant"
+
+  /account-sets/{accountSetId}/periods:
+    get:
+      summary: List accounting periods for an account set.
+      x-permission: period.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AccountSetId"
+      responses:
+        "200":
+          description: Account-set period list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountingPeriod"
+        "404":
+          description: ACCOUNT_SET_NOT_FOUND
+
+  /account-sets/{accountSetId}/periods/generate:
+    post:
+      summary: Generate accounting periods for an account set.
+      x-permission: period.open
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountSetId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: Periods generated.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountingPeriod"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
   /periods:
     get:
       summary: List fiscal periods for the active account set.
+      x-permission: period.view
+      x-risk-level: low
+      x-agent-allowed: true
       responses:
         "200":
           description: Fiscal period list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountingPeriod"
+
+  /periods/{periodId}/open:
+    post:
+      summary: Open an accounting period.
+      x-permission: period.open
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/PeriodId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Period opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountingPeriod"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /periods/{periodId}/close:
+    post:
+      summary: Close an accounting period after business checks pass.
+      x-permission: period.close
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/PeriodId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Period closed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountingPeriod"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /periods/{periodId}/lock:
+    post:
+      summary: Lock an accounting period for read-only access.
+      x-permission: period.close
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/PeriodId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Period locked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountingPeriod"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /periods/{periodId}/set-current:
+    post:
+      summary: Set the active current accounting period.
+      x-permission: period.open
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/PeriodId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Current period changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountingPeriod"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /account-code-rules:
+    post:
+      summary: Create or replace the account code rule.
+      x-permission: account.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccountCodeRuleRequest"
+      responses:
+        "201":
+          description: Account code rule saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountCodeRule"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /accounts:
+    post:
+      summary: Create a chart-of-accounts item.
+      x-permission: account.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccountRequest"
+      responses:
+        "201":
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    get:
+      summary: List chart-of-accounts items.
+      x-permission: account.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Account list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Account"
+
+  /accounts/tree:
+    get:
+      summary: List chart-of-accounts items as a parent-child tree.
+      x-permission: account.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Account tree.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountTreeNode"
+
+  /accounts/{accountId}:
+    get:
+      summary: Get a chart-of-accounts item.
+      x-permission: account.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AccountId"
+      responses:
+        "200":
+          description: Account detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          description: ACCOUNT_NOT_FOUND
+    patch:
+      summary: Update a chart-of-accounts item.
+      x-permission: account.update
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAccountRequest"
+      responses:
+        "200":
+          description: Account updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          description: ACCOUNT_NOT_FOUND
+    delete:
+      summary: Delete a chart-of-accounts item by disabling it.
+      description: Phase 1 treats deletion as a soft delete so historical voucher references remain auditable.
+      x-permission: account.delete
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Account disabled as deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          description: ACCOUNT_NOT_FOUND
+
+  /accounts/import:
+    post:
+      summary: Import chart-of-accounts rows.
+      x-permission: account.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportAccountsRequest"
+      responses:
+        "201":
+          description: Imported account rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /accounts/{accountId}/disable:
+    post:
+      summary: Disable a chart-of-accounts item.
+      x-permission: account.update
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Account disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          description: ACCOUNT_NOT_FOUND
+
+  /accounts/{accountId}/enable:
+    post:
+      summary: Enable a chart-of-accounts item.
+      x-permission: account.update
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Account enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+        "404":
+          description: ACCOUNT_NOT_FOUND
+
+  /auxiliary-types:
+    post:
+      summary: Create an auxiliary accounting type.
+      x-permission: auxiliary.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAuxiliaryTypeRequest"
+      responses:
+        "201":
+          description: Auxiliary type created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuxiliaryType"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      summary: List auxiliary accounting types.
+      x-permission: account.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Auxiliary type list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuxiliaryType"
+
+  /auxiliary-items:
+    post:
+      summary: Create an auxiliary accounting item.
+      x-permission: auxiliary.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAuxiliaryItemRequest"
+      responses:
+        "201":
+          description: Auxiliary item created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuxiliaryItem"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      summary: List auxiliary accounting items.
+      x-permission: account.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Auxiliary item list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuxiliaryItem"
+
+  /auxiliary-items/{auxiliaryItemId}:
+    patch:
+      summary: Update an auxiliary accounting item.
+      x-permission: auxiliary.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AuxiliaryItemId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                isEnabled:
+                  type: boolean
+                updatedBy:
+                  type: string
+      responses:
+        "200":
+          description: Auxiliary item updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuxiliaryItem"
+    delete:
+      summary: Soft-delete an auxiliary accounting item.
+      x-permission: auxiliary.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AuxiliaryItemId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Auxiliary item disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuxiliaryItem"
+
+  /accounts/{accountId}/auxiliary-requirements:
+    post:
+      summary: Configure required auxiliary accounting dimensions for an account.
+      x-permission: auxiliary.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AccountId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveAccountAuxiliaryRequirementRequest"
+      responses:
+        "201":
+          description: Auxiliary requirement saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountAuxiliaryRequirement"
+    get:
+      summary: List required auxiliary dimensions for an account.
+      x-permission: account.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AccountId"
+      responses:
+        "200":
+          description: Account auxiliary requirements.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountAuxiliaryRequirement"
+
+  /opening-balances:
+    post:
+      summary: Save an account opening balance row.
+      x-permission: opening_balance.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveOpeningBalanceRequest"
+      responses:
+        "201":
+          description: Opening balance saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpeningBalance"
+    get:
+      summary: List opening balance rows.
+      x-permission: opening_balance.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Opening balance list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OpeningBalance"
+
+  /opening-balances/trial-balance:
+    get:
+      summary: Query opening balance trial balance.
+      x-permission: opening_balance.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Opening trial balance result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpeningTrialBalance"
+
   /vouchers:
     post:
       summary: Create a voucher draft.
+      x-permission: voucher.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVoucherRequest"
       responses:
         "201":
           description: Voucher draft created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    get:
+      summary: List vouchers.
+      x-permission: voucher.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Voucher list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Voucher"
+
+  /vouchers/{voucherId}:
+    get:
+      summary: Get voucher detail.
+      x-permission: voucher.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+      responses:
+        "200":
+          description: Voucher detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "404":
+          description: VOUCHER_NOT_FOUND
+    patch:
+      summary: Update a draft or rejected voucher.
+      x-permission: voucher.update_own
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVoucherRequest"
+      responses:
+        "200":
+          description: Voucher updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      summary: Delete a draft workflow voucher by voiding it.
+      description: Phase 1 keeps an audit trail by converting delete into voucher void for draft, submitted, or rejected vouchers.
+      x-permission: voucher.update_own
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Voucher voided by delete.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /vouchers/{voucherId}/submit:
     post:
       summary: Submit a voucher for approval.
+      x-permission: voucher.submit
+      x-risk-level: medium
+      x-agent-allowed: false
       parameters:
         - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Voucher submitted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /vouchers/{voucherId}/approve:
     post:
       summary: Approve a voucher.
+      x-permission: voucher.approve
+      x-risk-level: high
+      x-agent-allowed: false
       parameters:
         - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Voucher approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /vouchers/{voucherId}/reject:
+    post:
+      summary: Reject a submitted voucher.
+      x-permission: voucher.reject
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Voucher rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /vouchers/{voucherId}/void:
+    post:
+      summary: Void a voucher.
+      x-permission: voucher.void
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Voucher voided.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /vouchers/{voucherId}/post:
     post:
       summary: Post an approved voucher into the ledger.
+      x-permission: voucher.post
+      x-risk-level: high
+      x-agent-allowed: false
       parameters:
         - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Voucher posted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostVoucherResponse"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /vouchers/{voucherId}/reverse:
     post:
       summary: Create a reversal voucher.
+      x-permission: voucher.reverse
+      x-risk-level: high
+      x-agent-allowed: false
       parameters:
         - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "201":
           description: Reversal voucher created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /vouchers/{voucherId}/copy:
+    post:
+      summary: Copy a voucher into a new draft.
+      x-permission: voucher.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CopyVoucherRequest"
+      responses:
+        "201":
+          description: Voucher draft copied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "404":
+          description: VOUCHER_NOT_FOUND
+
+  /posting/post-batch:
+    post:
+      summary: Post multiple approved vouchers into the ledger.
+      x-permission: voucher.post
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePostingBatchRequest"
+      responses:
+        "201":
+          description: Posting batch completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostingBatch"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /posting/post-voucher/{voucherId}:
+    post:
+      summary: Post one approved voucher into the ledger.
+      x-permission: voucher.post
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Voucher posted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostVoucherResponse"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /posting/batches:
+    get:
+      summary: List posting batches.
+      x-permission: voucher.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Posting batch list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PostingBatch"
+
+  /posting/batches/{postingBatchId}:
+    get:
+      summary: Get posting batch detail.
+      x-permission: voucher.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/PostingBatchId"
+      responses:
+        "200":
+          description: Posting batch detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostingBatch"
+        "404":
+          description: POSTING_BATCH_NOT_FOUND
+
+  /vouchers/{voucherId}/status-logs:
+    get:
+      summary: Query formal voucher state transition logs.
+      x-permission: voucher.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+      responses:
+        "200":
+          description: Voucher status logs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VoucherStatusLog"
+
+  /vouchers/{voucherId}/attachments:
+    get:
+      summary: List attachments linked to a voucher.
+      x-permission: voucher.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/VoucherId"
+      responses:
+        "200":
+          description: Voucher attachments.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Attachment"
+
+  /ledger/general-ledger:
+    get:
+      summary: Query summarized general ledger rows with linked entries.
+      x-permission: ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: General ledger.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeneralLedger"
+
   /ledger/trial-balance:
     get:
       summary: Query trial balance.
+      x-permission: ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
       responses:
         "200":
           description: Trial balance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrialBalance"
+
   /ledger/detail-ledger:
     get:
       summary: Query detail ledger.
+      x-permission: ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
       responses:
         "200":
           description: Detail ledger.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JournalEntry"
+
+  /ledger/sub-ledger:
+    get:
+      summary: Query sub-ledger journal entries.
+      x-permission: ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Sub-ledger rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JournalEntry"
+
+  /ledger/account-balances:
+    get:
+      summary: Query account period balances.
+      x-permission: ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Account period balances.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountPeriodBalance"
+
+  /reports/account-balances:
+    get:
+      summary: Query account balance report.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Account balance report rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccountPeriodBalance"
+
+  /reports/trial-balance:
+    get:
+      summary: Query trial balance report.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Trial balance report.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrialBalance"
+
+  /audit-logs:
+    get:
+      summary: Query audit logs.
+      x-permission: audit_log.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Audit log list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditLog"
+
+  /attachments/upload:
+    post:
+      summary: Upload an attachment and return its central status.
+      x-permission: attachment.upload
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadAttachmentRequest"
+      responses:
+        "201":
+          description: Attachment uploaded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attachment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /attachments/{attachmentId}:
+    get:
+      summary: Get attachment metadata.
+      x-permission: voucher.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AttachmentId"
+      responses:
+        "200":
+          description: Attachment metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attachment"
+    delete:
+      summary: Delete an attachment unless retention or posted-voucher rules block deletion.
+      description: Posted voucher attachments cannot be deleted; retained attachments cannot be deleted before retentionUntil; append a supplement attachment instead.
+      x-permission: attachment.delete
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AttachmentId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Attachment marked deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attachment"
+        "409":
+          description: POSTED_VOUCHER_ATTACHMENT_DELETE_BLOCKED or ATTACHMENT_RETENTION_DELETE_BLOCKED
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /attachments/{attachmentId}/status:
+    get:
+      summary: Get current attachment sync status.
+      x-permission: voucher.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AttachmentId"
+      responses:
+        "200":
+          description: Attachment status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentStatus"
+
+  /attachments/{attachmentId}/content:
+    get:
+      summary: Get stored attachment content as base64 for download or preview.
+      x-permission: voucher.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AttachmentId"
+      responses:
+        "200":
+          description: Stored attachment content.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentContent"
+        "404":
+          description: ATTACHMENT_CONTENT_NOT_FOUND
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /attachment-links:
+    post:
+      summary: Link an available attachment to a voucher or other business object.
+      x-permission: attachment.upload
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAttachmentLinkRequest"
+      responses:
+        "201":
+          description: Attachment link created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentLink"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /ledger/bank-reconciliations:
     post:
       summary: Create a bank reconciliation run.
+      x-permission: bank_reconciliation.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBankReconciliationRequest"
       responses:
         "201":
           description: Bank reconciliation run created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankReconciliation"
+
+  /bank/reconcile:
+    post:
+      summary: Create a bank reconciliation run.
+      x-permission: bank_reconciliation.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBankReconciliationRequest"
+      responses:
+        "201":
+          description: Bank reconciliation run created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankReconciliation"
+
+  /bank/reconcile/auto:
+    post:
+      summary: Create a bank reconciliation run and match it automatically.
+      x-permission: bank_reconciliation.match
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBankReconciliationRequest"
+      responses:
+        "200":
+          description: Bank reconciliation auto-match result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankReconciliationMatchResult"
+
+  /ledger/bank-statements:
+    get:
+      summary: List imported bank statement rows.
+      x-permission: ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Imported bank statement rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BankStatement"
+
+  /bank/statements:
+    get:
+      summary: List imported bank statement rows.
+      x-permission: ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Imported bank statement rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BankStatement"
+    post:
+      summary: Import bank statement rows for reconciliation.
+      x-permission: bank_reconciliation.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportBankStatementsRequest"
+      responses:
+        "201":
+          description: Bank statement rows imported.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BankStatement"
+
+  /ledger/bank-statements/import:
+    post:
+      summary: Import bank statement rows for reconciliation.
+      x-permission: bank_reconciliation.create
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportBankStatementsRequest"
+      responses:
+        "201":
+          description: Bank statement rows imported.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BankStatement"
+
   /ledger/bank-reconciliations/{reconciliationId}/match:
     post:
-      summary: Match bank statement rows with cash/bank journal entries.
+      summary: Match bank statement rows with cash or bank journal entries.
+      x-permission: bank_reconciliation.match
+      x-risk-level: medium
+      x-agent-allowed: false
       parameters:
         - name: reconciliationId
           in: path
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Bank reconciliation match result.
-  /document-settings/document-types:
-    post:
-      summary: Create or update a business document type.
-      responses:
-        "201":
-          description: Document type saved.
-  /document-settings/numbering-rules:
-    post:
-      summary: Create or update a document numbering rule.
-      responses:
-        "201":
-          description: Numbering rule saved.
-  /procure-to-pay/purchase-orders:
-    post:
-      summary: Create a purchase order.
-      responses:
-        "201":
-          description: Purchase order created.
-  /procure-to-pay/payments:
-    post:
-      summary: Create a supplier payment draft.
-      responses:
-        "201":
-          description: Payment draft created.
-  /order-to-cash/sales-orders:
-    post:
-      summary: Create a sales order.
-      responses:
-        "201":
-          description: Sales order created.
-  /order-to-cash/receipts:
-    post:
-      summary: Create a customer receipt draft.
-      responses:
-        "201":
-          description: Receipt draft created.
-  /inventory/stock-movements:
-    post:
-      summary: Create an inventory movement.
-      responses:
-        "201":
-          description: Stock movement created.
-  /payroll/runs:
-    post:
-      summary: Create a payroll run.
-      responses:
-        "201":
-          description: Payroll run created.
-  /fixed-assets/depreciation-runs:
-    post:
-      summary: Create a depreciation run.
-      responses:
-        "201":
-          description: Depreciation run created.
-  /reports/runs:
-    post:
-      summary: Run a report template.
-      responses:
-        "201":
-          description: Report run created.
-  /reports/templates:
-    post:
-      summary: Create a report template with cell formulas.
-      responses:
-        "201":
-          description: Report template created.
-  /reports/runs/{reportRunId}/export:
-    post:
-      summary: Export a report run to Excel or PDF.
-      parameters:
-        - name: reportRunId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Report export created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankReconciliationMatchResult"
+
   /ai/voucher-suggestions:
     post:
       summary: Generate voucher draft suggestions from evidence.
+      x-permission: ai.generate_draft
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAiVoucherSuggestionRequest"
       responses:
         "201":
           description: AI suggestion created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiVoucherSuggestion"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /ai/voucher-drafts:
+    post:
+      summary: Generate an AI voucher draft suggestion.
+      x-permission: ai.generate_draft
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAiVoucherSuggestionRequest"
+      responses:
+        "201":
+          description: AI draft suggestion created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiVoucherSuggestion"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /ai/voucher-drafts/{aiSuggestionId}:
+    get:
+      summary: Get an AI voucher draft suggestion.
+      x-permission: ai.generate_draft
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AiSuggestionId"
+      responses:
+        "200":
+          description: AI draft suggestion.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiVoucherSuggestion"
+
+  /ai/voucher-drafts/{aiSuggestionId}/convert-to-voucher:
+    post:
+      summary: Convert a reviewed AI draft suggestion into a formal voucher draft.
+      x-permission: voucher.create
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AiSuggestionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvertAiVoucherSuggestionRequest"
+      responses:
+        "201":
+          description: Voucher draft created from the reviewed AI suggestion.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /ai/voucher-suggestions/{aiSuggestionId}/convert-to-voucher:
+    post:
+      summary: Convert a reviewed AI suggestion into a formal voucher draft.
+      x-permission: voucher.create
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AiSuggestionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvertAiVoucherSuggestionRequest"
+      responses:
+        "201":
+          description: Voucher draft created from the reviewed suggestion.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /agent-actions:
     post:
       summary: Create an Agent action in dry-run mode.
+      x-permission: agent_action.create
+      x-risk-level: high
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentActionRequest"
       responses:
         "201":
           description: Agent action created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
   /agent-actions/{agentActionId}/approve:
     post:
       summary: Approve a high-risk Agent action.
+      x-permission: agent_action.approve
+      x-risk-level: high
+      x-agent-allowed: false
       parameters:
         - $ref: "#/components/parameters/AgentActionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Agent action approved.
+
   /agent-actions/{agentActionId}/execute:
     post:
       summary: Execute an approved Agent action.
+      x-permission: agent_action.execute
+      x-risk-level: high
+      x-agent-allowed: false
       parameters:
         - $ref: "#/components/parameters/AgentActionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Agent action executed.
+
   /close/checklist:
     post:
       summary: Run period-end close checklist.
+      x-permission: period.close
+      x-risk-level: high
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200":
           description: Close checklist result.
+
+  /close/profit-loss-carry-forward:
+    post:
+      summary: Generate a profit and loss carry-forward voucher draft for period close.
+      description: Generates a draft voucher from posted revenue and expense activity; the draft must still be submitted, approved, and posted before the period can close.
+      x-permission: period.close
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProfitLossCarryForwardRequest"
+      responses:
+        "201":
+          description: Profit and loss carry-forward voucher draft created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /posting/period-end/transfer-pl:
+    post:
+      summary: Generate a profit and loss carry-forward voucher draft for period close.
+      description: Plan-compatible path for period-end profit and loss transfer; the draft must still pass normal voucher workflow.
+      x-permission: period.close
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProfitLossCarryForwardRequest"
+      responses:
+        "201":
+          description: Profit and loss carry-forward voucher draft created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Voucher"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
 components:
   parameters:
+    AccountSetId:
+      name: accountSetId
+      in: path
+      required: true
+      schema:
+        type: string
+    PeriodId:
+      name: periodId
+      in: path
+      required: true
+      schema:
+        type: string
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+    AuxiliaryItemId:
+      name: auxiliaryItemId
+      in: path
+      required: true
+      schema:
+        type: string
     VoucherId:
       name: voucherId
+      in: path
+      required: true
+      schema:
+        type: string
+    PostingBatchId:
+      name: postingBatchId
       in: path
       required: true
       schema:
@@ -212,3 +1934,1405 @@ components:
       required: true
       schema:
         type: string
+    AttachmentId:
+      name: attachmentId
+      in: path
+      required: true
+      schema:
+        type: string
+    AiSuggestionId:
+      name: aiSuggestionId
+      in: path
+      required: true
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Required for write operations. Replays with the same key return the first committed result.
+      schema:
+        type: string
+        minLength: 12
+
+  responses:
+    BadRequest:
+      description: Validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Business state conflict.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      required: [accessToken, tokenType, user]
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          enum: [Bearer]
+        user:
+          $ref: "#/components/schemas/AuthUser"
+
+    AuthUser:
+      type: object
+      required: [id, username, name, role]
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+        roleId:
+          type: string
+
+    Permission:
+      type: object
+      required: [code, description]
+      properties:
+        code:
+          type: string
+        description:
+          type: string
+
+    DeploymentConfig:
+      type: object
+      required: [deploymentMode, platformStore, database, jwt, attachmentStorage]
+      properties:
+        deploymentMode:
+          type: string
+        platformStore:
+          type: string
+        database:
+          type: object
+          required: [provider, configured, urlPresent]
+          properties:
+            provider:
+              type: string
+              enum: [unconfigured, sqlite, postgresql, mysql, unknown]
+            configured:
+              type: boolean
+            urlPresent:
+              type: boolean
+        jwt:
+          type: object
+          required: [secretConfigured, previousSecretsPresent, rotation]
+          properties:
+            secretConfigured:
+              type: boolean
+            previousSecretsPresent:
+              type: boolean
+            rotation:
+              type: object
+              required: [required, configured, approvedByPresent, expiresAt, monitorRefPresent, rollbackRefPresent]
+              properties:
+                required:
+                  type: boolean
+                configured:
+                  type: boolean
+                approvedByPresent:
+                  type: boolean
+                expiresAt:
+                  type: string
+                  nullable: true
+                  format: date-time
+                monitorRefPresent:
+                  type: boolean
+                rollbackRefPresent:
+                  type: boolean
+        attachmentStorage:
+          type: object
+          required: [provider, configured, rootPresent, external]
+          properties:
+            provider:
+              type: string
+              enum: [local, external]
+            configured:
+              type: boolean
+            rootPresent:
+              type: boolean
+            external:
+              type: object
+              required: [endpointPresent, bucketPresent, credentialRefPresent, retentionDaysConfigured, retentionDays]
+              properties:
+                endpointPresent:
+                  type: boolean
+                bucketPresent:
+                  type: boolean
+                credentialRefPresent:
+                  type: boolean
+                retentionDaysConfigured:
+                  type: boolean
+                retentionDays:
+                  type: integer
+                  nullable: true
+                  minimum: 1
+
+    Role:
+      type: object
+      required: [id, name, permissionCodes]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        permissionCodes:
+          type: array
+          items:
+            type: string
+
+    CreateRoleRequest:
+      type: object
+      required: [name, permissionCodes]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        permissionCodes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          createdBy:
+            type: string
+
+    UpdateRoleRequest:
+      type: object
+      required: [name, permissionCodes]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        permissionCodes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        updatedBy:
+          type: string
+
+    CreateUserRequest:
+      type: object
+      required: [username, password, roleId]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+        name:
+          type: string
+        roleId:
+          type: string
+          createdBy:
+            type: string
+
+    DeleteUserRequest:
+      type: object
+      properties:
+        deletedBy:
+          type: string
+
+    CreateAccountSetRequest:
+      type: object
+      required: [code, name, companyName, baseCurrency, accountingStandard, startYear, startPeriod]
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        companyName:
+          type: string
+        baseCurrency:
+          type: string
+          example: CNY
+        accountingStandard:
+          type: string
+        startYear:
+          type: integer
+        startPeriod:
+          type: integer
+          minimum: 1
+          maximum: 12
+
+    UpdateAccountSetRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        companyName:
+          type: string
+        baseCurrency:
+          type: string
+          example: CNY
+        accountingStandard:
+          type: string
+        startYear:
+          type: integer
+        startPeriod:
+          type: integer
+          minimum: 1
+          maximum: 12
+        updatedBy:
+          type: string
+
+    AccountSet:
+      type: object
+      required: [id, code, name, companyName, baseCurrency, accountingStandard, startYear, startPeriod, status]
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        companyName:
+          type: string
+        baseCurrency:
+          type: string
+        accountingStandard:
+          type: string
+        startYear:
+          type: integer
+        startPeriod:
+          type: integer
+        status:
+          type: string
+          enum: [draft, enabled, disabled]
+
+    GrantAccountSetUserRequest:
+      type: object
+      required: [actorId]
+      properties:
+        actorId:
+          type: string
+        grantedBy:
+          type: string
+
+    AccountSetUserGrant:
+      type: object
+      required: [id, accountSetId, actorId, grantedBy, grantedAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        actorId:
+          type: string
+        grantedBy:
+          type: string
+        grantedAt:
+          type: string
+          format: date-time
+
+    AccountingPeriod:
+      type: object
+      required: [id, accountSetId, fiscalYear, periodNo, status, isCurrent]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [unopened, open, closed, locked]
+        isCurrent:
+          type: boolean
+
+    CreateAccountCodeRuleRequest:
+      type: object
+      required: [segments]
+      properties:
+        segments:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            minimum: 1
+
+    AccountCodeRule:
+      type: object
+      required: [id, segments, allowedLengths]
+      properties:
+        id:
+          type: string
+        segments:
+          type: array
+          items:
+            type: integer
+        allowedLengths:
+          type: array
+          items:
+            type: integer
+
+    CreateAccountRequest:
+      type: object
+      required: [accountSetId, code, name, accountType, normalBalance]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        accountType:
+          type: string
+          enum: [asset, liability, equity, cost, expense, revenue]
+        normalBalance:
+          type: string
+          enum: [debit, credit]
+        parentId:
+          type: string
+        isCash:
+          type: boolean
+        isBank:
+          type: boolean
+        isLeaf:
+          type: boolean
+        requiredAuxiliaries:
+          type: array
+          items:
+            type: string
+
+    ImportAccountsRequest:
+      type: object
+      required: [accountSetId, rows]
+      properties:
+        accountSetId:
+          type: string
+        importedBy:
+          type: string
+        rows:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ImportAccountRow"
+
+    ImportAccountRow:
+      type: object
+      required: [code, name, accountType, normalBalance]
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        accountType:
+          type: string
+          enum: [asset, liability, equity, cost, expense, revenue]
+        normalBalance:
+          type: string
+          enum: [debit, credit]
+        parentId:
+          type: string
+        isCash:
+          type: boolean
+        isBank:
+          type: boolean
+        isLeaf:
+          type: boolean
+        allowManualEntry:
+          type: boolean
+        requiredAuxiliaries:
+          type: array
+          items:
+            type: string
+
+    UpdateAccountRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        accountType:
+          type: string
+          enum: [asset, liability, equity, cost, expense, revenue]
+        normalBalance:
+          type: string
+          enum: [debit, credit]
+        parentId:
+          type: string
+        isCash:
+          type: boolean
+        isBank:
+          type: boolean
+        isLeaf:
+          type: boolean
+        isEnabled:
+          type: boolean
+        allowManualEntry:
+          type: boolean
+        requiredAuxiliaries:
+          type: array
+          items:
+            type: string
+        updatedBy:
+          type: string
+
+    Account:
+      type: object
+      required: [id, code, name, accountType, normalBalance, isLeaf, isEnabled, allowManualEntry, requiredAuxiliaries]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        accountType:
+          type: string
+        normalBalance:
+          type: string
+          enum: [debit, credit]
+        parentId:
+          type: string
+        isCash:
+          type: boolean
+        isBank:
+          type: boolean
+        isLeaf:
+          type: boolean
+        isEnabled:
+          type: boolean
+        allowManualEntry:
+          type: boolean
+        requiredAuxiliaries:
+          type: array
+          items:
+            type: string
+
+    AccountTreeNode:
+      allOf:
+        - $ref: "#/components/schemas/Account"
+        - type: object
+          required: [children]
+          properties:
+            children:
+              type: array
+              items:
+                $ref: "#/components/schemas/AccountTreeNode"
+
+    CreateAuxiliaryTypeRequest:
+      type: object
+      required: [accountSetId, code, name]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        createdBy:
+          type: string
+
+    AuxiliaryType:
+      type: object
+      required: [id, accountSetId, code, name, category, isEnabled]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        isEnabled:
+          type: boolean
+
+    CreateAuxiliaryItemRequest:
+      type: object
+      required: [accountSetId, auxiliaryTypeId, code, name]
+      properties:
+        accountSetId:
+          type: string
+        auxiliaryTypeId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        createdBy:
+          type: string
+
+    AuxiliaryItem:
+      type: object
+      required: [id, accountSetId, auxiliaryTypeId, auxiliaryTypeCode, code, name, isEnabled]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        auxiliaryTypeId:
+          type: string
+        auxiliaryTypeCode:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        isEnabled:
+          type: boolean
+
+    SaveAccountAuxiliaryRequirementRequest:
+      type: object
+      required: [auxiliaryTypeId]
+      properties:
+        auxiliaryTypeId:
+          type: string
+        required:
+          type: boolean
+        configuredBy:
+          type: string
+
+    AccountAuxiliaryRequirement:
+      type: object
+      required: [id, accountCode, auxiliaryTypeId, auxiliaryTypeCode, required]
+      properties:
+        id:
+          type: string
+        accountCode:
+          type: string
+        accountId:
+          type: string
+        auxiliaryTypeId:
+          type: string
+        auxiliaryTypeCode:
+          type: string
+        auxiliaryTypeName:
+          type: string
+        required:
+          type: boolean
+
+    SaveOpeningBalanceRequest:
+      type: object
+      required: [accountCode, fiscalYear, periodNo]
+      properties:
+        accountCode:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        openingDebit:
+          type: number
+          minimum: 0
+        openingCredit:
+          type: number
+          minimum: 0
+        enteredBy:
+          type: string
+
+    OpeningBalance:
+      type: object
+      required: [id, accountCode, accountName, fiscalYear, periodNo, openingDebit, openingCredit]
+      properties:
+        id:
+          type: string
+        accountCode:
+          type: string
+        accountName:
+          type: string
+        normalBalance:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        openingDebit:
+          type: number
+        openingCredit:
+          type: number
+
+    OpeningTrialBalance:
+      type: object
+      required: [rows, totals]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/OpeningBalance"
+        totals:
+          type: object
+          required: [openingDebit, openingCredit, difference, isBalanced]
+          properties:
+            openingDebit:
+              type: number
+            openingCredit:
+              type: number
+            difference:
+              type: number
+            isBalanced:
+              type: boolean
+
+    CreateVoucherRequest:
+      type: object
+      required: [accountSetId, fiscalYear, periodNo, voucherDate, lines]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        voucherDate:
+          type: string
+          format: date
+        sourceType:
+          type: string
+          enum: [manual, ai, imported, period_close]
+        lines:
+          type: array
+          minItems: 2
+          items:
+            $ref: "#/components/schemas/VoucherLine"
+
+    UpdateVoucherRequest:
+      type: object
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+          description: Current voucher revision expected by the client for optimistic locking.
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        voucherDate:
+          type: string
+          format: date
+        sourceType:
+          type: string
+          enum: [manual, ai, imported, period_close]
+        updatedBy:
+          type: string
+        lines:
+          type: array
+          minItems: 2
+          items:
+            $ref: "#/components/schemas/VoucherLine"
+
+    CopyVoucherRequest:
+      type: object
+      properties:
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        voucherDate:
+          type: string
+          format: date
+        copiedBy:
+          type: string
+
+    Voucher:
+      type: object
+      required: [id, accountSetId, fiscalYear, periodNo, voucherNo, voucherDate, status, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        voucherNo:
+          type: string
+        voucherDate:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [draft, submitted, approved, rejected, posted, voided]
+        revision:
+          type: integer
+          minimum: 1
+        sourceType:
+          type: string
+          enum: [manual, ai, imported, period_close]
+        aiDraftId:
+          type: string
+        attachmentCount:
+          type: integer
+          minimum: 0
+        createdBy:
+          type: string
+        submittedBy:
+          type: string
+        approvedBy:
+          type: string
+        postedBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/VoucherLine"
+
+    VoucherLine:
+      type: object
+      required: [summary, accountCode, debit, credit]
+      properties:
+        lineNo:
+          type: integer
+        summary:
+          type: string
+        accountCode:
+          type: string
+        debit:
+          type: number
+          minimum: 0
+        credit:
+          type: number
+          minimum: 0
+        auxiliaryRefs:
+          type: array
+          items:
+            type: string
+        auxiliaries:
+          type: object
+          additionalProperties:
+            type: string
+
+    VoucherStatusLog:
+      type: object
+      required: [id, voucherId, action, toStatus, actorId, createdAt]
+      properties:
+        id:
+          type: string
+        voucherId:
+          type: string
+        action:
+          type: string
+          enum: [create, submit, approve, reject, post, void]
+        fromStatus:
+          type: string
+          nullable: true
+        toStatus:
+          type: string
+          enum: [draft, submitted, approved, rejected, posted, voided]
+        actorId:
+          type: string
+        reason:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    UploadAttachmentRequest:
+      type: object
+      required: [filename, contentType, byteSize]
+      properties:
+        filename:
+          type: string
+        contentType:
+          type: string
+        byteSize:
+          type: integer
+          minimum: 1
+        checksum:
+          type: string
+          description: SHA-256 checksum. When contentBase64 is supplied the API verifies or calculates it; external metadata-only uploads must provide a sha256: checksum.
+        contentBase64:
+          type: string
+          format: byte
+          description: Optional base64-encoded binary content for local attachment storage. When AIS_ATTACHMENT_STORAGE_PROVIDER=external, callers must upload the object externally and submit storageProvider/storageKey/checksum metadata; runtime deployments verify the target object with HEAD before accepting metadata.
+        storageProvider:
+          type: string
+          enum: [local, external]
+          description: Explicit storage provider for metadata-only uploads; external mode requires external.
+        storageKey:
+          type: string
+          description: External storage key for metadata-only uploads.
+        uploadedBy:
+          type: string
+
+    Attachment:
+      type: object
+      required: [id, filename, contentType, byteSize, storageProvider, storageKey, status, uploadedBy, uploadedAt]
+      properties:
+        id:
+          type: string
+        filename:
+          type: string
+        contentType:
+          type: string
+        byteSize:
+          type: integer
+        checksum:
+          type: string
+        storageProvider:
+          type: string
+          enum: [local, external]
+        storageKey:
+          type: string
+        status:
+          type: string
+          enum: [uploading, available, failed, deleted]
+        uploadedBy:
+          type: string
+        uploadedAt:
+          type: string
+          format: date-time
+        retentionUntil:
+          type: string
+          nullable: true
+        deletedBy:
+          type: string
+        deletedAt:
+          type: string
+          format: date-time
+
+    AttachmentContent:
+      type: object
+      required: [id, filename, contentType, byteSize, contentBase64]
+      properties:
+        id:
+          type: string
+        filename:
+          type: string
+        contentType:
+          type: string
+        byteSize:
+          type: integer
+        checksum:
+          type: string
+        contentBase64:
+          type: string
+          format: byte
+
+    AttachmentStatus:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [uploading, available, failed, deleted]
+
+    CreateAttachmentLinkRequest:
+      type: object
+      required: [attachmentId, objectType, objectId]
+      properties:
+        attachmentId:
+          type: string
+        objectType:
+          type: string
+          enum: [voucher, account_set, source_document]
+        objectId:
+          type: string
+        linkedBy:
+          type: string
+
+    AttachmentLink:
+      type: object
+      required: [id, attachmentId, objectType, objectId, linkedBy, linkedAt]
+      properties:
+        id:
+          type: string
+        attachmentId:
+          type: string
+        objectType:
+          type: string
+        objectId:
+          type: string
+        linkedBy:
+          type: string
+        linkedAt:
+          type: string
+          format: date-time
+
+    JournalEntry:
+      type: object
+      required: [id, accountSetId, voucherId, fiscalYear, periodNo, accountCode, debit, credit]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        voucherId:
+          type: string
+        voucherLineNo:
+          type: integer
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        entryDate:
+          type: string
+          format: date
+        accountCode:
+          type: string
+        summary:
+          type: string
+        debit:
+          type: number
+        credit:
+          type: number
+        auxiliarySnapshot:
+          type: object
+          additionalProperties:
+            type: string
+
+    GeneralLedger:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            type: object
+            required: [accountCode, accountName, periodDebit, periodCredit, entries]
+            properties:
+              accountCode:
+                type: string
+              accountName:
+                type: string
+              periodDebit:
+                type: number
+              periodCredit:
+                type: number
+              entries:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JournalEntry"
+
+    AccountPeriodBalance:
+      type: object
+      required: [accountCode, accountName, normalBalance, periodDebit, periodCredit]
+      properties:
+        accountCode:
+          type: string
+        accountName:
+          type: string
+        normalBalance:
+          type: string
+          enum: [debit, credit]
+        periodDebit:
+          type: number
+        periodCredit:
+          type: number
+
+    PostVoucherResponse:
+      type: object
+      required: [voucher, journalEntries]
+      properties:
+        voucher:
+          $ref: "#/components/schemas/Voucher"
+        journalEntries:
+          type: array
+          items:
+            $ref: "#/components/schemas/JournalEntry"
+        auditLog:
+          $ref: "#/components/schemas/AuditLog"
+
+    CreatePostingBatchRequest:
+      type: object
+      required: [accountSetId, fiscalYear, periodNo, voucherIds]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        voucherIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        postedBy:
+          type: string
+
+    PostingBatch:
+      type: object
+      required: [id, accountSetId, fiscalYear, periodNo, voucherIds, successCount, failedCount, status, postedBy, results]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        voucherIds:
+          type: array
+          items:
+            type: string
+        successCount:
+          type: integer
+        failedCount:
+          type: integer
+        status:
+          type: string
+          enum: [success, partial_failed, failed]
+        postedBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        results:
+          type: array
+          items:
+            type: object
+            required: [voucherId, status]
+            properties:
+              voucherId:
+                type: string
+              status:
+                type: string
+                enum: [success, failed]
+              journalEntryCount:
+                type: integer
+              error:
+                type: string
+
+    TrialBalance:
+      type: object
+      required: [rows, totals]
+      properties:
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              accountCode:
+                type: string
+              accountName:
+                type: string
+              periodDebit:
+                type: number
+              periodCredit:
+                type: number
+        totals:
+          type: object
+          required: [debit, credit, difference]
+          properties:
+            debit:
+              type: number
+            credit:
+              type: number
+            difference:
+              type: number
+
+    ImportBankStatementsRequest:
+      type: object
+      required: [accountSetId, bankAccountCode, rows]
+      properties:
+        accountSetId:
+          type: string
+        bankAccountCode:
+          type: string
+        importedBy:
+          type: string
+        rows:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/BankStatementImportRow"
+
+    BankStatementImportRow:
+      type: object
+      required: [transactionDate, description, amount]
+      properties:
+        transactionDate:
+          type: string
+          format: date
+        description:
+          type: string
+        amount:
+          type: number
+        balance:
+          type: number
+
+    BankStatement:
+      type: object
+      required: [id, accountSetId, bankAccountCode, transactionDate, description, amount, status]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        bankAccountId:
+          type: string
+        bankAccountCode:
+          type: string
+        transactionDate:
+          type: string
+          format: date
+        description:
+          type: string
+        amount:
+          type: number
+        balance:
+          type: number
+        status:
+          type: string
+          enum: [unreconciled, reconciled]
+
+    CreateBankReconciliationRequest:
+      type: object
+      required: [accountSetId, fiscalYear, periodNo]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+
+    BankReconciliation:
+      type: object
+      required: [id, accountSetId, fiscalYear, periodNo, status, createdBy]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [created, matched, unmatched]
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    BankReconciliationMatch:
+      type: object
+      required: [bankStatementId, journalEntryId, amount, matchedBy]
+      properties:
+        bankStatementId:
+          type: string
+        journalEntryId:
+          type: string
+        amount:
+          type: number
+        matchedBy:
+          type: string
+
+    BankReconciliationMatchResult:
+      allOf:
+        - $ref: "#/components/schemas/BankReconciliation"
+        - type: object
+          required: [matchedCount, matches]
+          properties:
+            matchedCount:
+              type: integer
+            matches:
+              type: array
+              items:
+                $ref: "#/components/schemas/BankReconciliationMatch"
+
+    CreateProfitLossCarryForwardRequest:
+      type: object
+      required: [accountSetId, fiscalYear, periodNo, voucherDate, profitLossAccountCode]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+          minimum: 1
+          maximum: 12
+        voucherDate:
+          type: string
+          format: date
+        profitLossAccountCode:
+          type: string
+          description: Equity account used to receive current-period profit or loss.
+        createdBy:
+          type: string
+
+    CreateAiVoucherSuggestionRequest:
+      type: object
+      required: [accountSetId, dryRun, content]
+      properties:
+        accountSetId:
+          type: string
+        dryRun:
+          type: boolean
+          const: true
+        content:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        attachmentIds:
+          type: array
+          description: Uploaded attachment ids used as AI evidence. Attachments must be available.
+          items:
+            type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        voucherDate:
+          type: string
+          format: date
+        requestedBy:
+          type: string
+
+    ConvertAiVoucherSuggestionRequest:
+      type: object
+      required: [reviewedBy]
+      properties:
+        reviewedBy:
+          type: string
+
+    AiVoucherSuggestion:
+      type: object
+      required: [id, dryRun, approvalRequired, riskLevel, confidence, evidenceRefs]
+      properties:
+        id:
+          type: string
+        dryRun:
+          type: boolean
+        approvalRequired:
+          type: boolean
+        riskLevel:
+          type: string
+          enum: [low, medium, high]
+        confidence:
+          type: number
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        attachmentIds:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        draft:
+          $ref: "#/components/schemas/Voucher"
+        convertedVoucherId:
+          type: string
+        reviewedBy:
+          type: string
+
+    CreateAgentActionRequest:
+      type: object
+      required: [toolName, dryRun, evidenceRefs]
+      properties:
+        toolName:
+          type: string
+        dryRun:
+          type: boolean
+          const: true
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        payload:
+          type: object
+          additionalProperties: true
+
+    AgentAction:
+      type: object
+      required: [id, toolName, dryRun, riskLevel, status, evidenceRefs]
+      properties:
+        id:
+          type: string
+        toolName:
+          type: string
+        dryRun:
+          type: boolean
+        riskLevel:
+          type: string
+          enum: [low, medium, high]
+        status:
+          type: string
+          enum: [drafted, approval_required, approved, executed, rejected]
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+
+    AuditLog:
+      type: object
+      required: [id, actorId, action, objectType, objectId, occurredAt]
+      properties:
+        id:
+          type: string
+        actorId:
+          type: string
+        action:
+          type: string
+        objectType:
+          type: string
+        objectId:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [code, message, traceId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        fieldErrors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+        traceId:
+          type: string
+        nextAction:
+          type: string

@@ -1,0 +1,51 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const migrationSql = readFileSync(
+  new URL("../prisma/migrations/20260607120000_phase1_init/migration.sql", import.meta.url)
+);
+const migrationText = migrationSql.toString("utf8");
+const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
+
+test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
+  assert.notDeepEqual([...migrationSql.subarray(0, 2)], [0xff, 0xfe], "migration.sql must not be UTF-16 LE.");
+  assert.match(migrationText, /^﻿?-- CreateTable/, "migration.sql must start with SQL text.");
+});
+
+test("Phase 1 migration creates required accounting tables", () => {
+  const requiredTables = [
+    "AccountSet",
+    "User",
+    "Role",
+    "Permission",
+    "AccountingPeriod",
+    "ChartOfAccount",
+    "AuxiliaryType",
+    "AuxiliaryItem",
+    "Voucher",
+    "VoucherLine",
+    "VoucherStatusLog",
+    "Attachment",
+    "PostingBatch",
+    "JournalEntry",
+    "AccountPeriodBalance",
+    "BankStatement",
+    "AuditLog"
+  ];
+
+  for (const table of requiredTables) {
+    assert.match(migrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created by migration.sql.`);
+  }
+
+  assert.match(migrationText, /"revision" INTEGER NOT NULL DEFAULT 1/, "Voucher revision must be persisted for optimistic locking.");
+});
+
+test("Phase 1 migration lock targets SQLite", () => {
+  assert.match(migrationLock, /provider = "sqlite"/);
+});
+
+test("User persistence stores password hashes instead of plaintext passwords", () => {
+  assert.match(migrationText, /"passwordHash" TEXT NOT NULL/, "User table must persist passwordHash.");
+  assert.doesNotMatch(migrationText, /"password" TEXT NOT NULL/, "User table must not persist plaintext password.");
+});
