@@ -90,7 +90,10 @@ const DEFAULT_PERMISSION_CODES = [
   "inventory_item.manage",
   "bom.manage",
   "warehouse.manage",
-  "inventory_balance.manage"
+  "inventory_balance.manage",
+  "inventory_movement.manage",
+  "inventory_transfer.manage",
+  "stock_count.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -603,6 +606,18 @@ function permissionFor(request) {
   if (segments[0] === "inventory-opening-balances") {
     return "inventory_balance.manage";
   }
+  if (segments[0] === "inventory-movements") {
+    return "inventory_movement.manage";
+  }
+  if (segments[0] === "inventory-balances" || segments[0] === "inventory-cost-layers") {
+    return "inventory_balance.manage";
+  }
+  if (segments[0] === "inventory-transfers") {
+    return "inventory_transfer.manage";
+  }
+  if (segments[0] === "stock-counts") {
+    return "stock_count.manage";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -725,6 +740,11 @@ function createState(options = {}) {
     boms: new Map(),
     warehouses: new Map(),
     inventoryOpeningBalances: new Map(),
+    inventoryMovements: new Map(),
+    inventoryBalances: new Map(),
+    inventoryCostLayers: new Map(),
+    inventoryTransfers: new Map(),
+    stockCounts: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1142,6 +1162,412 @@ function buildInventoryOpeningTrialBalance(state, accountSetId, filters = {}) {
     totalQuantity,
     totalAmount,
     rows
+  };
+}
+
+function roundQuantity(value) {
+  return Number(Number(value ?? 0).toFixed(6));
+}
+
+function roundAmount(value) {
+  return Number(Number(value ?? 0).toFixed(2));
+}
+
+function inventoryDimensionKey({ accountSetId, itemId, warehouseId, locationId = null, batchNo = null }) {
+  return [accountSetId, itemId, warehouseId, locationId ?? "", batchNo ?? ""].join("|");
+}
+
+function findWarehouseLocation(warehouse, locationId) {
+  if (!locationId) return null;
+  return warehouse.locations.find((location) => location.id === locationId || location.code === locationId) ?? null;
+}
+
+function getInventoryBalance(state, { accountSetId, item, warehouse, location = null, batchNo = null }) {
+  const key = inventoryDimensionKey({ accountSetId, itemId: item.id, warehouseId: warehouse.id, locationId: location?.id ?? null, batchNo });
+  const existing = state.inventoryBalances.get(key);
+  if (existing) return existing;
+  const balance = {
+    id: `inventory-balance:${randomUUID()}`,
+    accountSetId,
+    itemId: item.id,
+    itemCode: item.code,
+    itemName: item.name,
+    warehouseId: warehouse.id,
+    warehouseCode: warehouse.code,
+    warehouseName: warehouse.name,
+    locationId: location?.id ?? null,
+    locationCode: location?.code ?? null,
+    batchNo: batchNo ?? null,
+    quantity: 0,
+    amount: 0,
+    unitCost: 0,
+    updatedAt: "now"
+  };
+  state.inventoryBalances.set(key, balance);
+  return balance;
+}
+
+function updateInventoryBalance(balance, { quantityDelta, amountDelta, forceZeroResidual = false }) {
+  balance.quantity = roundQuantity(balance.quantity + quantityDelta);
+  balance.amount = roundAmount(balance.amount + amountDelta);
+  let zeroResidualAdjustment = 0;
+  if (balance.quantity === 0 && forceZeroResidual && balance.amount !== 0) {
+    zeroResidualAdjustment = roundAmount(-balance.amount);
+    balance.amount = 0;
+  }
+  balance.unitCost = balance.quantity === 0 ? 0 : roundAmount(balance.amount / balance.quantity);
+  balance.updatedAt = "now";
+  return zeroResidualAdjustment;
+}
+
+function createInventoryCostLayer(state, { accountSetId, item, warehouse, location = null, batchNo = null, quantity, amount, movementId = null, lineId = null }) {
+  const layer = {
+    id: `inventory-cost-layer:${randomUUID()}`,
+    accountSetId,
+    itemId: item.id,
+    itemCode: item.code,
+    itemName: item.name,
+    warehouseId: warehouse.id,
+    warehouseCode: warehouse.code,
+    locationId: location?.id ?? null,
+    locationCode: location?.code ?? null,
+    batchNo: batchNo ?? null,
+    sourceMovementId: movementId,
+    sourceLineId: lineId,
+    receivedQuantity: roundQuantity(quantity),
+    receivedAmount: roundAmount(amount),
+    remainingQuantity: roundQuantity(quantity),
+    remainingAmount: roundAmount(amount),
+    unitCost: quantity === 0 ? 0 : roundAmount(amount / quantity),
+    status: quantity === 0 ? "closed" : "open",
+    createdAt: "now",
+    createdSequence: state.inventoryCostLayers.size + 1
+  };
+  state.inventoryCostLayers.set(layer.id, layer);
+  return layer;
+}
+
+function listInventoryBalances(state, accountSetId) {
+  return [...state.inventoryBalances.values()]
+    .filter((balance) => {
+      if (balance.accountSetId !== accountSetId) return false;
+      if (balance.batchNo && balance.quantity === 0 && balance.amount === 0) return false;
+      return true;
+    })
+    .sort((left, right) =>
+      `${left.itemCode}:${left.warehouseCode}:${left.batchNo ?? ""}`.localeCompare(
+        `${right.itemCode}:${right.warehouseCode}:${right.batchNo ?? ""}`
+      )
+    );
+}
+
+function listInventoryCostLayers(state, accountSetId, { itemId = null, status = null } = {}) {
+  return [...state.inventoryCostLayers.values()]
+    .filter((layer) => {
+      if (layer.accountSetId !== accountSetId) return false;
+      if (itemId && layer.itemId !== itemId) return false;
+      if (status && layer.status !== status) return false;
+      return true;
+    })
+    .sort((left, right) => left.createdSequence - right.createdSequence);
+}
+
+function applyInventoryOpeningBalanceToLedger(state, opening) {
+  const item = findInventoryItemByIdentifier(state, opening.itemId);
+  const warehouse = findWarehouseByIdentifier(state, opening.warehouseId);
+  if (!item || !warehouse) return;
+  const location = opening.locationId ? findWarehouseLocation(warehouse, opening.locationId) : null;
+  const balance = getInventoryBalance(state, {
+    accountSetId: opening.accountSetId,
+    item,
+    warehouse,
+    location,
+    batchNo: opening.batchNo
+  });
+  updateInventoryBalance(balance, { quantityDelta: opening.quantity, amountDelta: opening.amount });
+  if (["fifo", "specific_identification"].includes(item.costMethod)) {
+    createInventoryCostLayer(state, {
+      accountSetId: opening.accountSetId,
+      item,
+      warehouse,
+      location,
+      batchNo: opening.batchNo,
+      quantity: opening.quantity,
+      amount: opening.amount,
+      movementId: opening.id,
+      lineId: opening.id
+    });
+  }
+}
+
+function resolveInventoryLineContext(state, accountSetId, line) {
+  const item = findInventoryItemByIdentifier(state, line.itemId);
+  if (!item || item.accountSetId !== accountSetId) {
+    throw new Error("Inventory item was not found.");
+  }
+  const warehouse = findWarehouseByIdentifier(state, line.warehouseId);
+  if (!warehouse || warehouse.accountSetId !== accountSetId) {
+    throw new Error("Warehouse was not found.");
+  }
+  const location = line.locationId ? findWarehouseLocation(warehouse, line.locationId) : null;
+  if (line.locationId && !location) {
+    throw new Error("Warehouse location was not found.");
+  }
+  if (item.isBatchManaged && !line.batchNo && line.movementType === "inbound") {
+    throw new Error("batchNo is required for batch-managed inventory items.");
+  }
+  const quantity = Number(line.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new Error("Inventory movement line quantity must be greater than 0.");
+  }
+  return { item, warehouse, location, quantity, batchNo: line.batchNo ?? null };
+}
+
+function calculateMovingAverageIssue(state, { accountSetId, item, warehouse, location, batchNo, quantity }) {
+  const balance = getInventoryBalance(state, { accountSetId, item, warehouse, location, batchNo });
+  if (balance.quantity < quantity) {
+    throw new Error("Inventory quantity is insufficient.");
+  }
+  const isFullIssue = roundQuantity(balance.quantity - quantity) === 0;
+  const unitCost = balance.quantity === 0 ? 0 : roundAmount(balance.amount / balance.quantity);
+  const amount = isFullIssue ? balance.amount : roundAmount(quantity * unitCost);
+  const zeroResidualAdjustment = updateInventoryBalance(balance, {
+    quantityDelta: -quantity,
+    amountDelta: -amount,
+    forceZeroResidual: true
+  });
+  return { unitCost, amount: roundAmount(amount - zeroResidualAdjustment), zeroResidualAdjustment, costBreakdown: [] };
+}
+
+function calculateFifoIssue(state, { accountSetId, item, warehouse, location, batchNo, quantity }) {
+  let remaining = quantity;
+  const breakdown = [];
+  const layers = listInventoryCostLayers(state, accountSetId, { itemId: item.id, status: "open" }).filter((layer) => {
+    if (layer.warehouseId !== warehouse.id) return false;
+    if (location?.id && layer.locationId !== location.id) return false;
+    if (batchNo && layer.batchNo !== batchNo) return false;
+    return layer.remainingQuantity > 0;
+  });
+  const totalAvailable = roundQuantity(layers.reduce((sum, layer) => sum + layer.remainingQuantity, 0));
+  if (totalAvailable < quantity) {
+    throw new Error("Inventory quantity is insufficient.");
+  }
+
+  for (const layer of layers) {
+    if (remaining <= 0) break;
+    const consumedQuantity = Math.min(remaining, layer.remainingQuantity);
+    const consumesWholeLayer = roundQuantity(consumedQuantity - layer.remainingQuantity) === 0;
+    const consumedAmount = consumesWholeLayer ? layer.remainingAmount : roundAmount(consumedQuantity * layer.unitCost);
+    layer.remainingQuantity = roundQuantity(layer.remainingQuantity - consumedQuantity);
+    layer.remainingAmount = roundAmount(layer.remainingAmount - consumedAmount);
+    layer.status = layer.remainingQuantity === 0 ? "closed" : "open";
+    const layerWarehouse = findWarehouseByIdentifier(state, layer.warehouseId);
+    const layerLocation = layer.locationId && layerWarehouse ? findWarehouseLocation(layerWarehouse, layer.locationId) : null;
+    const balance = getInventoryBalance(state, {
+      accountSetId,
+      item,
+      warehouse: layerWarehouse ?? warehouse,
+      location: layerLocation,
+      batchNo: layer.batchNo
+    });
+    updateInventoryBalance(balance, {
+      quantityDelta: -consumedQuantity,
+      amountDelta: -consumedAmount,
+      forceZeroResidual: true
+    });
+    breakdown.push({
+      layerId: layer.id,
+      batchNo: layer.batchNo,
+      quantity: roundQuantity(consumedQuantity),
+      amount: roundAmount(consumedAmount),
+      unitCost: layer.unitCost
+    });
+    remaining = roundQuantity(remaining - consumedQuantity);
+  }
+
+  const amount = roundAmount(breakdown.reduce((sum, layer) => sum + layer.amount, 0));
+  return {
+    unitCost: quantity === 0 ? 0 : roundAmount(amount / quantity),
+    amount,
+    zeroResidualAdjustment: 0,
+    costBreakdown: breakdown
+  };
+}
+
+function postInventoryMovement(state, body, actorId, { skipAudit = false } = {}) {
+  if (!body.accountSetId) throw new Error("accountSetId is required.");
+  if (!["inbound", "outbound", "adjustment"].includes(body.movementType)) {
+    throw new Error("movementType must be inbound, outbound, or adjustment.");
+  }
+  if (!Array.isArray(body.lines) || body.lines.length === 0) {
+    throw new Error("Inventory movement lines are required.");
+  }
+  const movementId = body.id ?? `inventory-movement:${randomUUID()}`;
+  const lines = body.lines.map((line, index) => {
+    const context = resolveInventoryLineContext(state, body.accountSetId, { ...line, movementType: body.movementType });
+    const lineId = line.id ?? `inventory-movement-line:${randomUUID()}`;
+    let unitCost = Number(line.unitCost ?? 0);
+    let amount = Number(line.amount ?? 0);
+    let costBreakdown = [];
+    let zeroResidualAdjustment = 0;
+
+    if (body.movementType === "inbound" || (body.movementType === "adjustment" && context.quantity > 0)) {
+      if (!Number.isFinite(amount) || amount === 0) {
+        if (!Number.isFinite(unitCost) || unitCost < 0) {
+          throw new Error("Inventory inbound unitCost must be non-negative.");
+        }
+        amount = roundAmount(context.quantity * unitCost);
+      }
+      unitCost = context.quantity === 0 ? 0 : roundAmount(amount / context.quantity);
+      const balance = getInventoryBalance(state, {
+        accountSetId: body.accountSetId,
+        item: context.item,
+        warehouse: context.warehouse,
+        location: context.location,
+        batchNo: context.batchNo
+      });
+      updateInventoryBalance(balance, { quantityDelta: context.quantity, amountDelta: amount });
+      if (["fifo", "specific_identification"].includes(context.item.costMethod)) {
+        createInventoryCostLayer(state, {
+          accountSetId: body.accountSetId,
+          item: context.item,
+          warehouse: context.warehouse,
+          location: context.location,
+          batchNo: context.batchNo,
+          quantity: context.quantity,
+          amount,
+          movementId,
+          lineId
+        });
+      }
+    } else {
+      const issue =
+        context.item.costMethod === "fifo" || context.item.costMethod === "specific_identification"
+          ? calculateFifoIssue(state, { accountSetId: body.accountSetId, ...context })
+          : calculateMovingAverageIssue(state, { accountSetId: body.accountSetId, ...context });
+      unitCost = issue.unitCost;
+      amount = issue.amount;
+      costBreakdown = issue.costBreakdown;
+      zeroResidualAdjustment = issue.zeroResidualAdjustment;
+    }
+
+    return {
+      id: lineId,
+      movementId,
+      itemId: context.item.id,
+      itemCode: context.item.code,
+      itemName: context.item.name,
+      warehouseId: context.warehouse.id,
+      warehouseCode: context.warehouse.code,
+      locationId: context.location?.id ?? null,
+      locationCode: context.location?.code ?? null,
+      batchNo: context.batchNo,
+      lineNo: line.lineNo ?? index + 1,
+      quantity: roundQuantity(context.quantity),
+      unitCost,
+      amount: roundAmount(amount),
+      zeroResidualAdjustment,
+      costBreakdown
+    };
+  });
+  const movement = {
+    id: movementId,
+    accountSetId: body.accountSetId,
+    documentNo: body.documentNo ?? `INV-${state.inventoryMovements.size + 1}`,
+    movementType: body.movementType,
+    businessType: body.businessType ?? body.movementType,
+    sourceType: body.sourceType ?? null,
+    sourceDocumentId: body.sourceDocumentId ?? null,
+    fiscalYear: Number(body.fiscalYear),
+    periodNo: Number(body.periodNo),
+    movementDate: body.movementDate ?? "now",
+    costStatus: "calculated",
+    totalQuantity: roundQuantity(lines.reduce((sum, line) => sum + line.quantity, 0)),
+    totalAmount: roundAmount(lines.reduce((sum, line) => sum + line.amount, 0)),
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    lines
+  };
+  state.inventoryMovements.set(movement.id, movement);
+  if (!skipAudit) {
+    appendAuditLog(state, {
+      actorId: movement.createdBy,
+      action: "inventory_movement.post",
+      objectType: "inventory_movement",
+      objectId: movement.id
+    });
+  }
+  return movement;
+}
+
+function listInventoryMovements(state, accountSetId) {
+  return [...state.inventoryMovements.values()]
+    .filter((movement) => movement.accountSetId === accountSetId)
+    .sort((left, right) => String(left.documentNo).localeCompare(String(right.documentNo)));
+}
+
+function listInventoryTransfers(state, accountSetId) {
+  return [...state.inventoryTransfers.values()]
+    .filter((transfer) => transfer.accountSetId === accountSetId)
+    .sort((left, right) => String(left.transferNo).localeCompare(String(right.transferNo)));
+}
+
+function previewStockCount(state, body, actorId) {
+  if (!Array.isArray(body.lines) || body.lines.length === 0) {
+    throw new Error("Stock count lines are required.");
+  }
+  const countId = body.id ?? `stock-count-preview:${randomUUID()}`;
+  const lines = body.lines.map((line, index) => {
+    const item = findInventoryItemByIdentifier(state, line.itemId);
+    const warehouse = findWarehouseByIdentifier(state, line.warehouseId);
+    if (!item || item.accountSetId !== body.accountSetId || !warehouse || warehouse.accountSetId !== body.accountSetId) {
+      throw new Error("Stock count item or warehouse was not found.");
+    }
+    const location = line.locationId ? findWarehouseLocation(warehouse, line.locationId) : null;
+    const balance = getInventoryBalance(state, {
+      accountSetId: body.accountSetId,
+      item,
+      warehouse,
+      location,
+      batchNo: line.batchNo ?? null
+    });
+    const actualQuantity = Number(line.actualQuantity);
+    if (!Number.isFinite(actualQuantity) || actualQuantity < 0) {
+      throw new Error("actualQuantity must be non-negative.");
+    }
+    const differenceQuantity = roundQuantity(actualQuantity - balance.quantity);
+    return {
+      id: line.id ?? `stock-count-line:${randomUUID()}`,
+      stockCountId: countId,
+      itemId: item.id,
+      itemCode: item.code,
+      itemName: item.name,
+      warehouseId: warehouse.id,
+      warehouseCode: warehouse.code,
+      locationId: location?.id ?? null,
+      locationCode: location?.code ?? null,
+      batchNo: line.batchNo ?? null,
+      lineNo: line.lineNo ?? index + 1,
+      bookQuantity: balance.quantity,
+      actualQuantity,
+      differenceQuantity,
+      unitCost: balance.unitCost,
+      adjustmentAmount: roundAmount(differenceQuantity * balance.unitCost),
+      reason: line.reason ?? null
+    };
+  });
+  return {
+    id: countId,
+    accountSetId: body.accountSetId,
+    countNo: body.countNo ?? `SC-${state.stockCounts.size + 1}`,
+    fiscalYear: Number(body.fiscalYear),
+    periodNo: Number(body.periodNo),
+    status: "preview",
+    totalDifferenceQuantity: roundQuantity(lines.reduce((sum, line) => sum + line.differenceQuantity, 0)),
+    totalAdjustmentAmount: roundAmount(lines.reduce((sum, line) => sum + line.adjustmentAmount, 0)),
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    lines
   };
 }
 
@@ -2789,6 +3215,7 @@ async function route(request, state) {
         updatedAt: "now"
       };
       state.inventoryOpeningBalances.set(opening.id, opening);
+      applyInventoryOpeningBalanceToLedger(state, opening);
       appendAuditLog(state, {
         actorId: opening.createdBy,
         action: "inventory_opening_balance.save",
@@ -2808,6 +3235,179 @@ async function route(request, state) {
       return accountSetAccessError(state, actorId, accountSetId);
     }
     return jsonResponse(200, buildInventoryOpeningTrialBalance(state, accountSetId, { fiscalYear: query.get("fiscalYear"), periodNo: query.get("periodNo") }));
+  }
+
+  if (segments.length === 1 && segments[0] === "inventory-movements") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, listInventoryMovements(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const duplicate = listInventoryMovements(state, body.accountSetId).find((movement) => movement.documentNo === body.documentNo);
+      if (duplicate) {
+        return errorResponse(409, "INVENTORY_MOVEMENT_DOCUMENT_EXISTS", "Inventory movement documentNo already exists in this account set.");
+      }
+      try {
+        return jsonResponse(201, postInventoryMovement(state, body, actorId));
+      } catch (error) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "inventory-balances" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    if (!accountSetId) throw new Error("accountSetId is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    return jsonResponse(200, listInventoryBalances(state, accountSetId));
+  }
+
+  if (segments.length === 1 && segments[0] === "inventory-cost-layers" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    if (!accountSetId) throw new Error("accountSetId is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    return jsonResponse(200, listInventoryCostLayers(state, accountSetId, { itemId: query.get("itemId"), status: query.get("status") }));
+  }
+
+  if (segments.length === 1 && segments[0] === "inventory-transfers") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, listInventoryTransfers(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const item = findInventoryItemByIdentifier(state, body.itemId);
+      const fromWarehouse = findWarehouseByIdentifier(state, body.fromWarehouseId);
+      const toWarehouse = findWarehouseByIdentifier(state, body.toWarehouseId);
+      if (!item || item.accountSetId !== body.accountSetId || !fromWarehouse || !toWarehouse) {
+        return errorResponse(404, "INVENTORY_TRANSFER_DIMENSION_NOT_FOUND", "Inventory transfer item or warehouse was not found.");
+      }
+      const duplicate = listInventoryTransfers(state, body.accountSetId).find((transfer) => transfer.transferNo === body.transferNo);
+      if (duplicate) {
+        return errorResponse(409, "INVENTORY_TRANSFER_NO_EXISTS", "Inventory transferNo already exists in this account set.");
+      }
+      try {
+        const outbound = postInventoryMovement(
+          state,
+          {
+            accountSetId: body.accountSetId,
+            documentNo: `${body.transferNo}-OUT`,
+            movementType: "outbound",
+            businessType: "transfer_out",
+            fiscalYear: body.fiscalYear,
+            periodNo: body.periodNo,
+            createdBy: body.createdBy ?? actorId,
+            lines: [{
+              itemId: item.id,
+              warehouseId: fromWarehouse.id,
+              locationId: body.fromLocationId,
+              batchNo: body.batchNo,
+              quantity: body.quantity
+            }]
+          },
+          actorId,
+          { skipAudit: true }
+        );
+        const outboundLine = outbound.lines[0];
+        const inbound = postInventoryMovement(
+          state,
+          {
+            accountSetId: body.accountSetId,
+            documentNo: `${body.transferNo}-IN`,
+            movementType: "inbound",
+            businessType: "transfer_in",
+            fiscalYear: body.fiscalYear,
+            periodNo: body.periodNo,
+            createdBy: body.createdBy ?? actorId,
+            lines: [{
+              itemId: item.id,
+              warehouseId: toWarehouse.id,
+              locationId: body.toLocationId,
+              batchNo: body.batchNo,
+              quantity: body.quantity,
+              amount: outboundLine.amount
+            }]
+          },
+          actorId,
+          { skipAudit: true }
+        );
+        const transfer = {
+          id: body.id ?? `inventory-transfer:${randomUUID()}`,
+          accountSetId: body.accountSetId,
+          transferNo: body.transferNo ?? `TR-${state.inventoryTransfers.size + 1}`,
+          itemId: item.id,
+          itemCode: item.code,
+          itemName: item.name,
+          fromWarehouseId: fromWarehouse.id,
+          fromWarehouseCode: fromWarehouse.code,
+          fromLocationId: body.fromLocationId ?? null,
+          toWarehouseId: toWarehouse.id,
+          toWarehouseCode: toWarehouse.code,
+          toLocationId: body.toLocationId ?? null,
+          batchNo: body.batchNo ?? null,
+          quantity: Number(body.quantity),
+          totalAmount: outboundLine.amount,
+          outboundMovementId: outbound.id,
+          inboundMovementId: inbound.id,
+          fiscalYear: Number(body.fiscalYear),
+          periodNo: Number(body.periodNo),
+          status: "posted",
+          createdBy: body.createdBy ?? actorId,
+          createdAt: "now"
+        };
+        state.inventoryTransfers.set(transfer.id, transfer);
+        appendAuditLog(state, {
+          actorId: transfer.createdBy,
+          action: "inventory_transfer.post",
+          objectType: "inventory_transfer",
+          objectId: transfer.id
+        });
+        return jsonResponse(201, transfer);
+      } catch (error) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (segments.length === 2 && segments[0] === "stock-counts" && segments[1] === "preview" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+      return accountSetAccessError(state, actorId, body.accountSetId);
+    }
+    try {
+      return jsonResponse(200, previewStockCount(state, body, actorId));
+    } catch (error) {
+      return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
+    }
   }
 
   if (request.method === "GET" && request.path === "/periods") {

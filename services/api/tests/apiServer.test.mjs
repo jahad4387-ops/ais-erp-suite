@@ -2001,6 +2001,308 @@ test("Phase 3 inventory foundation manages items, BOMs, warehouses, and opening 
   assert.ok(api.state.auditLogs.some((log) => log.action === "inventory_opening_balance.save" && log.objectId === opening.body.id));
 });
 
+test("Phase 3 stock movements calculate moving-average and FIFO costs with transfers and stock-count preview", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P3-MOVE",
+      name: "Phase 3 Movement Set",
+      companyName: "Phase 3 Movement Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase3-movement-account-set"
+  );
+  const actorId = "phase3-movement-actor";
+  api.state.permissionsByActor.set(
+    actorId,
+    new Set([
+      "inventory_item.manage",
+      "warehouse.manage",
+      "inventory_balance.manage",
+      "inventory_movement.manage",
+      "inventory_transfer.manage",
+      "stock_count.manage"
+    ])
+  );
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+
+  const movingItem = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-moving-item" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "RM-MA",
+      name: "Moving Average Material",
+      itemType: "raw_material",
+      unit: "kg",
+      costMethod: "moving_average",
+      createdBy: actorId
+    }
+  });
+  const fifoItem = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-fifo-item" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "RM-FIFO",
+      name: "FIFO Batch Material",
+      itemType: "raw_material",
+      unit: "kg",
+      costMethod: "fifo",
+      isBatchManaged: true,
+      createdBy: actorId
+    }
+  });
+  const mainWarehouse = await api.handle({
+    method: "POST",
+    path: "/warehouses",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-main-warehouse" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "WH-A",
+      name: "Main Warehouse",
+      locations: [{ code: "A-01", name: "A Bin" }],
+      createdBy: actorId
+    }
+  });
+  const secondaryWarehouse = await api.handle({
+    method: "POST",
+    path: "/warehouses",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-secondary-warehouse" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "WH-B",
+      name: "Secondary Warehouse",
+      locations: [{ code: "B-01", name: "B Bin" }],
+      createdBy: actorId
+    }
+  });
+
+  await api.handle({
+    method: "POST",
+    path: "/inventory-opening-balances",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-moving-opening" },
+    body: {
+      accountSetId: accountSet.body.id,
+      itemId: movingItem.body.id,
+      warehouseId: mainWarehouse.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      quantity: 10,
+      amount: 100,
+      createdBy: actorId
+    }
+  });
+  await api.handle({
+    method: "POST",
+    path: "/inventory-opening-balances",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-fifo-opening" },
+    body: {
+      accountSetId: accountSet.body.id,
+      itemId: fifoItem.body.id,
+      warehouseId: mainWarehouse.body.id,
+      locationId: mainWarehouse.body.locations[0].id,
+      batchNo: "FIFO-A",
+      fiscalYear: 2026,
+      periodNo: 1,
+      quantity: 10,
+      amount: 100,
+      createdBy: actorId
+    }
+  });
+
+  const movingIssue = await api.handle({
+    method: "POST",
+    path: "/inventory-movements",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-moving-issue-1" },
+    body: {
+      accountSetId: accountSet.body.id,
+      documentNo: "OUT-MA-001",
+      movementType: "outbound",
+      businessType: "other_outbound",
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId,
+      lines: [{ itemId: movingItem.body.id, warehouseId: mainWarehouse.body.id, quantity: 4 }]
+    }
+  });
+  const movingReceipt = await api.handle({
+    method: "POST",
+    path: "/inventory-movements",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-moving-receipt" },
+    body: {
+      accountSetId: accountSet.body.id,
+      documentNo: "IN-MA-001",
+      movementType: "inbound",
+      businessType: "other_inbound",
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId,
+      lines: [{ itemId: movingItem.body.id, warehouseId: mainWarehouse.body.id, quantity: 4, unitCost: 15 }]
+    }
+  });
+  const movingFinalIssue = await api.handle({
+    method: "POST",
+    path: "/inventory-movements",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-moving-issue-2" },
+    body: {
+      accountSetId: accountSet.body.id,
+      documentNo: "OUT-MA-002",
+      movementType: "outbound",
+      businessType: "other_outbound",
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId,
+      lines: [{ itemId: movingItem.body.id, warehouseId: mainWarehouse.body.id, quantity: 10 }]
+    }
+  });
+  const fifoReceipt = await api.handle({
+    method: "POST",
+    path: "/inventory-movements",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-fifo-receipt" },
+    body: {
+      accountSetId: accountSet.body.id,
+      documentNo: "IN-FIFO-001",
+      movementType: "inbound",
+      businessType: "purchase_inbound",
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId,
+      lines: [{
+        itemId: fifoItem.body.id,
+        warehouseId: mainWarehouse.body.id,
+        locationId: mainWarehouse.body.locations[0].id,
+        batchNo: "FIFO-B",
+        quantity: 5,
+        unitCost: 14
+      }]
+    }
+  });
+  const fifoIssue = await api.handle({
+    method: "POST",
+    path: "/inventory-movements",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-fifo-issue" },
+    body: {
+      accountSetId: accountSet.body.id,
+      documentNo: "OUT-FIFO-001",
+      movementType: "outbound",
+      businessType: "sales_outbound",
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId,
+      lines: [{ itemId: fifoItem.body.id, warehouseId: mainWarehouse.body.id, quantity: 12 }]
+    }
+  });
+  const transfer = await api.handle({
+    method: "POST",
+    path: "/inventory-transfers",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-transfer" },
+    body: {
+      accountSetId: accountSet.body.id,
+      transferNo: "TR-001",
+      fiscalYear: 2026,
+      periodNo: 1,
+      itemId: fifoItem.body.id,
+      fromWarehouseId: mainWarehouse.body.id,
+      fromLocationId: mainWarehouse.body.locations[0].id,
+      toWarehouseId: secondaryWarehouse.body.id,
+      toLocationId: secondaryWarehouse.body.locations[0].id,
+      batchNo: "FIFO-B",
+      quantity: 2,
+      createdBy: actorId
+    }
+  });
+  const countPreview = await api.handle({
+    method: "POST",
+    path: "/stock-counts/preview",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-count-preview" },
+    body: {
+      accountSetId: accountSet.body.id,
+      countNo: "SC-001",
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId,
+      lines: [{
+        itemId: fifoItem.body.id,
+        warehouseId: secondaryWarehouse.body.id,
+        locationId: secondaryWarehouse.body.locations[0].id,
+        batchNo: "FIFO-B",
+        actualQuantity: 1
+      }]
+    }
+  });
+  const balances = await api.handle({
+    method: "GET",
+    path: `/inventory-balances?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": actorId }
+  });
+  const fifoLayers = await api.handle({
+    method: "GET",
+    path: `/inventory-cost-layers?accountSetId=${accountSet.body.id}&itemId=${fifoItem.body.id}`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(movingIssue.status, 201);
+  assert.equal(movingIssue.body.lines[0].unitCost, 10);
+  assert.equal(movingIssue.body.lines[0].amount, 40);
+  assert.equal(movingReceipt.body.lines[0].amount, 60);
+  assert.equal(movingFinalIssue.body.lines[0].unitCost, 12);
+  assert.equal(movingFinalIssue.body.lines[0].amount, 120);
+  assert.equal(movingFinalIssue.body.lines[0].zeroResidualAdjustment, 0);
+  assert.equal(fifoReceipt.status, 201);
+  assert.equal(fifoIssue.body.lines[0].amount, 128);
+  assert.deepEqual(
+    fifoIssue.body.lines[0].costBreakdown.map((layer) => ({ batchNo: layer.batchNo, quantity: layer.quantity, amount: layer.amount })),
+    [
+      { batchNo: "FIFO-A", quantity: 10, amount: 100 },
+      { batchNo: "FIFO-B", quantity: 2, amount: 28 }
+    ]
+  );
+  assert.equal(transfer.status, 201);
+  assert.equal(transfer.body.totalAmount, 28);
+  assert.equal(transfer.body.outboundMovementId.startsWith("inventory-movement:"), true);
+  assert.equal(transfer.body.inboundMovementId.startsWith("inventory-movement:"), true);
+  assert.equal(countPreview.status, 200);
+  assert.equal(countPreview.body.lines[0].bookQuantity, 2);
+  assert.equal(countPreview.body.lines[0].differenceQuantity, -1);
+  assert.equal(countPreview.body.lines[0].adjustmentAmount, -14);
+  assert.equal(balances.status, 200);
+  assert.deepEqual(
+    balances.body
+      .filter((balance) => balance.itemCode === "RM-MA" || balance.itemCode === "RM-FIFO")
+      .map((balance) => ({
+        itemCode: balance.itemCode,
+        warehouseCode: balance.warehouseCode,
+        batchNo: balance.batchNo,
+        quantity: balance.quantity,
+        amount: balance.amount
+      })),
+    [
+      { itemCode: "RM-FIFO", warehouseCode: "WH-A", batchNo: "FIFO-B", quantity: 1, amount: 14 },
+      { itemCode: "RM-FIFO", warehouseCode: "WH-B", batchNo: "FIFO-B", quantity: 2, amount: 28 },
+      { itemCode: "RM-MA", warehouseCode: "WH-A", batchNo: null, quantity: 0, amount: 0 }
+    ]
+  );
+  assert.deepEqual(
+    fifoLayers.body.map((layer) => ({ batchNo: layer.batchNo, remainingQuantity: layer.remainingQuantity, remainingAmount: layer.remainingAmount, status: layer.status })),
+    [
+      { batchNo: "FIFO-A", remainingQuantity: 0, remainingAmount: 0, status: "closed" },
+      { batchNo: "FIFO-B", remainingQuantity: 1, remainingAmount: 14, status: "open" },
+      { batchNo: "FIFO-B", remainingQuantity: 2, remainingAmount: 28, status: "open" }
+    ]
+  );
+  assert.ok(api.state.auditLogs.some((log) => log.action === "inventory_movement.post" && log.objectId === fifoIssue.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "inventory_transfer.post" && log.objectId === transfer.body.id));
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

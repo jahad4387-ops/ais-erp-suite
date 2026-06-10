@@ -44,6 +44,10 @@ import { InventoryItems } from './pages/InventoryItems';
 import { BomMaintenance } from './pages/BomMaintenance';
 import { Warehouses } from './pages/Warehouses';
 import { InventoryOpeningBalances } from './pages/InventoryOpeningBalances';
+import { InventoryMovements } from './pages/InventoryMovements';
+import { InventoryTransfers } from './pages/InventoryTransfers';
+import { StockCounts } from './pages/StockCounts';
+import { InventoryLedger } from './pages/InventoryLedger';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -224,6 +228,10 @@ const AppFrame: React.FC = () => {
                     key: 'inventory-opening-balances',
                     label: <Link to="/inventory-opening-balances">存货期初</Link>,
                   },
+                  { key: 'inventory-movements', label: <Link to="/inventory-movements">出入库单</Link> },
+                  { key: 'inventory-transfers', label: <Link to="/inventory-transfers">调拨单</Link> },
+                  { key: 'stock-counts', label: <Link to="/stock-counts">盘点工作台</Link> },
+                  { key: 'inventory-ledger', label: <Link to="/inventory-ledger">收发存查询</Link> },
                 ],
               },
               {
@@ -340,6 +348,10 @@ const AppFrame: React.FC = () => {
                 <Route path="/boms" element={<RequireAuth><BomMaintenance /></RequireAuth>} />
                 <Route path="/warehouses" element={<RequireAuth><Warehouses /></RequireAuth>} />
                 <Route path="/inventory-opening-balances" element={<RequireAuth><InventoryOpeningBalances /></RequireAuth>} />
+                <Route path="/inventory-movements" element={<RequireAuth><InventoryMovements /></RequireAuth>} />
+                <Route path="/inventory-transfers" element={<RequireAuth><InventoryTransfers /></RequireAuth>} />
+                <Route path="/stock-counts" element={<RequireAuth><StockCounts /></RequireAuth>} />
+                <Route path="/inventory-ledger" element={<RequireAuth><InventoryLedger /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />
                 <Route path="/auxiliaries" element={<RequireAuth><Auxiliaries /></RequireAuth>} />

@@ -3219,6 +3219,161 @@ paths:
               schema:
                 $ref: "#/components/schemas/InventoryOpeningTrialBalance"
 
+  /inventory-movements:
+    get:
+      summary: List Phase 3 inventory movements.
+      x-permission: inventory_movement.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Inventory movement list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InventoryMovement"
+    post:
+      summary: Post an inventory inbound, outbound, or adjustment movement.
+      x-permission: inventory_movement.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInventoryMovementRequest"
+      responses:
+        "201":
+          description: Inventory movement posted and costed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryMovement"
+
+  /inventory-balances:
+    get:
+      summary: List Phase 3 inventory balances.
+      x-permission: inventory_balance.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Inventory balances.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InventoryBalance"
+
+  /inventory-cost-layers:
+    get:
+      summary: List Phase 3 inventory cost layers.
+      x-permission: inventory_balance.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: itemId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Inventory cost layers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InventoryCostLayer"
+
+  /inventory-transfers:
+    get:
+      summary: List Phase 3 inventory transfers.
+      x-permission: inventory_transfer.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Inventory transfer list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InventoryTransfer"
+    post:
+      summary: Post an inventory transfer between warehouses or locations.
+      x-permission: inventory_transfer.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInventoryTransferRequest"
+      responses:
+        "201":
+          description: Inventory transfer posted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryTransfer"
+
+  /stock-counts/preview:
+    post:
+      summary: Preview Phase 3 stock count differences before posting adjustments.
+      x-permission: stock_count.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStockCountPreviewRequest"
+      responses:
+        "200":
+          description: Stock count difference preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockCountPreview"
+
 components:
   parameters:
     AccountSetId:
@@ -6264,6 +6419,304 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/InventoryOpeningBalance"
+
+    CreateInventoryMovementRequest:
+      type: object
+      required: [accountSetId, documentNo, movementType, businessType, fiscalYear, periodNo, lines]
+      properties:
+        accountSetId:
+          type: string
+        documentNo:
+          type: string
+        movementType:
+          type: string
+          enum: [inbound, outbound, adjustment]
+        businessType:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryMovementLine"
+
+    InventoryMovement:
+      type: object
+      required: [id, accountSetId, documentNo, movementType, businessType, fiscalYear, periodNo, costStatus, totalQuantity, totalAmount, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        documentNo:
+          type: string
+        movementType:
+          type: string
+        businessType:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        costStatus:
+          type: string
+        totalQuantity:
+          type: number
+        totalAmount:
+          type: number
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryMovementLine"
+
+    InventoryMovementLine:
+      type: object
+      required: [itemId, warehouseId, quantity]
+      properties:
+        id:
+          type: string
+        itemId:
+          type: string
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        warehouseId:
+          type: string
+        warehouseCode:
+          type: string
+        locationId:
+          type: string
+        locationCode:
+          type: string
+        batchNo:
+          type: string
+        lineNo:
+          type: integer
+        quantity:
+          type: number
+        unitCost:
+          type: number
+        amount:
+          type: number
+        zeroResidualAdjustment:
+          type: number
+        costBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              layerId:
+                type: string
+              batchNo:
+                type: string
+              quantity:
+                type: number
+              amount:
+                type: number
+              unitCost:
+                type: number
+
+    InventoryBalance:
+      type: object
+      required: [id, accountSetId, itemId, warehouseId, quantity, amount, unitCost]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        itemId:
+          type: string
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        warehouseId:
+          type: string
+        warehouseCode:
+          type: string
+        locationId:
+          type: string
+        locationCode:
+          type: string
+        batchNo:
+          type: string
+        quantity:
+          type: number
+        amount:
+          type: number
+        unitCost:
+          type: number
+
+    InventoryCostLayer:
+      type: object
+      required: [id, accountSetId, itemId, warehouseId, receivedQuantity, receivedAmount, remainingQuantity, remainingAmount, unitCost, status]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        itemId:
+          type: string
+        itemCode:
+          type: string
+        warehouseId:
+          type: string
+        warehouseCode:
+          type: string
+        locationId:
+          type: string
+        batchNo:
+          type: string
+        receivedQuantity:
+          type: number
+        receivedAmount:
+          type: number
+        remainingQuantity:
+          type: number
+        remainingAmount:
+          type: number
+        unitCost:
+          type: number
+        status:
+          type: string
+
+    CreateInventoryTransferRequest:
+      type: object
+      required: [accountSetId, transferNo, itemId, fromWarehouseId, toWarehouseId, quantity, fiscalYear, periodNo]
+      properties:
+        accountSetId:
+          type: string
+        transferNo:
+          type: string
+        itemId:
+          type: string
+        fromWarehouseId:
+          type: string
+        fromLocationId:
+          type: string
+        toWarehouseId:
+          type: string
+        toLocationId:
+          type: string
+        batchNo:
+          type: string
+        quantity:
+          type: number
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+
+    InventoryTransfer:
+      type: object
+      required: [id, accountSetId, transferNo, itemId, fromWarehouseId, toWarehouseId, quantity, totalAmount, outboundMovementId, inboundMovementId]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        transferNo:
+          type: string
+        itemId:
+          type: string
+        itemCode:
+          type: string
+        fromWarehouseId:
+          type: string
+        fromWarehouseCode:
+          type: string
+        toWarehouseId:
+          type: string
+        toWarehouseCode:
+          type: string
+        batchNo:
+          type: string
+        quantity:
+          type: number
+        totalAmount:
+          type: number
+        outboundMovementId:
+          type: string
+        inboundMovementId:
+          type: string
+
+    CreateStockCountPreviewRequest:
+      type: object
+      required: [accountSetId, countNo, fiscalYear, periodNo, lines]
+      properties:
+        accountSetId:
+          type: string
+        countNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/StockCountLine"
+
+    StockCountPreview:
+      type: object
+      required: [id, accountSetId, countNo, status, totalDifferenceQuantity, totalAdjustmentAmount, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        countNo:
+          type: string
+        status:
+          type: string
+        totalDifferenceQuantity:
+          type: number
+        totalAdjustmentAmount:
+          type: number
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/StockCountLine"
+
+    StockCountLine:
+      type: object
+      required: [itemId, warehouseId]
+      properties:
+        id:
+          type: string
+        itemId:
+          type: string
+        itemCode:
+          type: string
+        warehouseId:
+          type: string
+        warehouseCode:
+          type: string
+        locationId:
+          type: string
+        batchNo:
+          type: string
+        bookQuantity:
+          type: number
+        actualQuantity:
+          type: number
+        differenceQuantity:
+          type: number
+        unitCost:
+          type: number
+        adjustmentAmount:
+          type: number
+        reason:
+          type: string
 
     CreateAgentActionRequest:
       type: object

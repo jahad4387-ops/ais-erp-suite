@@ -56,6 +56,11 @@ model AccountSet {
   boms               Bom[]
   warehouses         Warehouse[]
   inventoryOpeningBalances InventoryOpeningBalance[]
+  inventoryMovements InventoryMovement[]
+  inventoryBalances  InventoryBalance[]
+  inventoryCostLayers InventoryCostLayer[]
+  inventoryTransfers InventoryTransfer[]
+  stockCounts        StockCount[]
 }
 
 model User {
@@ -1022,6 +1027,11 @@ model InventoryItem {
   productBoms      Bom[] @relation("BomProduct")
   bomLines         BomLine[] @relation("BomComponent")
   openingBalances  InventoryOpeningBalance[]
+  movementLines    InventoryMovementLine[]
+  balances         InventoryBalance[]
+  costLayers       InventoryCostLayer[]
+  transfers        InventoryTransfer[]
+  stockCountLines  StockCountLine[]
 
   @@unique([accountSetId, code])
 }
@@ -1101,6 +1111,12 @@ model Warehouse {
   accountSet      AccountSet @relation(fields: [accountSetId], references: [id])
   locations       WarehouseLocation[]
   openingBalances InventoryOpeningBalance[]
+  movementLines   InventoryMovementLine[]
+  balances        InventoryBalance[]
+  costLayers      InventoryCostLayer[]
+  transferOuts    InventoryTransfer[] @relation("InventoryTransferFromWarehouse")
+  transferIns     InventoryTransfer[] @relation("InventoryTransferToWarehouse")
+  stockCountLines StockCountLine[]
 
   @@unique([accountSetId, code])
 }
@@ -1115,6 +1131,10 @@ model WarehouseLocation {
 
   warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
   openingBalances InventoryOpeningBalance[]
+  movementLines   InventoryMovementLine[]
+  balances        InventoryBalance[]
+  costLayers      InventoryCostLayer[]
+  stockCountLines StockCountLine[]
 
   @@unique([warehouseId, code])
 }
@@ -1142,4 +1162,165 @@ model InventoryOpeningBalance {
 
   @@unique([accountSetId, itemId, warehouseId, locationId, batchNo, fiscalYear, periodNo], name: "InventoryOpeningBalance_unique_dimension_key")
   @@index([accountSetId, itemId])
+}
+
+model InventoryMovement {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  documentNo       String
+  movementType     String
+  businessType     String
+  sourceType       String?
+  sourceDocumentId String?
+  fiscalYear       Int
+  periodNo         Int
+  movementDate     DateTime @default(now())
+  costStatus       String   @default("calculated")
+  totalQuantity    Float    @default(0)
+  totalAmount      Float    @default(0)
+  createdBy        String
+  createdAt        DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  lines      InventoryMovementLine[]
+
+  @@unique([accountSetId, documentNo])
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model InventoryMovementLine {
+  id                     String @id @default(uuid())
+  movementId             String
+  itemId                 String
+  warehouseId            String
+  locationId             String?
+  batchNo                String?
+  lineNo                 Int
+  quantity               Float
+  unitCost               Float  @default(0)
+  amount                 Float  @default(0)
+  zeroResidualAdjustment Float  @default(0)
+  costBreakdownJson      String?
+
+  movement  InventoryMovement @relation(fields: [movementId], references: [id])
+  item      InventoryItem @relation(fields: [itemId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+  location  WarehouseLocation? @relation(fields: [locationId], references: [id])
+
+  @@index([itemId, warehouseId])
+}
+
+model InventoryBalance {
+  id           String   @id @default(uuid())
+  accountSetId String
+  itemId       String
+  warehouseId  String
+  locationId   String?
+  batchNo      String?
+  quantity     Float    @default(0)
+  amount       Float    @default(0)
+  unitCost     Float    @default(0)
+  updatedAt    DateTime @updatedAt
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  item       InventoryItem @relation(fields: [itemId], references: [id])
+  warehouse  Warehouse @relation(fields: [warehouseId], references: [id])
+  location   WarehouseLocation? @relation(fields: [locationId], references: [id])
+
+  @@unique([accountSetId, itemId, warehouseId, locationId, batchNo], name: "InventoryBalance_unique_dimension_key")
+  @@index([accountSetId, itemId])
+}
+
+model InventoryCostLayer {
+  id                String   @id @default(uuid())
+  accountSetId      String
+  itemId            String
+  warehouseId       String
+  locationId        String?
+  batchNo           String?
+  sourceMovementId  String?
+  sourceLineId      String?
+  receivedQuantity  Float    @default(0)
+  receivedAmount    Float    @default(0)
+  remainingQuantity Float    @default(0)
+  remainingAmount   Float    @default(0)
+  unitCost          Float    @default(0)
+  status            String   @default("open")
+  createdAt         DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  item       InventoryItem @relation(fields: [itemId], references: [id])
+  warehouse  Warehouse @relation(fields: [warehouseId], references: [id])
+  location   WarehouseLocation? @relation(fields: [locationId], references: [id])
+
+  @@index([accountSetId, itemId, status])
+  @@index([warehouseId, batchNo])
+}
+
+model InventoryTransfer {
+  id                 String   @id @default(uuid())
+  accountSetId       String
+  transferNo         String
+  itemId             String
+  fromWarehouseId    String
+  fromLocationId     String?
+  toWarehouseId      String
+  toLocationId       String?
+  batchNo            String?
+  quantity           Float
+  totalAmount        Float    @default(0)
+  outboundMovementId String
+  inboundMovementId  String
+  fiscalYear         Int
+  periodNo           Int
+  status             String   @default("posted")
+  createdBy          String
+  createdAt          DateTime @default(now())
+
+  accountSet    AccountSet @relation(fields: [accountSetId], references: [id])
+  item          InventoryItem @relation(fields: [itemId], references: [id])
+  fromWarehouse Warehouse @relation("InventoryTransferFromWarehouse", fields: [fromWarehouseId], references: [id])
+  toWarehouse   Warehouse @relation("InventoryTransferToWarehouse", fields: [toWarehouseId], references: [id])
+
+  @@unique([accountSetId, transferNo])
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model StockCount {
+  id                      String   @id @default(uuid())
+  accountSetId            String
+  countNo                 String
+  fiscalYear              Int
+  periodNo                Int
+  status                  String   @default("preview")
+  totalDifferenceQuantity Float    @default(0)
+  totalAdjustmentAmount   Float    @default(0)
+  createdBy               String
+  createdAt               DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  lines      StockCountLine[]
+
+  @@unique([accountSetId, countNo])
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model StockCountLine {
+  id                 String @id @default(uuid())
+  stockCountId       String
+  itemId             String
+  warehouseId        String
+  locationId         String?
+  batchNo            String?
+  bookQuantity       Float  @default(0)
+  actualQuantity     Float  @default(0)
+  differenceQuantity Float  @default(0)
+  unitCost           Float  @default(0)
+  adjustmentAmount   Float  @default(0)
+  reason             String?
+
+  stockCount StockCount @relation(fields: [stockCountId], references: [id])
+  item       InventoryItem @relation(fields: [itemId], references: [id])
+  warehouse  Warehouse @relation(fields: [warehouseId], references: [id])
+  location   WarehouseLocation? @relation(fields: [locationId], references: [id])
 }

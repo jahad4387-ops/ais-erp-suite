@@ -46,6 +46,10 @@ const phase3InventoryFoundationMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610230000_phase3_inventory_foundation/migration.sql", import.meta.url)
 );
 const phase3InventoryFoundationMigrationText = phase3InventoryFoundationMigrationSql.toString("utf8");
+const phase3MovementCostingMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260611010000_phase3_movement_costing/migration.sql", import.meta.url)
+);
+const phase3MovementCostingMigrationText = phase3MovementCostingMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -255,4 +259,25 @@ test("Phase 3 inventory foundation migration creates item, BOM, warehouse, and o
   assert.match(phase3InventoryFoundationMigrationText, /CREATE UNIQUE INDEX "InventoryItem_accountSetId_code_key"/);
   assert.match(phase3InventoryFoundationMigrationText, /CREATE UNIQUE INDEX "Warehouse_accountSetId_code_key"/);
   assert.match(phase3InventoryFoundationMigrationText, /CREATE INDEX "InventoryOpeningBalance_accountSetId_itemId_idx"/);
+});
+
+test("Phase 3 movement costing migration creates stock movements, balances, cost layers, transfers, and stock counts", () => {
+  for (const table of [
+    "InventoryMovement",
+    "InventoryMovementLine",
+    "InventoryBalance",
+    "InventoryCostLayer",
+    "InventoryTransfer",
+    "StockCount",
+    "StockCountLine"
+  ]) {
+    assert.match(phase3MovementCostingMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase3MovementCostingMigrationText, /"costStatus" TEXT NOT NULL DEFAULT 'calculated'/);
+  assert.match(phase3MovementCostingMigrationText, /"remainingQuantity" REAL NOT NULL DEFAULT 0/);
+  assert.match(phase3MovementCostingMigrationText, /"remainingAmount" REAL NOT NULL DEFAULT 0/);
+  assert.match(phase3MovementCostingMigrationText, /"zeroResidualAdjustment" REAL NOT NULL DEFAULT 0/);
+  assert.match(phase3MovementCostingMigrationText, /CREATE INDEX "InventoryMovement_accountSetId_fiscalYear_periodNo_idx"/);
+  assert.match(phase3MovementCostingMigrationText, /CREATE UNIQUE INDEX "InventoryBalance_unique_dimension_key"/);
+  assert.match(phase3MovementCostingMigrationText, /CREATE INDEX "InventoryCostLayer_accountSetId_itemId_status_idx"/);
 });

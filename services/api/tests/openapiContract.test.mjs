@@ -84,7 +84,10 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/inventory-items:",
     "/boms:",
     "/warehouses:",
-    "/inventory-opening-balances:"
+    "/inventory-opening-balances:",
+    "/inventory-movements:",
+    "/inventory-transfers:",
+    "/stock-counts/preview:"
   ];
 
   for (const path of writePaths) {
@@ -149,6 +152,13 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "WarehouseLocation:",
     "InventoryOpeningBalance:",
     "InventoryOpeningTrialBalance:",
+    "InventoryMovement:",
+    "InventoryMovementLine:",
+    "InventoryBalance:",
+    "InventoryCostLayer:",
+    "InventoryTransfer:",
+    "StockCountPreview:",
+    "StockCountLine:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -245,6 +255,27 @@ test("Phase 3 inventory foundation endpoints document BOM, warehouses, opening b
   assert.match(contract, /costMethod:/, "Inventory item schema must expose costMethod.");
   assert.match(contract, /isBatchManaged:/, "Inventory item schema must expose batch management.");
   assert.match(contract, /BATCH_COST_METHOD_CONFLICT/, "Contract must document batch and moving-average mutual exclusion.");
+});
+
+test("Phase 3 movement costing endpoints document movements, transfers, stock counts, balances, and cost layers", () => {
+  const movementBlock = blockAfter("  /inventory-movements:");
+  const balanceBlock = blockAfter("  /inventory-balances:");
+  const layerBlock = blockAfter("  /inventory-cost-layers:");
+  const transferBlock = blockAfter("  /inventory-transfers:");
+  const stockCountPreviewBlock = blockAfter("  /stock-counts/preview:");
+
+  assert.match(movementBlock, /x-permission: inventory_movement\.manage/);
+  assert.match(movementBlock, /InventoryMovement/);
+  assert.match(balanceBlock, /x-permission: inventory_balance\.manage/);
+  assert.match(balanceBlock, /InventoryBalance/);
+  assert.match(layerBlock, /x-permission: inventory_balance\.manage/);
+  assert.match(layerBlock, /InventoryCostLayer/);
+  assert.match(transferBlock, /x-permission: inventory_transfer\.manage/);
+  assert.match(transferBlock, /InventoryTransfer/);
+  assert.match(stockCountPreviewBlock, /x-permission: stock_count\.manage/);
+  assert.match(stockCountPreviewBlock, /StockCountPreview/);
+  assert.match(contract, /costBreakdown:/, "Movement line schema must expose FIFO layer cost breakdown.");
+  assert.match(contract, /zeroResidualAdjustment:/, "Movement line schema must expose zero-quantity residual adjustment.");
 });
 
 test("deployment configuration check endpoint is documented", () => {
