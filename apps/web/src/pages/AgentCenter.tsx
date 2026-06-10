@@ -29,9 +29,11 @@ function readFileAsBase64(file: File): Promise<string> {
 export const AgentCenter: React.FC = () => {
   const [form] = Form.useForm();
   const [suggestion, setSuggestion] = useState<any | null>(null);
+  const [phase2AgentResult, setPhase2AgentResult] = useState<any | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
   const [uploadedAttachmentIds, setUploadedAttachmentIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [phase2Loading, setPhase2Loading] = useState(false);
   const [converting, setConverting] = useState(false);
   const navigate = useNavigate();
   const { currentAccountSetId, currentPeriod, currentUser, currentYear } = useAppContext();
@@ -113,6 +115,34 @@ export const AgentCenter: React.FC = () => {
     }
   };
 
+  const runPhase2Agent = async (kind: 'reconciliation' | 'collection' | 'exception') => {
+    if (!currentAccountSetId) {
+      message.error('请先选择或创建账套');
+      return;
+    }
+    setPhase2Loading(true);
+    try {
+      const payload = {
+        accountSetId: currentAccountSetId,
+        dryRun: true,
+        asOfDate: new Date().toISOString().slice(0, 10),
+        requestedBy: currentUser,
+      };
+      const result =
+        kind === 'reconciliation'
+          ? await api.post('/ai/reconciliation-suggestions', payload)
+          : kind === 'collection'
+            ? await api.post('/ai/collection-drafts', payload)
+            : await api.post('/ai/exception-checks', payload);
+      setPhase2AgentResult({ kind, ...result });
+      message.success('已生成 dry-run 结果');
+    } catch (error: any) {
+      message.error(error.message);
+    } finally {
+      setPhase2Loading(false);
+    }
+  };
+
   return (
     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       <div>
@@ -157,6 +187,19 @@ export const AgentCenter: React.FC = () => {
                 生成建议
               </Button>
             </Form>
+          </Card>
+          <Card title="Phase 2 Agent dry-run" style={{ marginTop: 16 }}>
+            <Space orientation="vertical" style={{ width: '100%' }}>
+              <Button block loading={phase2Loading} onClick={() => runPhase2Agent('reconciliation')}>
+                生成核销建议
+              </Button>
+              <Button block loading={phase2Loading} onClick={() => runPhase2Agent('collection')}>
+                生成催收草稿
+              </Button>
+              <Button block loading={phase2Loading} onClick={() => runPhase2Agent('exception')}>
+                运行异常检查
+              </Button>
+            </Space>
           </Card>
         </Col>
 
@@ -208,6 +251,19 @@ export const AgentCenter: React.FC = () => {
           ) : (
             <Alert type="info" showIcon title="暂无建议" />
           )}
+          {phase2AgentResult ? (
+            <Alert
+              style={{ marginTop: 16 }}
+              type="info"
+              showIcon
+              title="Phase 2 dry-run 结果"
+              description={
+                <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
+                  {JSON.stringify(phase2AgentResult.suggestions ?? phase2AgentResult.drafts ?? phase2AgentResult.findings ?? [], null, 2)}
+                </pre>
+              }
+            />
+          ) : null}
         </Col>
       </Row>
     </Space>

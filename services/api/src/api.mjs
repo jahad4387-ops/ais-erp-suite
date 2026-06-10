@@ -618,6 +618,12 @@ function permissionFor(request) {
   if (request.method === "POST" && (request.path === "/ai/voucher-suggestions" || request.path === "/ai/voucher-drafts")) {
     return "ai.generate_draft";
   }
+  if (
+    request.method === "POST" &&
+    ["/ai/reconciliation-suggestions", "/ai/collection-drafts", "/ai/exception-checks"].includes(request.path)
+  ) {
+    return "ai.generate_draft";
+  }
   if (request.method === "GET" && segments.length === 3 && segments[0] === "ai" && segments[1] === "voucher-drafts") {
     return "ai.generate_draft";
   }
@@ -1563,6 +1569,109 @@ function settlementVoucherDraft({ accountSetId, settlementNo, settlementDate, se
       { accountCode: arAccountCode ?? "1122", debit: 0, credit: amount }
     ]
   };
+}
+
+async function buildAiReconciliationSuggestions(state, accountSetId, asOfDate) {
+  const entries = (await listCounterpartyLedgerEntries(state, accountSetId, {})).filter(
+    (entry) => Number(entry.remainingAmount ?? 0) > 0 && entry.status !== "settled"
+  );
+  const receipts = await listCustomerReceipts(state, accountSetId, {});
+  const payments = await listSupplierPayments(state, accountSetId, {});
+  const suggestions = [];
+  for (const entry of entries) {
+    if (entry.direction === "ar") {
+      const receipt = receipts.find((item) => item.customerId === entry.partnerId && Number(item.receivedAmount ?? 0) > 0);
+      if (!receipt) continue;
+      suggestions.push({
+        direction: "ar",
+        settlementType: receipt.receiptType === "prepayment" ? "prepayment_to_bill" : "receipt_to_bill",
+        counterpartyLedgerEntryId: entry.id,
+        sourceNo: entry.sourceNo,
+        matchSourceId: receipt.id,
+        matchSourceNo: receipt.receiptNo,
+        suggestedAmount: Math.min(Number(entry.remainingAmount ?? 0), Number(receipt.receivedAmount ?? 0)),
+        confidence: 0.82,
+        evidenceRefs: receipt.evidenceRefs ?? [],
+        reason: `Matched ${entry.sourceNo} with customer receipt ${receipt.receiptNo} as of ${asOfDate}.`
+      });
+    }
+    if (entry.direction === "ap") {
+      const payment = payments.find((item) => item.supplierId === entry.partnerId && Number(item.paidAmount ?? 0) > 0);
+      if (!payment) continue;
+      suggestions.push({
+        direction: "ap",
+        settlementType: "payment_to_bill",
+        counterpartyLedgerEntryId: entry.id,
+        sourceNo: entry.sourceNo,
+        matchSourceId: payment.id,
+        matchSourceNo: payment.paymentNo,
+        suggestedAmount: Math.min(Number(entry.remainingAmount ?? 0), Number(payment.paidAmount ?? 0)),
+        confidence: 0.8,
+        evidenceRefs: payment.evidenceRefs ?? [],
+        reason: `Matched ${entry.sourceNo} with supplier payment ${payment.paymentNo} as of ${asOfDate}.`
+      });
+    }
+  }
+  return suggestions;
+}
+
+async function buildAiCollectionDrafts(state, accountSetId, asOfDate) {
+  const entries = await listCounterpartyLedgerEntries(state, accountSetId, { direction: "ar" });
+  return entries
+    .filter((entry) => Number(entry.remainingAmount ?? 0) > 0 && daysPastDue(entry.dueDate, asOfDate) > 0)
+    .map((entry) => {
+      const days = daysPastDue(entry.dueDate, asOfDate);
+      return {
+        customerId: entry.partnerId,
+        customerName: entry.partnerName ?? null,
+        sourceNo: entry.sourceNo,
+        dueDate: entry.dueDate ?? null,
+        daysPastDue: days,
+        remainingAmount: Number(entry.remainingAmount ?? 0),
+        subject: `Payment reminder for ${entry.sourceNo}`,
+        body: `Dear ${entry.partnerName ?? entry.partnerId}, invoice ${entry.sourceNo} is ${days} days past due with ${Number(entry.remainingAmount ?? 0).toFixed(2)} outstanding. Please review and confirm the expected payment date.`,
+        status: "draft",
+        evidenceRefs: [entry.id]
+      };
+    });
+}
+
+async function buildAiExceptionFindings(state, accountSetId, asOfDate) {
+  const entries = await listCounterpartyLedgerEntries(state, accountSetId, {});
+  const findings = [];
+  for (const entry of entries) {
+    const remainingAmount = Number(entry.remainingAmount ?? 0);
+    if (remainingAmount <= 0) continue;
+    const overdueDays = daysPastDue(entry.dueDate, asOfDate);
+    if (overdueDays > 0 && entry.direction === "ar") {
+      findings.push({
+        code: "OVERDUE_AR",
+        severity: overdueDays > 60 ? "high" : "medium",
+        sourceNo: entry.sourceNo,
+        message: `${entry.sourceNo} has overdue AR balance ${remainingAmount.toFixed(2)} for ${overdueDays} days.`,
+        evidenceRefs: [entry.id]
+      });
+    }
+    if (overdueDays > 0 && entry.direction === "ap") {
+      findings.push({
+        code: "OVERDUE_AP",
+        severity: overdueDays > 60 ? "high" : "medium",
+        sourceNo: entry.sourceNo,
+        message: `${entry.sourceNo} has overdue AP balance ${remainingAmount.toFixed(2)} for ${overdueDays} days.`,
+        evidenceRefs: [entry.id]
+      });
+    }
+    if (entry.direction === "ap" && entry.isPaymentBlocked) {
+      findings.push({
+        code: "PAYMENT_BLOCKED",
+        severity: "medium",
+        sourceNo: entry.sourceNo,
+        message: `${entry.sourceNo} is blocked for payment: ${entry.paymentBlockReason ?? "no reason provided"}.`,
+        evidenceRefs: [entry.id]
+      });
+    }
+  }
+  return findings;
 }
 
 async function listCollectionPlans(state, accountSetId, filters = {}) {
@@ -5090,6 +5199,82 @@ async function route(request, state) {
       objectId: suggestion.id
     });
     return jsonResponse(201, suggestion);
+  }
+
+  if (
+    request.method === "POST" &&
+    ["/ai/reconciliation-suggestions", "/ai/collection-drafts", "/ai/exception-checks"].includes(request.path)
+  ) {
+    if (body.dryRun !== true) {
+      throw new Error("Agent suggestions must use dryRun true.");
+    }
+    if (typeof body.accountSetId !== "string" || body.accountSetId.trim() === "") {
+      throw new Error("accountSetId is required.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+      return accountSetAccessError(state, actorId, body.accountSetId);
+    }
+    const asOfDate = body.asOfDate ?? new Date().toISOString().slice(0, 10);
+    const requestedBy = body.requestedBy ?? actorId;
+    if (request.path === "/ai/reconciliation-suggestions") {
+      const result = {
+        id: `ai-reconciliation-suggestion:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        dryRun: true,
+        approvalRequired: true,
+        riskLevel: "medium",
+        asOfDate,
+        requestedBy,
+        suggestions: await buildAiReconciliationSuggestions(state, body.accountSetId, asOfDate),
+        warnings: ["Suggestions are dry-run only and require human confirmation before settlement."]
+      };
+      appendAuditLog(state, {
+        actorId: requestedBy,
+        action: "ai.reconciliation_suggest",
+        objectType: "ai_reconciliation_suggestion",
+        objectId: result.id
+      });
+      return jsonResponse(201, result);
+    }
+    if (request.path === "/ai/collection-drafts") {
+      const result = {
+        id: `ai-collection-draft:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        dryRun: true,
+        approvalRequired: true,
+        riskLevel: "medium",
+        asOfDate,
+        requestedBy,
+        drafts: await buildAiCollectionDrafts(state, body.accountSetId, asOfDate),
+        warnings: ["Collection drafts must be reviewed and sent by a human."]
+      };
+      appendAuditLog(state, {
+        actorId: requestedBy,
+        action: "ai.collection_draft",
+        objectType: "ai_collection_draft",
+        objectId: result.id
+      });
+      return jsonResponse(201, result);
+    }
+    const result = {
+      id: `ai-exception-check:${randomUUID()}`,
+      accountSetId: body.accountSetId,
+      dryRun: true,
+      approvalRequired: true,
+      riskLevel: "medium",
+      asOfDate,
+      requestedBy,
+      findings: await buildAiExceptionFindings(state, body.accountSetId, asOfDate),
+      warnings: ["Exception checks are advisory and do not mutate accounting records."]
+    };
+    appendAuditLog(state, {
+      actorId: requestedBy,
+      action: "ai.exception_check",
+      objectType: "ai_exception_check",
+      objectId: result.id
+    });
+    return jsonResponse(201, result);
   }
 
   if (request.method === "GET" && segments.length === 3 && segments[0] === "ai" && segments[1] === "voucher-drafts") {

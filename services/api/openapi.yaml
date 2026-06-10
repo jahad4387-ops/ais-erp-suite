@@ -2777,6 +2777,78 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
+  /ai/reconciliation-suggestions:
+    post:
+      summary: Generate dry-run AP/AR reconciliation suggestions.
+      x-permission: ai.generate_draft
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAiReconciliationSuggestionRequest"
+      responses:
+        "201":
+          description: Reconciliation suggestions generated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiReconciliationSuggestion"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /ai/collection-drafts:
+    post:
+      summary: Generate dry-run AR collection message drafts.
+      x-permission: ai.generate_draft
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAiCollectionDraftRequest"
+      responses:
+        "201":
+          description: Collection drafts generated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiCollectionDraft"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /ai/exception-checks:
+    post:
+      summary: Generate dry-run AP/AR exception checks.
+      x-permission: ai.generate_draft
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAiExceptionCheckRequest"
+      responses:
+        "201":
+          description: Exception check generated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiExceptionCheck"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
   /ai/voucher-drafts/{aiSuggestionId}:
     get:
       summary: Get an AI voucher draft suggestion.
@@ -5545,6 +5617,201 @@ components:
           type: string
         reviewedBy:
           type: string
+
+    CreateAiReconciliationSuggestionRequest:
+      type: object
+      required: [accountSetId, dryRun]
+      properties:
+        accountSetId:
+          type: string
+        dryRun:
+          type: boolean
+          const: true
+        asOfDate:
+          type: string
+          format: date
+        requestedBy:
+          type: string
+
+    CreateAiCollectionDraftRequest:
+      type: object
+      required: [accountSetId, dryRun]
+      properties:
+        accountSetId:
+          type: string
+        dryRun:
+          type: boolean
+          const: true
+        asOfDate:
+          type: string
+          format: date
+        requestedBy:
+          type: string
+
+    CreateAiExceptionCheckRequest:
+      type: object
+      required: [accountSetId, dryRun]
+      properties:
+        accountSetId:
+          type: string
+        dryRun:
+          type: boolean
+          const: true
+        asOfDate:
+          type: string
+          format: date
+        requestedBy:
+          type: string
+
+    AiReconciliationSuggestion:
+      type: object
+      required: [id, accountSetId, dryRun, approvalRequired, riskLevel, asOfDate, suggestions, warnings]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        dryRun:
+          type: boolean
+        approvalRequired:
+          type: boolean
+        riskLevel:
+          type: string
+          enum: [low, medium, high]
+        asOfDate:
+          type: string
+          format: date
+        requestedBy:
+          type: string
+        suggestions:
+          type: array
+          items:
+            type: object
+            properties:
+              direction:
+                type: string
+                enum: [ap, ar]
+              settlementType:
+                type: string
+              counterpartyLedgerEntryId:
+                type: string
+              sourceNo:
+                type: string
+              matchSourceId:
+                type: string
+              matchSourceNo:
+                type: string
+              suggestedAmount:
+                type: number
+              confidence:
+                type: number
+              evidenceRefs:
+                type: array
+                items:
+                  type: string
+              reason:
+                type: string
+        warnings:
+          type: array
+          items:
+            type: string
+
+    AiCollectionDraft:
+      type: object
+      required: [id, accountSetId, dryRun, approvalRequired, riskLevel, asOfDate, drafts, warnings]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        dryRun:
+          type: boolean
+        approvalRequired:
+          type: boolean
+        riskLevel:
+          type: string
+          enum: [low, medium, high]
+        asOfDate:
+          type: string
+          format: date
+        requestedBy:
+          type: string
+        drafts:
+          type: array
+          items:
+            type: object
+            properties:
+              customerId:
+                type: string
+              customerName:
+                type: string
+              sourceNo:
+                type: string
+              dueDate:
+                type: string
+                format: date
+              daysPastDue:
+                type: integer
+              remainingAmount:
+                type: number
+              subject:
+                type: string
+              body:
+                type: string
+              status:
+                type: string
+                enum: [draft]
+              evidenceRefs:
+                type: array
+                items:
+                  type: string
+        warnings:
+          type: array
+          items:
+            type: string
+
+    AiExceptionCheck:
+      type: object
+      required: [id, accountSetId, dryRun, approvalRequired, riskLevel, asOfDate, findings, warnings]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        dryRun:
+          type: boolean
+        approvalRequired:
+          type: boolean
+        riskLevel:
+          type: string
+          enum: [low, medium, high]
+        asOfDate:
+          type: string
+          format: date
+        requestedBy:
+          type: string
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              code:
+                type: string
+              severity:
+                type: string
+                enum: [low, medium, high]
+              sourceNo:
+                type: string
+              message:
+                type: string
+              evidenceRefs:
+                type: array
+                items:
+                  type: string
+        warnings:
+          type: array
+          items:
+            type: string
 
     CreateAgentActionRequest:
       type: object

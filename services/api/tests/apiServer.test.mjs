@@ -5535,6 +5535,141 @@ test("AI voucher suggestions require dryRun true", async () => {
   assert.match(response.body.message, /dryRun true/);
 });
 
+test("Phase 2 Agent dry-run suggests reconciliation, collection drafts, and exception checks without posting", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P2-AI",
+      name: "Phase 2 Agent Set",
+      companyName: "Phase 2 Agent Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase2-ai-account-set"
+  );
+  const actorId = "phase2-ai-agent";
+  api.state.permissionsByActor.set(actorId, new Set(["ai.generate_draft"]));
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+  api.state.counterpartyLedgerEntries.set("ledger:ar:agent", {
+    id: "ledger:ar:agent",
+    accountSetId: accountSet.body.id,
+    partnerId: "customer:agent",
+    partnerName: "Agent Customer",
+    direction: "ar",
+    sourceType: "sales_invoice",
+    sourceId: "sales-invoice:agent",
+    sourceNo: "SI-AI-001",
+    documentDate: "2026-03-01",
+    dueDate: "2026-03-31",
+    originalAmount: 1000,
+    settledAmount: 0,
+    remainingAmount: 1000,
+    status: "open",
+    glAccountCode: "1122",
+    auxiliaryType: "customer",
+    auxiliaryPartnerId: "customer:agent",
+    createdBy: actorId
+  });
+  api.state.counterpartyLedgerEntries.set("ledger:ap:agent", {
+    id: "ledger:ap:agent",
+    accountSetId: accountSet.body.id,
+    partnerId: "supplier:agent",
+    partnerName: "Agent Supplier",
+    direction: "ap",
+    sourceType: "purchase_invoice",
+    sourceId: "purchase-invoice:agent",
+    sourceNo: "PI-AI-001",
+    documentDate: "2026-04-01",
+    dueDate: "2026-04-15",
+    originalAmount: 800,
+    settledAmount: 0,
+    remainingAmount: 800,
+    status: "open",
+    glAccountCode: "2202",
+    auxiliaryType: "supplier",
+    auxiliaryPartnerId: "supplier:agent",
+    isPaymentBlocked: true,
+    paymentBlockReason: "Bank account review",
+    createdBy: actorId
+  });
+  api.state.customerReceipts.set("customer-receipt:agent", {
+    id: "customer-receipt:agent",
+    accountSetId: accountSet.body.id,
+    counterpartyLedgerEntryId: "ledger:ar:agent",
+    customerId: "customer:agent",
+    customerName: "Agent Customer",
+    sourceNo: "SI-AI-001",
+    receiptNo: "REC-AI-001",
+    receiptDate: "2026-04-10",
+    receiptType: "receipt",
+    receivedAmount: 600,
+    status: "received",
+    receivedBy: actorId,
+    receiptMethod: "bank_transfer",
+    bankAccountCode: "1002",
+    glVoucherId: null,
+    evidenceRefs: ["attachment:receipt-agent"]
+  });
+  api.state.supplierPayments.set("supplier-payment:agent", {
+    id: "supplier-payment:agent",
+    accountSetId: accountSet.body.id,
+    paymentRequestId: "payment-request:agent",
+    counterpartyLedgerEntryId: "ledger:ap:agent",
+    supplierId: "supplier:agent",
+    supplierName: "Agent Supplier",
+    sourceNo: "PI-AI-001",
+    paymentNo: "PAY-AI-001",
+    paymentDate: "2026-04-18",
+    paidAmount: 300,
+    status: "paid",
+    paidBy: actorId,
+    paymentMethod: "bank_transfer",
+    bankAccountCode: "1002",
+    glVoucherId: null,
+    evidenceRefs: ["attachment:payment-agent"]
+  });
+
+  const reconciliation = await api.handle({
+    method: "POST",
+    path: "/ai/reconciliation-suggestions",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase2-ai-reconciliation" },
+    body: { accountSetId: accountSet.body.id, dryRun: true, asOfDate: "2026-06-15", requestedBy: actorId }
+  });
+  const collectionDraft = await api.handle({
+    method: "POST",
+    path: "/ai/collection-drafts",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase2-ai-collection" },
+    body: { accountSetId: accountSet.body.id, dryRun: true, asOfDate: "2026-06-15", requestedBy: actorId }
+  });
+  const exceptionCheck = await api.handle({
+    method: "POST",
+    path: "/ai/exception-checks",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase2-ai-exception" },
+    body: { accountSetId: accountSet.body.id, dryRun: true, asOfDate: "2026-06-15", requestedBy: actorId }
+  });
+
+  assert.equal(reconciliation.status, 201);
+  assert.equal(reconciliation.body.dryRun, true);
+  assert.equal(reconciliation.body.suggestions[0].counterpartyLedgerEntryId, "ledger:ar:agent");
+  assert.equal(reconciliation.body.suggestions[0].matchSourceNo, "REC-AI-001");
+  assert.equal(reconciliation.body.suggestions[0].suggestedAmount, 600);
+  assert.equal(collectionDraft.status, 201);
+  assert.equal(collectionDraft.body.dryRun, true);
+  assert.equal(collectionDraft.body.drafts[0].customerId, "customer:agent");
+  assert.match(collectionDraft.body.drafts[0].body, /SI-AI-001/);
+  assert.equal(exceptionCheck.status, 201);
+  assert.equal(exceptionCheck.body.dryRun, true);
+  assert.ok(exceptionCheck.body.findings.some((finding) => finding.code === "OVERDUE_AR"));
+  assert.ok(exceptionCheck.body.findings.some((finding) => finding.code === "PAYMENT_BLOCKED"));
+  assert.equal(api.state.arSettlements.size, 0);
+  assert.equal(api.state.apSettlements.size, 0);
+});
+
 test("AI voucher suggestions accept available attachment ids as evidence", async () => {
   const api = createApi();
   api.state.permissionsByActor.set("ai-user", new Set(["ai.generate_draft", "attachment.upload"]));

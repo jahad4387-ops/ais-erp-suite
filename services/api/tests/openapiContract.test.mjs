@@ -77,6 +77,9 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/close/profit-loss-carry-forward:",
     "/ai/voucher-suggestions:",
     "/ai/voucher-drafts:",
+    "/ai/reconciliation-suggestions:",
+    "/ai/collection-drafts:",
+    "/ai/exception-checks:",
     "/ai/voucher-drafts/{aiSuggestionId}/convert-to-voucher:"
   ];
 
@@ -132,6 +135,9 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "AccountPeriodBalance:",
     "TrialBalance:",
     "AiVoucherSuggestion:",
+    "AiReconciliationSuggestion:",
+    "AiCollectionDraft:",
+    "AiExceptionCheck:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -295,6 +301,9 @@ test("attachment endpoints document upload, linking, status, and posted-voucher 
 test("Agent-facing endpoints expose dry-run and evidence fields", () => {
   const aiBlock = blockAfter("  /ai/voucher-suggestions:");
   const planAiBlock = blockAfter("  /ai/voucher-drafts:");
+  const reconciliationBlock = blockAfter("  /ai/reconciliation-suggestions:");
+  const collectionBlock = blockAfter("  /ai/collection-drafts:");
+  const exceptionBlock = blockAfter("  /ai/exception-checks:");
   const planAiDetailBlock = blockAfter("  /ai/voucher-drafts/{aiSuggestionId}:");
   const planAiConvertBlock = blockAfter("  /ai/voucher-drafts/{aiSuggestionId}/convert-to-voucher:");
   const agentBlock = blockAfter("  /agent-actions:");
@@ -303,6 +312,12 @@ test("Agent-facing endpoints expose dry-run and evidence fields", () => {
   assert.match(aiBlock, /AiVoucherSuggestion/, "AI endpoint must reference its response schema.");
   assert.match(planAiBlock, /CreateAiVoucherSuggestionRequest/, "Plan AI draft endpoint must accept the AI suggestion request.");
   assert.match(planAiBlock, /AiVoucherSuggestion/, "Plan AI draft endpoint must return an AI draft suggestion.");
+  assert.match(reconciliationBlock, /CreateAiReconciliationSuggestionRequest/);
+  assert.match(reconciliationBlock, /AiReconciliationSuggestion/);
+  assert.match(collectionBlock, /CreateAiCollectionDraftRequest/);
+  assert.match(collectionBlock, /AiCollectionDraft/);
+  assert.match(exceptionBlock, /CreateAiExceptionCheckRequest/);
+  assert.match(exceptionBlock, /AiExceptionCheck/);
   assert.match(planAiDetailBlock, /AiVoucherSuggestion/, "Plan AI draft detail endpoint must return an AI draft suggestion.");
   assert.match(planAiConvertBlock, /ConvertAiVoucherSuggestionRequest/, "Plan AI draft conversion endpoint must document human review.");
   assert.match(planAiConvertBlock, /Voucher/, "Plan AI draft conversion endpoint must return the formal voucher draft.");

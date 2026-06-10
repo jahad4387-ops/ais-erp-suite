@@ -15,4 +15,8 @@ test("agent center uploads attachment evidence before AI voucher draft generatio
   assert.match(source, /attachmentIds/);
   assert.match(source, /uploadedAttachmentIds/);
   assert.match(source, /api\.post\('\/ai\/voucher-drafts'/);
+  assert.match(source, /api\.post\('\/ai\/reconciliation-suggestions'/);
+  assert.match(source, /api\.post\('\/ai\/collection-drafts'/);
+  assert.match(source, /api\.post\('\/ai\/exception-checks'/);
+  assert.match(source, /dryRun: true/);
 });
