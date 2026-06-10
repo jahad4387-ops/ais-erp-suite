@@ -61,6 +61,9 @@ model AccountSet {
   inventoryCostLayers InventoryCostLayer[]
   inventoryTransfers InventoryTransfer[]
   stockCounts        StockCount[]
+  workOrders         WorkOrder[]
+  materialRequisitions MaterialRequisition[]
+  productReceipts    ProductReceipt[]
 }
 
 model User {
@@ -1032,6 +1035,9 @@ model InventoryItem {
   costLayers       InventoryCostLayer[]
   transfers        InventoryTransfer[]
   stockCountLines  StockCountLine[]
+  workOrders       WorkOrder[]
+  materialRequisitionLines MaterialRequisitionLine[]
+  productReceiptLines ProductReceiptLine[]
 
   @@unique([accountSetId, code])
 }
@@ -1079,6 +1085,7 @@ model Bom {
   accountSet  AccountSet @relation(fields: [accountSetId], references: [id])
   productItem InventoryItem @relation("BomProduct", fields: [productItemId], references: [id])
   lines       BomLine[]
+  workOrders  WorkOrder[]
 
   @@unique([accountSetId, productItemId, version])
 }
@@ -1117,6 +1124,8 @@ model Warehouse {
   transferOuts    InventoryTransfer[] @relation("InventoryTransferFromWarehouse")
   transferIns     InventoryTransfer[] @relation("InventoryTransferToWarehouse")
   stockCountLines StockCountLine[]
+  materialRequisitionLines MaterialRequisitionLine[]
+  productReceiptLines ProductReceiptLine[]
 
   @@unique([accountSetId, code])
 }
@@ -1135,6 +1144,8 @@ model WarehouseLocation {
   balances        InventoryBalance[]
   costLayers      InventoryCostLayer[]
   stockCountLines StockCountLine[]
+  materialRequisitionLines MaterialRequisitionLine[]
+  productReceiptLines ProductReceiptLine[]
 
   @@unique([warehouseId, code])
 }
@@ -1323,4 +1334,114 @@ model StockCountLine {
   item       InventoryItem @relation(fields: [itemId], references: [id])
   warehouse  Warehouse @relation(fields: [warehouseId], references: [id])
   location   WarehouseLocation? @relation(fields: [locationId], references: [id])
+}
+
+model WorkOrder {
+  id                 String   @id @default(uuid())
+  accountSetId       String
+  workOrderNo        String
+  productItemId      String
+  bomId              String
+  plannedQuantity    Float
+  completedQuantity  Float    @default(0)
+  directMaterialCost Float    @default(0)
+  status             String   @default("planned")
+  fiscalYear         Int
+  periodNo           Int
+  createdBy          String
+  releasedBy         String?
+  closedBy           String?
+  createdAt          DateTime @default(now())
+  releasedAt         DateTime?
+  closedAt           DateTime?
+
+  accountSet           AccountSet @relation(fields: [accountSetId], references: [id])
+  productItem          InventoryItem @relation(fields: [productItemId], references: [id])
+  bom                  Bom @relation(fields: [bomId], references: [id])
+  materialRequisitions MaterialRequisition[]
+  productReceipts      ProductReceipt[]
+
+  @@unique([accountSetId, workOrderNo])
+  @@index([accountSetId, status])
+}
+
+model MaterialRequisition {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  requisitionNo    String
+  workOrderId      String
+  sourceMovementId String
+  fiscalYear       Int
+  periodNo         Int
+  status           String   @default("posted")
+  totalQuantity    Float    @default(0)
+  totalAmount      Float    @default(0)
+  createdBy        String
+  createdAt        DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  workOrder  WorkOrder @relation(fields: [workOrderId], references: [id])
+  lines      MaterialRequisitionLine[]
+
+  @@unique([accountSetId, requisitionNo])
+  @@index([workOrderId])
+}
+
+model MaterialRequisitionLine {
+  id                    String @id @default(uuid())
+  materialRequisitionId String
+  componentItemId       String
+  warehouseId           String
+  locationId            String?
+  batchNo               String?
+  lineNo                Int
+  quantity              Float
+  unitCost              Float  @default(0)
+  amount                Float  @default(0)
+
+  materialRequisition MaterialRequisition @relation(fields: [materialRequisitionId], references: [id])
+  componentItem       InventoryItem @relation(fields: [componentItemId], references: [id])
+  warehouse           Warehouse @relation(fields: [warehouseId], references: [id])
+  location            WarehouseLocation? @relation(fields: [locationId], references: [id])
+}
+
+model ProductReceipt {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  receiptNo        String
+  workOrderId      String
+  sourceMovementId String
+  fiscalYear       Int
+  periodNo         Int
+  status           String   @default("posted")
+  costStatus       String   @default("direct_material_only")
+  totalQuantity    Float    @default(0)
+  totalAmount      Float    @default(0)
+  createdBy        String
+  createdAt        DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  workOrder  WorkOrder @relation(fields: [workOrderId], references: [id])
+  lines      ProductReceiptLine[]
+
+  @@unique([accountSetId, receiptNo])
+  @@index([workOrderId])
+}
+
+model ProductReceiptLine {
+  id               String @id @default(uuid())
+  productReceiptId String
+  productItemId    String
+  warehouseId      String
+  locationId       String?
+  batchNo          String?
+  lineNo           Int
+  quantity         Float
+  unitCost         Float  @default(0)
+  amount           Float  @default(0)
+
+  productReceipt ProductReceipt @relation(fields: [productReceiptId], references: [id])
+  productItem    InventoryItem @relation(fields: [productItemId], references: [id])
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  location       WarehouseLocation? @relation(fields: [locationId], references: [id])
 }

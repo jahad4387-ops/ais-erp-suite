@@ -93,7 +93,10 @@ const DEFAULT_PERMISSION_CODES = [
   "inventory_balance.manage",
   "inventory_movement.manage",
   "inventory_transfer.manage",
-  "stock_count.manage"
+  "stock_count.manage",
+  "work_order.manage",
+  "material_requisition.manage",
+  "product_receipt.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -618,6 +621,15 @@ function permissionFor(request) {
   if (segments[0] === "stock-counts") {
     return "stock_count.manage";
   }
+  if (segments[0] === "work-orders") {
+    return "work_order.manage";
+  }
+  if (segments[0] === "material-requisitions") {
+    return "material_requisition.manage";
+  }
+  if (segments[0] === "product-receipts") {
+    return "product_receipt.manage";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -745,6 +757,9 @@ function createState(options = {}) {
     inventoryCostLayers: new Map(),
     inventoryTransfers: new Map(),
     stockCounts: new Map(),
+    workOrders: new Map(),
+    materialRequisitions: new Map(),
+    productReceipts: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1569,6 +1584,32 @@ function previewStockCount(state, body, actorId) {
     createdAt: "now",
     lines
   };
+}
+
+function findWorkOrderByIdentifier(state, identifier) {
+  return [...state.workOrders.values()].find((workOrder) => workOrder.id === identifier || workOrder.workOrderNo === identifier) ?? null;
+}
+
+function listWorkOrders(state, accountSetId) {
+  return [...state.workOrders.values()]
+    .filter((workOrder) => workOrder.accountSetId === accountSetId)
+    .sort((left, right) => left.workOrderNo.localeCompare(right.workOrderNo));
+}
+
+function listMaterialRequisitions(state, accountSetId) {
+  return [...state.materialRequisitions.values()]
+    .filter((requisition) => requisition.accountSetId === accountSetId)
+    .sort((left, right) => left.requisitionNo.localeCompare(right.requisitionNo));
+}
+
+function listProductReceipts(state, accountSetId) {
+  return [...state.productReceipts.values()]
+    .filter((receipt) => receipt.accountSetId === accountSetId)
+    .sort((left, right) => left.receiptNo.localeCompare(right.receiptNo));
+}
+
+function findBomByIdentifier(state, identifier) {
+  return [...state.boms.values()].find((bom) => bom.id === identifier) ?? null;
 }
 
 function normalizeOrderLines(lines = []) {
@@ -3407,6 +3448,259 @@ async function route(request, state) {
       return jsonResponse(200, previewStockCount(state, body, actorId));
     } catch (error) {
       return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "work-orders") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, listWorkOrders(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const productItem = findInventoryItemByIdentifier(state, body.productItemId);
+      const bom = findBomByIdentifier(state, body.bomId);
+      if (!productItem || productItem.accountSetId !== body.accountSetId || !productItem.isManufactured || !bom || bom.accountSetId !== body.accountSetId) {
+        return errorResponse(404, "WORK_ORDER_SOURCE_NOT_FOUND", "Manufactured item or BOM was not found.");
+      }
+      const duplicate = listWorkOrders(state, body.accountSetId).find((workOrder) => workOrder.workOrderNo === body.workOrderNo);
+      if (duplicate) {
+        return errorResponse(409, "WORK_ORDER_NO_EXISTS", "Work order number already exists in this account set.");
+      }
+      const plannedQuantity = Number(body.plannedQuantity);
+      if (!Number.isFinite(plannedQuantity) || plannedQuantity <= 0) {
+        throw new Error("plannedQuantity must be greater than 0.");
+      }
+      const workOrder = {
+        id: body.id ?? `work-order:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        workOrderNo: body.workOrderNo,
+        productItemId: productItem.id,
+        productItemCode: productItem.code,
+        productItemName: productItem.name,
+        bomId: bom.id,
+        bomVersion: bom.version,
+        plannedQuantity,
+        completedQuantity: 0,
+        directMaterialCost: 0,
+        status: "planned",
+        fiscalYear: Number(body.fiscalYear),
+        periodNo: Number(body.periodNo),
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now",
+        releasedBy: null,
+        releasedAt: null,
+        closedBy: null,
+        closedAt: null
+      };
+      state.workOrders.set(workOrder.id, workOrder);
+      appendAuditLog(state, { actorId: workOrder.createdBy, action: "work_order.create", objectType: "work_order", objectId: workOrder.id });
+      return jsonResponse(201, { ...workOrder });
+    }
+  }
+
+  if (segments.length === 3 && segments[0] === "work-orders" && ["release", "close"].includes(segments[2]) && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    const workOrder = findWorkOrderByIdentifier(state, segments[1]);
+    if (!workOrder) return errorResponse(404, "WORK_ORDER_NOT_FOUND", "Work order was not found.");
+    if (!(await canAccessAccountSet(state, actorId, workOrder.accountSetId))) {
+      return accountSetAccessError(state, actorId, workOrder.accountSetId);
+    }
+    if (segments[2] === "release") {
+      if (workOrder.status !== "planned") {
+        return errorResponse(409, "WORK_ORDER_RELEASE_BLOCKED", "Only planned work orders can be released.");
+      }
+      workOrder.status = "released";
+      workOrder.releasedBy = body.releasedBy ?? actorId;
+      workOrder.releasedAt = "now";
+      appendAuditLog(state, { actorId: workOrder.releasedBy, action: "work_order.release", objectType: "work_order", objectId: workOrder.id });
+      return jsonResponse(200, { ...workOrder });
+    }
+    if (workOrder.completedQuantity <= 0) {
+      return errorResponse(409, "WORK_ORDER_CLOSE_BLOCKED", "Work order cannot close before finished goods receipt.");
+    }
+    workOrder.status = "closed";
+    workOrder.closedBy = body.closedBy ?? actorId;
+    workOrder.closedAt = "now";
+    appendAuditLog(state, { actorId: workOrder.closedBy, action: "work_order.close", objectType: "work_order", objectId: workOrder.id });
+    return jsonResponse(200, { ...workOrder });
+  }
+
+  if (segments.length === 1 && segments[0] === "material-requisitions") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, listMaterialRequisitions(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const workOrder = findWorkOrderByIdentifier(state, body.workOrderId);
+      if (!workOrder || workOrder.accountSetId !== body.accountSetId) return errorResponse(404, "WORK_ORDER_NOT_FOUND", "Work order was not found.");
+      if (workOrder.status !== "released") return errorResponse(409, "WORK_ORDER_NOT_RELEASED", "Materials can only be issued to released work orders.");
+      const movement = postInventoryMovement(
+        state,
+        {
+          accountSetId: body.accountSetId,
+          documentNo: `${body.requisitionNo}-ISSUE`,
+          movementType: "outbound",
+          businessType: "material_requisition",
+          fiscalYear: body.fiscalYear,
+          periodNo: body.periodNo,
+          createdBy: body.createdBy ?? actorId,
+          sourceType: "work_order",
+          sourceDocumentId: workOrder.id,
+          lines: body.lines.map((line) => ({
+            itemId: line.componentItemId,
+            warehouseId: line.warehouseId,
+            locationId: line.locationId,
+            batchNo: line.batchNo,
+            quantity: line.quantity
+          }))
+        },
+        actorId,
+        { skipAudit: true }
+      );
+      const requisitionId = body.id ?? `material-requisition:${randomUUID()}`;
+      const lines = movement.lines.map((line, index) => ({
+        id: `material-requisition-line:${randomUUID()}`,
+        materialRequisitionId: requisitionId,
+        componentItemId: line.itemId,
+        componentItemCode: line.itemCode,
+        componentItemName: line.itemName,
+        warehouseId: line.warehouseId,
+        warehouseCode: line.warehouseCode,
+        locationId: line.locationId,
+        batchNo: line.batchNo,
+        lineNo: index + 1,
+        quantity: line.quantity,
+        unitCost: line.unitCost,
+        amount: line.amount
+      }));
+      const requisition = {
+        id: requisitionId,
+        accountSetId: body.accountSetId,
+        requisitionNo: body.requisitionNo,
+        workOrderId: workOrder.id,
+        workOrderNo: workOrder.workOrderNo,
+        sourceMovementId: movement.id,
+        fiscalYear: Number(body.fiscalYear),
+        periodNo: Number(body.periodNo),
+        status: "posted",
+        totalQuantity: movement.totalQuantity,
+        totalAmount: movement.totalAmount,
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now",
+        lines
+      };
+      workOrder.directMaterialCost = roundAmount(workOrder.directMaterialCost + requisition.totalAmount);
+      state.materialRequisitions.set(requisition.id, requisition);
+      appendAuditLog(state, { actorId: requisition.createdBy, action: "material_requisition.post", objectType: "material_requisition", objectId: requisition.id });
+      return jsonResponse(201, requisition);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "product-receipts") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, listProductReceipts(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const workOrder = findWorkOrderByIdentifier(state, body.workOrderId);
+      if (!workOrder || workOrder.accountSetId !== body.accountSetId) return errorResponse(404, "WORK_ORDER_NOT_FOUND", "Work order was not found.");
+      if (workOrder.directMaterialCost <= 0) return errorResponse(409, "WORK_ORDER_MATERIAL_COST_MISSING", "Finished goods receipt requires direct material cost.");
+      const totalQuantity = body.lines.reduce((sum, line) => sum + Number(line.quantity), 0);
+      const totalAmount = roundAmount(workOrder.directMaterialCost);
+      const movement = postInventoryMovement(
+        state,
+        {
+          accountSetId: body.accountSetId,
+          documentNo: `${body.receiptNo}-FG`,
+          movementType: "inbound",
+          businessType: "product_receipt",
+          fiscalYear: body.fiscalYear,
+          periodNo: body.periodNo,
+          createdBy: body.createdBy ?? actorId,
+          sourceType: "work_order",
+          sourceDocumentId: workOrder.id,
+          lines: body.lines.map((line) => ({
+            itemId: line.productItemId,
+            warehouseId: line.warehouseId,
+            locationId: line.locationId,
+            batchNo: line.batchNo,
+            quantity: line.quantity,
+            amount: roundAmount((Number(line.quantity) / totalQuantity) * totalAmount)
+          }))
+        },
+        actorId,
+        { skipAudit: true }
+      );
+      const receiptId = body.id ?? `product-receipt:${randomUUID()}`;
+      const lines = movement.lines.map((line, index) => ({
+        id: `product-receipt-line:${randomUUID()}`,
+        productReceiptId: receiptId,
+        productItemId: line.itemId,
+        productItemCode: line.itemCode,
+        productItemName: line.itemName,
+        warehouseId: line.warehouseId,
+        warehouseCode: line.warehouseCode,
+        locationId: line.locationId,
+        batchNo: line.batchNo,
+        lineNo: index + 1,
+        quantity: line.quantity,
+        unitCost: line.unitCost,
+        amount: line.amount
+      }));
+      const receipt = {
+        id: receiptId,
+        accountSetId: body.accountSetId,
+        receiptNo: body.receiptNo,
+        workOrderId: workOrder.id,
+        workOrderNo: workOrder.workOrderNo,
+        sourceMovementId: movement.id,
+        fiscalYear: Number(body.fiscalYear),
+        periodNo: Number(body.periodNo),
+        status: "posted",
+        costStatus: "direct_material_only",
+        totalQuantity: movement.totalQuantity,
+        totalAmount: movement.totalAmount,
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now",
+        lines
+      };
+      workOrder.completedQuantity = roundQuantity(workOrder.completedQuantity + receipt.totalQuantity);
+      state.productReceipts.set(receipt.id, receipt);
+      appendAuditLog(state, { actorId: receipt.createdBy, action: "product_receipt.post", objectType: "product_receipt", objectId: receipt.id });
+      return jsonResponse(201, receipt);
     }
   }
 

@@ -48,6 +48,9 @@ import { InventoryMovements } from './pages/InventoryMovements';
 import { InventoryTransfers } from './pages/InventoryTransfers';
 import { StockCounts } from './pages/StockCounts';
 import { InventoryLedger } from './pages/InventoryLedger';
+import { ProductionWorkOrders } from './pages/ProductionWorkOrders';
+import { MaterialRequisitions } from './pages/MaterialRequisitions';
+import { ProductReceipts } from './pages/ProductReceipts';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -231,6 +234,9 @@ const AppFrame: React.FC = () => {
                   { key: 'inventory-movements', label: <Link to="/inventory-movements">出入库单</Link> },
                   { key: 'inventory-transfers', label: <Link to="/inventory-transfers">调拨单</Link> },
                   { key: 'stock-counts', label: <Link to="/stock-counts">盘点工作台</Link> },
+                  { key: 'work-orders', label: <Link to="/work-orders">生产工单</Link> },
+                  { key: 'material-requisitions', label: <Link to="/material-requisitions">生产领料</Link> },
+                  { key: 'product-receipts', label: <Link to="/product-receipts">完工入库</Link> },
                   { key: 'inventory-ledger', label: <Link to="/inventory-ledger">收发存查询</Link> },
                 ],
               },
@@ -351,6 +357,9 @@ const AppFrame: React.FC = () => {
                 <Route path="/inventory-movements" element={<RequireAuth><InventoryMovements /></RequireAuth>} />
                 <Route path="/inventory-transfers" element={<RequireAuth><InventoryTransfers /></RequireAuth>} />
                 <Route path="/stock-counts" element={<RequireAuth><StockCounts /></RequireAuth>} />
+                <Route path="/work-orders" element={<RequireAuth><ProductionWorkOrders /></RequireAuth>} />
+                <Route path="/material-requisitions" element={<RequireAuth><MaterialRequisitions /></RequireAuth>} />
+                <Route path="/product-receipts" element={<RequireAuth><ProductReceipts /></RequireAuth>} />
                 <Route path="/inventory-ledger" element={<RequireAuth><InventoryLedger /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />

@@ -3374,6 +3374,174 @@ paths:
               schema:
                 $ref: "#/components/schemas/StockCountPreview"
 
+  /work-orders:
+    get:
+      summary: List Phase 3 production work orders.
+      x-permission: work_order.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Work order list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkOrder"
+    post:
+      summary: Create a Phase 3 production work order from a BOM.
+      x-permission: work_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkOrderRequest"
+      responses:
+        "201":
+          description: Work order created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkOrder"
+
+  /work-orders/{workOrderId}/release:
+    post:
+      summary: Release a Phase 3 production work order.
+      x-permission: work_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - name: workOrderId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Work order released.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkOrder"
+
+  /work-orders/{workOrderId}/close:
+    post:
+      summary: Close a Phase 3 production work order after finished-goods receipt.
+      x-permission: work_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - name: workOrderId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Work order closed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkOrder"
+
+  /material-requisitions:
+    get:
+      summary: List Phase 3 production material requisitions.
+      x-permission: material_requisition.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Material requisition list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MaterialRequisition"
+    post:
+      summary: Post Phase 3 production material requisition and direct material cost.
+      x-permission: material_requisition.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMaterialRequisitionRequest"
+      responses:
+        "201":
+          description: Material requisition posted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaterialRequisition"
+
+  /product-receipts:
+    get:
+      summary: List Phase 3 finished-goods receipts.
+      x-permission: product_receipt.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Product receipt list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProductReceipt"
+    post:
+      summary: Post Phase 3 finished-goods receipt with direct-material-only cost status.
+      x-permission: product_receipt.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductReceiptRequest"
+      responses:
+        "201":
+          description: Product receipt posted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductReceipt"
+
 components:
   parameters:
     AccountSetId:
@@ -6717,6 +6885,188 @@ components:
           type: number
         reason:
           type: string
+
+    CreateWorkOrderRequest:
+      type: object
+      required: [accountSetId, workOrderNo, productItemId, bomId, plannedQuantity, fiscalYear, periodNo]
+      properties:
+        accountSetId:
+          type: string
+        workOrderNo:
+          type: string
+        productItemId:
+          type: string
+        bomId:
+          type: string
+        plannedQuantity:
+          type: number
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+
+    WorkOrder:
+      type: object
+      required: [id, accountSetId, workOrderNo, productItemId, bomId, plannedQuantity, completedQuantity, directMaterialCost, status]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        workOrderNo:
+          type: string
+        productItemId:
+          type: string
+        productItemCode:
+          type: string
+        bomId:
+          type: string
+        bomVersion:
+          type: string
+        plannedQuantity:
+          type: number
+        completedQuantity:
+          type: number
+        directMaterialCost:
+          type: number
+        status:
+          type: string
+          enum: [planned, released, closed]
+
+    CreateMaterialRequisitionRequest:
+      type: object
+      required: [accountSetId, requisitionNo, workOrderId, fiscalYear, periodNo, lines]
+      properties:
+        accountSetId:
+          type: string
+        requisitionNo:
+          type: string
+        workOrderId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/MaterialRequisitionLine"
+
+    MaterialRequisition:
+      type: object
+      required: [id, accountSetId, requisitionNo, workOrderId, sourceMovementId, totalQuantity, totalAmount, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        requisitionNo:
+          type: string
+        workOrderId:
+          type: string
+        sourceMovementId:
+          type: string
+        totalQuantity:
+          type: number
+        totalAmount:
+          type: number
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/MaterialRequisitionLine"
+
+    MaterialRequisitionLine:
+      type: object
+      required: [componentItemId, warehouseId, quantity]
+      properties:
+        componentItemId:
+          type: string
+        componentItemCode:
+          type: string
+        warehouseId:
+          type: string
+        warehouseCode:
+          type: string
+        batchNo:
+          type: string
+        quantity:
+          type: number
+        unitCost:
+          type: number
+        amount:
+          type: number
+
+    CreateProductReceiptRequest:
+      type: object
+      required: [accountSetId, receiptNo, workOrderId, fiscalYear, periodNo, lines]
+      properties:
+        accountSetId:
+          type: string
+        receiptNo:
+          type: string
+        workOrderId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductReceiptLine"
+
+    ProductReceipt:
+      type: object
+      required: [id, accountSetId, receiptNo, workOrderId, sourceMovementId, costStatus, totalQuantity, totalAmount, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        receiptNo:
+          type: string
+        workOrderId:
+          type: string
+        sourceMovementId:
+          type: string
+        costStatus:
+          type: string
+          enum: [direct_material_only]
+        totalQuantity:
+          type: number
+        totalAmount:
+          type: number
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductReceiptLine"
+
+    ProductReceiptLine:
+      type: object
+      required: [productItemId, warehouseId, quantity]
+      properties:
+        productItemId:
+          type: string
+        productItemCode:
+          type: string
+        warehouseId:
+          type: string
+        warehouseCode:
+          type: string
+        batchNo:
+          type: string
+        quantity:
+          type: number
+        unitCost:
+          type: number
+        amount:
+          type: number
 
     CreateAgentActionRequest:
       type: object

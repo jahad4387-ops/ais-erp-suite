@@ -87,7 +87,12 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/inventory-opening-balances:",
     "/inventory-movements:",
     "/inventory-transfers:",
-    "/stock-counts/preview:"
+    "/stock-counts/preview:",
+    "/work-orders:",
+    "/work-orders/{workOrderId}/release:",
+    "/work-orders/{workOrderId}/close:",
+    "/material-requisitions:",
+    "/product-receipts:"
   ];
 
   for (const path of writePaths) {
@@ -159,6 +164,11 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "InventoryTransfer:",
     "StockCountPreview:",
     "StockCountLine:",
+    "WorkOrder:",
+    "MaterialRequisition:",
+    "MaterialRequisitionLine:",
+    "ProductReceipt:",
+    "ProductReceiptLine:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -276,6 +286,26 @@ test("Phase 3 movement costing endpoints document movements, transfers, stock co
   assert.match(stockCountPreviewBlock, /StockCountPreview/);
   assert.match(contract, /costBreakdown:/, "Movement line schema must expose FIFO layer cost breakdown.");
   assert.match(contract, /zeroResidualAdjustment:/, "Movement line schema must expose zero-quantity residual adjustment.");
+});
+
+test("Phase 3 production workflow endpoints document work orders, material requisitions, and product receipts", () => {
+  const workOrderBlock = blockAfter("  /work-orders:");
+  const releaseBlock = blockAfter("  /work-orders/{workOrderId}/release:");
+  const closeBlock = blockAfter("  /work-orders/{workOrderId}/close:");
+  const requisitionBlock = blockAfter("  /material-requisitions:");
+  const receiptBlock = blockAfter("  /product-receipts:");
+
+  assert.match(workOrderBlock, /x-permission: work_order\.manage/);
+  assert.match(workOrderBlock, /WorkOrder/);
+  assert.match(releaseBlock, /x-permission: work_order\.manage/);
+  assert.match(closeBlock, /x-permission: work_order\.manage/);
+  assert.match(requisitionBlock, /x-permission: material_requisition\.manage/);
+  assert.match(requisitionBlock, /MaterialRequisition/);
+  assert.match(receiptBlock, /x-permission: product_receipt\.manage/);
+  assert.match(receiptBlock, /ProductReceipt/);
+  assert.match(contract, /directMaterialCost:/, "Work orders must expose accumulated direct material cost.");
+  assert.match(contract, /sourceMovementId:/, "Production documents must expose inventory movement traceability.");
+  assert.match(contract, /direct_material_only/, "Product receipts must document pre-allocation cost status.");
 });
 
 test("deployment configuration check endpoint is documented", () => {

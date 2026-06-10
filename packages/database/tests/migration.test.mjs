@@ -50,6 +50,10 @@ const phase3MovementCostingMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260611010000_phase3_movement_costing/migration.sql", import.meta.url)
 );
 const phase3MovementCostingMigrationText = phase3MovementCostingMigrationSql.toString("utf8");
+const phase3ProductionWorkflowMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260611020000_phase3_production_workflow/migration.sql", import.meta.url)
+);
+const phase3ProductionWorkflowMigrationText = phase3ProductionWorkflowMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -280,4 +284,17 @@ test("Phase 3 movement costing migration creates stock movements, balances, cost
   assert.match(phase3MovementCostingMigrationText, /CREATE INDEX "InventoryMovement_accountSetId_fiscalYear_periodNo_idx"/);
   assert.match(phase3MovementCostingMigrationText, /CREATE UNIQUE INDEX "InventoryBalance_unique_dimension_key"/);
   assert.match(phase3MovementCostingMigrationText, /CREATE INDEX "InventoryCostLayer_accountSetId_itemId_status_idx"/);
+});
+
+test("Phase 3 production workflow migration creates work orders, material requisitions, and product receipts", () => {
+  for (const table of ["WorkOrder", "MaterialRequisition", "MaterialRequisitionLine", "ProductReceipt", "ProductReceiptLine"]) {
+    assert.match(phase3ProductionWorkflowMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase3ProductionWorkflowMigrationText, /"plannedQuantity" REAL NOT NULL/, "Work orders must persist planned output.");
+  assert.match(phase3ProductionWorkflowMigrationText, /"directMaterialCost" REAL NOT NULL DEFAULT 0/, "Work orders must accumulate direct material cost.");
+  assert.match(phase3ProductionWorkflowMigrationText, /"sourceMovementId" TEXT NOT NULL/, "Production documents must trace inventory movements.");
+  assert.match(phase3ProductionWorkflowMigrationText, /"costStatus" TEXT NOT NULL DEFAULT 'direct_material_only'/, "Product receipts must expose cost status before allocation.");
+  assert.match(phase3ProductionWorkflowMigrationText, /CREATE UNIQUE INDEX "WorkOrder_accountSetId_workOrderNo_key"/);
+  assert.match(phase3ProductionWorkflowMigrationText, /CREATE INDEX "MaterialRequisition_workOrderId_idx"/);
+  assert.match(phase3ProductionWorkflowMigrationText, /CREATE INDEX "ProductReceipt_workOrderId_idx"/);
 });

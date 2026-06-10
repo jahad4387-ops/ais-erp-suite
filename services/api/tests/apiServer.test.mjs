@@ -2303,6 +2303,208 @@ test("Phase 3 stock movements calculate moving-average and FIFO costs with trans
   assert.ok(api.state.auditLogs.some((log) => log.action === "inventory_transfer.post" && log.objectId === transfer.body.id));
 });
 
+test("Phase 3 production workflow releases work orders, issues materials, and receives finished goods", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P3-PROD",
+      name: "Phase 3 Production Set",
+      companyName: "Phase 3 Factory Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase3-production-account-set"
+  );
+  const actorId = "phase3-production-actor";
+  api.state.permissionsByActor.set(
+    actorId,
+    new Set([
+      "inventory_item.manage",
+      "bom.manage",
+      "warehouse.manage",
+      "inventory_balance.manage",
+      "inventory_movement.manage",
+      "work_order.manage",
+      "material_requisition.manage",
+      "product_receipt.manage"
+    ])
+  );
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+
+  const rawMaterial = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-prod-raw" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "RM-MOTOR",
+      name: "Motor",
+      unit: "pcs",
+      costMethod: "fifo",
+      isBatchManaged: true,
+      createdBy: actorId
+    }
+  });
+  const finishedGood = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-prod-fg" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "FG-FAN",
+      name: "Finished Fan",
+      unit: "pcs",
+      costMethod: "moving_average",
+      isManufactured: true,
+      createdBy: actorId
+    }
+  });
+  const warehouse = await api.handle({
+    method: "POST",
+    path: "/warehouses",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-prod-warehouse" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "WH-PROD",
+      name: "Production Warehouse",
+      createdBy: actorId
+    }
+  });
+  await api.handle({
+    method: "POST",
+    path: "/inventory-opening-balances",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-prod-opening" },
+    body: {
+      accountSetId: accountSet.body.id,
+      itemId: rawMaterial.body.id,
+      warehouseId: warehouse.body.id,
+      batchNo: "MOTOR-A",
+      fiscalYear: 2026,
+      periodNo: 1,
+      quantity: 20,
+      amount: 200,
+      createdBy: actorId
+    }
+  });
+  const bom = await api.handle({
+    method: "POST",
+    path: "/boms",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-prod-bom" },
+    body: {
+      accountSetId: accountSet.body.id,
+      productItemId: finishedGood.body.id,
+      version: "V1",
+      status: "active",
+      yieldQuantity: 1,
+      createdBy: actorId,
+      lines: [{ componentItemId: rawMaterial.body.id, quantity: 2, scrapRate: 0, lineNo: 1 }]
+    }
+  });
+
+  const workOrder = await api.handle({
+    method: "POST",
+    path: "/work-orders",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-work-order" },
+    body: {
+      accountSetId: accountSet.body.id,
+      workOrderNo: "WO-001",
+      productItemId: finishedGood.body.id,
+      bomId: bom.body.id,
+      plannedQuantity: 4,
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId
+    }
+  });
+  const release = await api.handle({
+    method: "POST",
+    path: `/work-orders/${workOrder.body.id}/release`,
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-work-order-release" },
+    body: { releasedBy: actorId }
+  });
+  const requisition = await api.handle({
+    method: "POST",
+    path: "/material-requisitions",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-material-requisition" },
+    body: {
+      accountSetId: accountSet.body.id,
+      requisitionNo: "MR-001",
+      workOrderId: workOrder.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId,
+      lines: [{ componentItemId: rawMaterial.body.id, warehouseId: warehouse.body.id, batchNo: "MOTOR-A", quantity: 8 }]
+    }
+  });
+  const receipt = await api.handle({
+    method: "POST",
+    path: "/product-receipts",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-product-receipt" },
+    body: {
+      accountSetId: accountSet.body.id,
+      receiptNo: "PR-001",
+      workOrderId: workOrder.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: actorId,
+      lines: [{ productItemId: finishedGood.body.id, warehouseId: warehouse.body.id, quantity: 4 }]
+    }
+  });
+  const close = await api.handle({
+    method: "POST",
+    path: `/work-orders/${workOrder.body.id}/close`,
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-work-order-close" },
+    body: { closedBy: actorId }
+  });
+  const workOrders = await api.handle({
+    method: "GET",
+    path: `/work-orders?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": actorId }
+  });
+  const balances = await api.handle({
+    method: "GET",
+    path: `/inventory-balances?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(workOrder.status, 201);
+  assert.equal(workOrder.body.status, "planned");
+  assert.equal(workOrder.body.productItemCode, "FG-FAN");
+  assert.equal(release.status, 200);
+  assert.equal(release.body.status, "released");
+  assert.equal(requisition.status, 201);
+  assert.equal(requisition.body.totalAmount, 80);
+  assert.equal(requisition.body.lines[0].unitCost, 10);
+  assert.equal(requisition.body.sourceMovementId.startsWith("inventory-movement:"), true);
+  assert.equal(receipt.status, 201);
+  assert.equal(receipt.body.totalAmount, 80);
+  assert.equal(receipt.body.costStatus, "direct_material_only");
+  assert.equal(receipt.body.lines[0].unitCost, 20);
+  assert.equal(receipt.body.sourceMovementId.startsWith("inventory-movement:"), true);
+  assert.equal(close.status, 200);
+  assert.equal(close.body.status, "closed");
+  assert.equal(close.body.directMaterialCost, 80);
+  assert.equal(close.body.completedQuantity, 4);
+  assert.equal(workOrders.body[0].status, "closed");
+  assert.deepEqual(
+    balances.body
+      .filter((balance) => ["RM-MOTOR", "FG-FAN"].includes(balance.itemCode))
+      .map((balance) => ({ itemCode: balance.itemCode, quantity: balance.quantity, amount: balance.amount })),
+    [
+      { itemCode: "FG-FAN", quantity: 4, amount: 80 },
+      { itemCode: "RM-MOTOR", quantity: 12, amount: 120 }
+    ]
+  );
+  assert.ok(api.state.auditLogs.some((log) => log.action === "work_order.release" && log.objectId === workOrder.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "material_requisition.post" && log.objectId === requisition.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "product_receipt.post" && log.objectId === receipt.body.id));
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

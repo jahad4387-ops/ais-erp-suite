@@ -39,3 +39,4 @@ import "../apps/web/tests/counterpartyAnalyticsPage.test.mjs";
 import "../docs/tests/phase2AcceptanceReport.test.mjs";
 import "../apps/web/tests/inventoryFoundationPages.test.mjs";
 import "../apps/web/tests/inventoryMovementPages.test.mjs";
+import "../apps/web/tests/productionWorkflowPages.test.mjs";
