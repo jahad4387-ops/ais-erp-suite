@@ -1757,6 +1757,97 @@ test("Phase 2 AR/AP netting settles receivable and payable entries for the same 
   assert.equal(api.state.counterpartyLedgerEntries.get("ledger:ap:netting").remainingAmount, 200);
 });
 
+test("Phase 2 counterparty analytics summarize supplier/customer ledgers and aging buckets", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P2-AGE",
+      name: "Phase 2 Aging Set",
+      companyName: "Phase 2 Aging Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase2-aging-account-set"
+  );
+  const actorId = "aging-actor";
+  api.state.permissionsByActor.set(actorId, new Set(["counterparty_ledger.view"]));
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+  api.state.counterpartyLedgerEntries.set("ledger:ar:aging", {
+    id: "ledger:ar:aging",
+    accountSetId: accountSet.body.id,
+    partnerId: "customer:aging",
+    partnerName: "Aging Customer",
+    direction: "ar",
+    sourceType: "sales_invoice",
+    sourceId: "sales-invoice:aging",
+    sourceNo: "SI-AGE-001",
+    documentDate: "2026-05-01",
+    dueDate: "2026-06-10",
+    originalAmount: 500,
+    settledAmount: 400,
+    remainingAmount: 100,
+    status: "partially_settled",
+    glAccountCode: "1122",
+    auxiliaryType: "customer",
+    auxiliaryPartnerId: "customer:aging",
+    createdBy: actorId
+  });
+  api.state.counterpartyLedgerEntries.set("ledger:ap:aging", {
+    id: "ledger:ap:aging",
+    accountSetId: accountSet.body.id,
+    partnerId: "supplier:aging",
+    partnerName: "Aging Supplier",
+    direction: "ap",
+    sourceType: "purchase_invoice",
+    sourceId: "purchase-invoice:aging",
+    sourceNo: "PI-AGE-001",
+    documentDate: "2026-02-01",
+    dueDate: "2026-03-01",
+    originalAmount: 300,
+    settledAmount: 100,
+    remainingAmount: 200,
+    status: "partially_settled",
+    glAccountCode: "2202",
+    auxiliaryType: "supplier",
+    auxiliaryPartnerId: "supplier:aging",
+    isPaymentBlocked: false,
+    paymentBlockReason: null,
+    createdBy: actorId
+  });
+
+  const summary = await api.handle({
+    method: "GET",
+    path: `/counterparty-ledger-summary?accountSetId=${accountSet.body.id}&asOfDate=2026-06-15`,
+    headers: { "Actor-Id": actorId }
+  });
+  const arAging = await api.handle({
+    method: "GET",
+    path: `/counterparty-aging?accountSetId=${accountSet.body.id}&direction=ar&asOfDate=2026-06-15`,
+    headers: { "Actor-Id": actorId }
+  });
+  const apAging = await api.handle({
+    method: "GET",
+    path: `/counterparty-aging?accountSetId=${accountSet.body.id}&direction=ap&asOfDate=2026-06-15`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(summary.status, 200);
+  assert.equal(summary.body.length, 2);
+  assert.equal(summary.body.find((row) => row.direction === "ar").remainingAmount, 100);
+  assert.equal(summary.body.find((row) => row.direction === "ar").overdueAmount, 100);
+  assert.equal(summary.body.find((row) => row.direction === "ap").remainingAmount, 200);
+  assert.equal(arAging.status, 200);
+  assert.equal(arAging.body[0].bucket1To30, 100);
+  assert.equal(arAging.body[0].detailRows[0].sourceNo, "SI-AGE-001");
+  assert.equal(apAging.status, 200);
+  assert.equal(apAging.body[0].bucketOver90, 200);
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

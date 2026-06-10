@@ -584,6 +584,9 @@ function permissionFor(request) {
     if (request.method === "POST" && segments.length === 3 && segments[2] === "block-payment") return "payment_block.manage";
     return "counterparty_ledger.view";
   }
+  if (segments[0] === "counterparty-ledger-summary" || segments[0] === "counterparty-aging") {
+    return "counterparty_ledger.view";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -1216,6 +1219,93 @@ async function listCounterpartyLedgerEntries(state, accountSetId, filters = {}) 
   return [...entriesById.values()].sort(
     (left, right) => String(left.documentDate).localeCompare(String(right.documentDate)) || left.sourceNo.localeCompare(right.sourceNo)
   );
+}
+
+function dateValue(value) {
+  if (!value) return null;
+  const date = new Date(`${String(value).slice(0, 10)}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function daysPastDue(dueDate, asOfDate) {
+  const due = dateValue(dueDate);
+  const asOf = dateValue(asOfDate);
+  if (!due || !asOf) return 0;
+  return Math.max(0, Math.floor((asOf.getTime() - due.getTime()) / 86400000));
+}
+
+function agingBucketKey(days) {
+  if (days <= 0) return "bucketCurrent";
+  if (days <= 30) return "bucket1To30";
+  if (days <= 60) return "bucket31To60";
+  if (days <= 90) return "bucket61To90";
+  return "bucketOver90";
+}
+
+function summarizeCounterpartyLedger(entries, asOfDate) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const key = `${entry.direction}:${entry.partnerId}`;
+    const row = groups.get(key) ?? {
+      partnerId: entry.partnerId,
+      partnerName: entry.partnerName ?? null,
+      direction: entry.direction,
+      originalAmount: 0,
+      settledAmount: 0,
+      remainingAmount: 0,
+      overdueAmount: 0,
+      openItemCount: 0,
+      status: "current"
+    };
+    const remainingAmount = Number(entry.remainingAmount ?? 0);
+    row.originalAmount = Number((row.originalAmount + Number(entry.originalAmount ?? 0)).toFixed(2));
+    row.settledAmount = Number((row.settledAmount + Number(entry.settledAmount ?? 0)).toFixed(2));
+    row.remainingAmount = Number((row.remainingAmount + remainingAmount).toFixed(2));
+    if (remainingAmount > 0) {
+      row.openItemCount += 1;
+    }
+    if (remainingAmount > 0 && daysPastDue(entry.dueDate, asOfDate) > 0) {
+      row.overdueAmount = Number((row.overdueAmount + remainingAmount).toFixed(2));
+      row.status = "overdue";
+    }
+    groups.set(key, row);
+  }
+  return [...groups.values()].sort((left, right) => left.direction.localeCompare(right.direction) || left.partnerId.localeCompare(right.partnerId));
+}
+
+function buildCounterpartyAging(entries, asOfDate) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const remainingAmount = Number(entry.remainingAmount ?? 0);
+    if (remainingAmount <= 0) continue;
+    const key = `${entry.direction}:${entry.partnerId}`;
+    const row = groups.get(key) ?? {
+      partnerId: entry.partnerId,
+      partnerName: entry.partnerName ?? null,
+      direction: entry.direction,
+      bucketCurrent: 0,
+      bucket1To30: 0,
+      bucket31To60: 0,
+      bucket61To90: 0,
+      bucketOver90: 0,
+      totalRemaining: 0,
+      detailRows: []
+    };
+    const days = daysPastDue(entry.dueDate, asOfDate);
+    const bucket = agingBucketKey(days);
+    row[bucket] = Number((row[bucket] + remainingAmount).toFixed(2));
+    row.totalRemaining = Number((row.totalRemaining + remainingAmount).toFixed(2));
+    row.detailRows.push({
+      id: entry.id,
+      sourceNo: entry.sourceNo,
+      dueDate: entry.dueDate ?? null,
+      daysPastDue: days,
+      remainingAmount,
+      bucket
+    });
+    groups.set(key, row);
+  }
+  return [...groups.values()].sort((left, right) => left.direction.localeCompare(right.direction) || left.partnerId.localeCompare(right.partnerId));
 }
 
 async function createCounterpartyLedgerEntry(state, entry) {
@@ -2823,6 +2913,40 @@ async function route(request, state) {
       });
       return jsonResponse(201, savedInvoice);
     }
+  }
+
+  if (segments.length === 1 && segments[0] === "counterparty-ledger-summary" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    if (!accountSetId) {
+      throw new Error("accountSetId is required.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const entries = await listCounterpartyLedgerEntries(state, accountSetId, {
+      direction: query.get("direction") ?? null,
+      partnerId: query.get("partnerId") ?? null
+    });
+    return jsonResponse(200, summarizeCounterpartyLedger(entries, query.get("asOfDate") ?? new Date().toISOString().slice(0, 10)));
+  }
+
+  if (segments.length === 1 && segments[0] === "counterparty-aging" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    if (!accountSetId) {
+      throw new Error("accountSetId is required.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const entries = await listCounterpartyLedgerEntries(state, accountSetId, {
+      direction: query.get("direction") ?? null,
+      partnerId: query.get("partnerId") ?? null
+    });
+    return jsonResponse(200, buildCounterpartyAging(entries, query.get("asOfDate") ?? new Date().toISOString().slice(0, 10)));
   }
 
   if (segments.length === 1 && segments[0] === "counterparty-ledger" && request.method === "GET") {

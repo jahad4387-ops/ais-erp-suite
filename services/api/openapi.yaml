@@ -1924,6 +1924,84 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /counterparty-ledger-summary:
+    get:
+      summary: List Phase 2 AP/AR counterparty ledger summaries by partner.
+      x-permission: counterparty_ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: direction
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ap, ar]
+        - name: partnerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: asOfDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Counterparty ledger summary list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CounterpartyLedgerSummary"
+
+  /counterparty-aging:
+    get:
+      summary: List Phase 2 AP/AR aging buckets by partner.
+      x-permission: counterparty_ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: direction
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ap, ar]
+        - name: partnerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: asOfDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Counterparty aging bucket list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CounterpartyAgingBucket"
+
   /counterparty-ledger:
     get:
       summary: List Phase 2 AP and AR counterparty ledger entries with GL auxiliary mappings.
@@ -3942,6 +4020,73 @@ components:
           type: string
         createdBy:
           type: string
+
+    CounterpartyLedgerSummary:
+      type: object
+      required: [partnerId, direction, originalAmount, settledAmount, remainingAmount, overdueAmount, openItemCount, status]
+      properties:
+        partnerId:
+          type: string
+        partnerName:
+          type: string
+        direction:
+          type: string
+          enum: [ap, ar]
+        originalAmount:
+          type: number
+        settledAmount:
+          type: number
+        remainingAmount:
+          type: number
+        overdueAmount:
+          type: number
+        openItemCount:
+          type: integer
+        status:
+          type: string
+          enum: [current, overdue]
+
+    CounterpartyAgingBucket:
+      type: object
+      required: [partnerId, direction, bucketCurrent, bucket1To30, bucket31To60, bucket61To90, bucketOver90, totalRemaining, detailRows]
+      properties:
+        partnerId:
+          type: string
+        partnerName:
+          type: string
+        direction:
+          type: string
+          enum: [ap, ar]
+        bucketCurrent:
+          type: number
+        bucket1To30:
+          type: number
+        bucket31To60:
+          type: number
+        bucket61To90:
+          type: number
+        bucketOver90:
+          type: number
+        totalRemaining:
+          type: number
+        detailRows:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              sourceNo:
+                type: string
+              dueDate:
+                type: string
+                format: date
+              daysPastDue:
+                type: integer
+              remainingAmount:
+                type: number
+              bucket:
+                type: string
 
     PaymentRequestCreateRequest:
       type: object

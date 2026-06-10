@@ -36,6 +36,7 @@ import { Orders } from './pages/Orders';
 import { Fulfillment } from './pages/Fulfillment';
 import { Invoices } from './pages/Invoices';
 import { CounterpartyLedger } from './pages/CounterpartyLedger';
+import { CounterpartyAnalytics } from './pages/CounterpartyAnalytics';
 import { PaymentWorkbench } from './pages/PaymentWorkbench';
 import { ReceiptWorkbench } from './pages/ReceiptWorkbench';
 import { ApSettlementWorkbench } from './pages/ApSettlementWorkbench';
@@ -219,6 +220,7 @@ const AppFrame: React.FC = () => {
                   { key: 'sales-deliveries', label: <Link to="/sales-deliveries">销售出库</Link> },
                   { key: 'sales-invoices', label: <Link to="/sales-invoices">销售发票</Link> },
                   { key: 'counterparty-ledger', label: <Link to="/counterparty-ledger">往来明细</Link> },
+                  { key: 'counterparty-analytics', label: <Link to="/counterparty-analytics">往来分析</Link> },
                   { key: 'payment-requests', label: <Link to="/payment-requests">付款申请</Link> },
                   { key: 'customer-receipts', label: <Link to="/customer-receipts">收款单</Link> },
                   { key: 'ap-settlements', label: <Link to="/ap-settlements">应付核销</Link> },
@@ -312,6 +314,7 @@ const AppFrame: React.FC = () => {
                 <Route path="/purchase-invoices" element={<RequireAuth><Invoices invoiceType="purchase" /></RequireAuth>} />
                 <Route path="/sales-invoices" element={<RequireAuth><Invoices invoiceType="sales" /></RequireAuth>} />
                 <Route path="/counterparty-ledger" element={<RequireAuth><CounterpartyLedger /></RequireAuth>} />
+                <Route path="/counterparty-analytics" element={<RequireAuth><CounterpartyAnalytics /></RequireAuth>} />
                 <Route path="/payment-requests" element={<RequireAuth><PaymentWorkbench /></RequireAuth>} />
                 <Route path="/customer-receipts" element={<RequireAuth><ReceiptWorkbench /></RequireAuth>} />
                 <Route path="/ap-settlements" element={<RequireAuth><ApSettlementWorkbench /></RequireAuth>} />

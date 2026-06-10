@@ -35,3 +35,4 @@ import "../apps/web/tests/counterpartyLedgerPage.test.mjs";
 import "../apps/web/tests/paymentWorkbenchPage.test.mjs";
 import "../apps/web/tests/receiptWorkbenchPage.test.mjs";
 import "../apps/web/tests/apSettlementWorkbenchPage.test.mjs";
+import "../apps/web/tests/counterpartyAnalyticsPage.test.mjs";
