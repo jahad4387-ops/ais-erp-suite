@@ -17,6 +17,8 @@ function createFakePrisma() {
   const salesOrders = new Map();
   const purchaseReceipts = new Map();
   const salesDeliveries = new Map();
+  const purchaseInvoices = new Map();
+  const salesInvoices = new Map();
   const periods = new Map();
   const chartOfAccounts = new Map();
   const auxiliaryTypes = new Map();
@@ -300,6 +302,38 @@ function createFakePrisma() {
       findMany: async ({ where, include } = {}) => {
         const rows = [...salesDeliveries.values()].filter((delivery) => !where?.accountSetId || delivery.accountSetId === where.accountSetId);
         return rows.map((delivery) => (include?.lines ? delivery : { ...delivery, lines: undefined }));
+      }
+    },
+    purchaseInvoice: {
+      create: async ({ data, include }) => {
+        const invoice = {
+          ...data,
+          supplier: partners.get(data.supplierId),
+          purchaseReceipt: purchaseReceipts.get(data.purchaseReceiptId),
+          lines: data.lines.create.map((line) => ({ ...line }))
+        };
+        purchaseInvoices.set(invoice.id, invoice);
+        return include?.lines ? invoice : { ...invoice, lines: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        const rows = [...purchaseInvoices.values()].filter((invoice) => !where?.accountSetId || invoice.accountSetId === where.accountSetId);
+        return rows.map((invoice) => (include?.lines ? invoice : { ...invoice, lines: undefined }));
+      }
+    },
+    salesInvoice: {
+      create: async ({ data, include }) => {
+        const invoice = {
+          ...data,
+          customer: partners.get(data.customerId),
+          salesDelivery: salesDeliveries.get(data.salesDeliveryId),
+          lines: data.lines.create.map((line) => ({ ...line }))
+        };
+        salesInvoices.set(invoice.id, invoice);
+        return include?.lines ? invoice : { ...invoice, lines: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        const rows = [...salesInvoices.values()].filter((invoice) => !where?.accountSetId || invoice.accountSetId === where.accountSetId);
+        return rows.map((invoice) => (include?.lines ? invoice : { ...invoice, lines: undefined }));
       }
     },
     accountingPeriod: {
@@ -942,6 +976,140 @@ test("Prisma platform persistence stores Phase 2 fulfillment source documents", 
   assert.deepEqual(delivery.evidenceRefs, ["attachment:delivery-slip"]);
   assert.deepEqual(receipts.map((row) => row.receiptNo), ["PR-202602-001"]);
   assert.deepEqual(deliveries.map((row) => row.deliveryNo), ["SD-202602-001"]);
+});
+
+test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  const accountSet = await store.createAccountSet({
+    id: "account-set:phase2-invoices",
+    code: "P2I",
+    name: "Phase 2 Invoices",
+    companyName: "Phase 2 Invoice Co.",
+    baseCurrency: "CNY",
+    accountingStandard: "Small Business Accounting Standards",
+    startYear: 2026,
+    startPeriod: 1,
+    status: "draft",
+    createdBy: "system"
+  });
+  const supplier = await store.createPartner({
+    id: "partner:invoice-supplier",
+    accountSetId: accountSet.id,
+    partnerType: "supplier",
+    code: "SUP-INV",
+    name: "Invoice Supplier",
+    isEnabled: true
+  });
+  const customer = await store.createPartner({
+    id: "partner:invoice-customer",
+    accountSetId: accountSet.id,
+    partnerType: "customer",
+    code: "CUS-INV",
+    name: "Invoice Customer",
+    isEnabled: true
+  });
+  const purchaseOrder = await store.createPurchaseOrder({
+    id: "purchase-order:invoice",
+    accountSetId: accountSet.id,
+    supplierId: supplier.id,
+    orderNo: "PO-202603-001",
+    orderDate: "2026-03-01",
+    totalAmount: 1130,
+    status: "approved",
+    currency: "CNY",
+    exchangeRate: 1,
+    createdBy: "buyer",
+    lines: [{ lineNo: 1, itemCode: "MAT-INV", itemName: "Invoice Material", quantity: 10, unitPrice: 100, taxRate: 0.13, taxAmount: 130, totalAmount: 1130 }]
+  });
+  const salesOrder = await store.createSalesOrder({
+    id: "sales-order:invoice",
+    accountSetId: accountSet.id,
+    customerId: customer.id,
+    orderNo: "SO-202603-001",
+    orderDate: "2026-03-02",
+    totalAmount: 2120,
+    status: "approved",
+    currency: "CNY",
+    exchangeRate: 1,
+    createdBy: "seller",
+    lines: [{ lineNo: 1, itemCode: "SKU-INV", itemName: "Invoice SKU", quantity: 4, unitPrice: 500, taxRate: 0.06, taxAmount: 120, totalAmount: 2120 }]
+  });
+  const receipt = await store.createPurchaseReceipt({
+    id: "purchase-receipt:invoice",
+    accountSetId: accountSet.id,
+    purchaseOrderId: purchaseOrder.id,
+    supplierId: supplier.id,
+    receiptNo: "PR-202603-001",
+    receiptDate: "2026-03-03",
+    status: "approved",
+    totalQuantity: 10,
+    createdBy: "warehouse",
+    evidenceRefs: [],
+    lines: [{ lineNo: 1, purchaseOrderLineId: "purchase-order-line:purchase-order:invoice:1", itemCode: "MAT-INV", itemName: "Invoice Material", quantity: 10 }]
+  });
+  const delivery = await store.createSalesDelivery({
+    id: "sales-delivery:invoice",
+    accountSetId: accountSet.id,
+    salesOrderId: salesOrder.id,
+    customerId: customer.id,
+    deliveryNo: "SD-202603-001",
+    deliveryDate: "2026-03-04",
+    status: "approved",
+    totalQuantity: 4,
+    createdBy: "warehouse",
+    evidenceRefs: [],
+    lines: [{ lineNo: 1, salesOrderLineId: "sales-order-line:sales-order:invoice:1", itemCode: "SKU-INV", itemName: "Invoice SKU", quantity: 4 }]
+  });
+
+  const purchaseInvoice = await store.createPurchaseInvoice({
+    id: "purchase-invoice:1",
+    accountSetId: accountSet.id,
+    purchaseReceiptId: receipt.id,
+    supplierId: supplier.id,
+    invoiceNo: "PI-202603-001",
+    externalInvoiceNo: "VAT-001",
+    invoiceDate: "2026-03-05",
+    dueDate: "2026-04-04",
+    invoiceSource: "ocr",
+    status: "confirmed",
+    totalAmount: 1160,
+    taxAmount: 130,
+    payableAmount: 1160,
+    estimatedDifference: 30,
+    createdBy: "ap",
+    evidenceRefs: ["attachment:vat-001"],
+    lines: [{ lineNo: 1, purchaseOrderLineId: "purchase-order-line:purchase-order:invoice:1", itemCode: "MAT-INV", itemName: "Invoice Material", quantity: 10, unitPrice: 103, taxRate: 0.1262, taxAmount: 130, totalAmount: 1160 }]
+  });
+  const salesInvoice = await store.createSalesInvoice({
+    id: "sales-invoice:1",
+    accountSetId: accountSet.id,
+    salesDeliveryId: delivery.id,
+    customerId: customer.id,
+    invoiceNo: "SI-202603-001",
+    externalInvoiceNo: "OUT-001",
+    invoiceDate: "2026-03-06",
+    dueDate: "2026-03-21",
+    invoiceSource: "import",
+    status: "confirmed",
+    totalAmount: 2120,
+    taxAmount: 120,
+    receivableAmount: 2120,
+    createdBy: "ar",
+    evidenceRefs: ["attachment:out-001"],
+    lines: [{ lineNo: 1, salesOrderLineId: "sales-order-line:sales-order:invoice:1", itemCode: "SKU-INV", itemName: "Invoice SKU", quantity: 4, unitPrice: 500, taxRate: 0.06, taxAmount: 120, totalAmount: 2120 }]
+  });
+  const purchaseInvoices = await store.listPurchaseInvoices(accountSet.id);
+  const salesInvoices = await store.listSalesInvoices(accountSet.id);
+
+  assert.equal(purchaseInvoice.purchaseReceiptNo, "PR-202603-001");
+  assert.equal(purchaseInvoice.payableAmount, 1160);
+  assert.equal(purchaseInvoice.estimatedDifference, 30);
+  assert.deepEqual(purchaseInvoice.evidenceRefs, ["attachment:vat-001"]);
+  assert.equal(salesInvoice.salesDeliveryNo, "SD-202603-001");
+  assert.equal(salesInvoice.receivableAmount, 2120);
+  assert.deepEqual(salesInvoice.evidenceRefs, ["attachment:out-001"]);
+  assert.deepEqual(purchaseInvoices.map((row) => row.invoiceNo), ["PI-202603-001"]);
+  assert.deepEqual(salesInvoices.map((row) => row.invoiceNo), ["SI-202603-001"]);
 });
 
 test("Prisma platform persistence stores accounting periods and lifecycle status", async () => {

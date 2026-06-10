@@ -34,6 +34,7 @@ import { DeploymentConfig } from './pages/DeploymentConfig';
 import { Partners } from './pages/Partners';
 import { Orders } from './pages/Orders';
 import { Fulfillment } from './pages/Fulfillment';
+import { Invoices } from './pages/Invoices';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -209,8 +210,10 @@ const AppFrame: React.FC = () => {
                 children: [
                   { key: 'purchase-orders', label: <Link to="/purchase-orders">采购订单</Link> },
                   { key: 'purchase-receipts', label: <Link to="/purchase-receipts">采购入库</Link> },
+                  { key: 'purchase-invoices', label: <Link to="/purchase-invoices">采购发票</Link> },
                   { key: 'sales-orders', label: <Link to="/sales-orders">销售订单</Link> },
                   { key: 'sales-deliveries', label: <Link to="/sales-deliveries">销售出库</Link> },
+                  { key: 'sales-invoices', label: <Link to="/sales-invoices">销售发票</Link> },
                   { key: '3', label: <Link to="/vouchers">凭证管理</Link> },
                   { key: '4', label: <Link to="/vouchers/new">录入凭证</Link> },
                   { key: 'voucher-review', label: <Link to="/vouchers/review">审核工作台</Link> },
@@ -298,6 +301,8 @@ const AppFrame: React.FC = () => {
                 <Route path="/sales-orders" element={<RequireAuth><Orders orderType="sales" /></RequireAuth>} />
                 <Route path="/purchase-receipts" element={<RequireAuth><Fulfillment fulfillmentType="purchase" /></RequireAuth>} />
                 <Route path="/sales-deliveries" element={<RequireAuth><Fulfillment fulfillmentType="sales" /></RequireAuth>} />
+                <Route path="/purchase-invoices" element={<RequireAuth><Invoices invoiceType="purchase" /></RequireAuth>} />
+                <Route path="/sales-invoices" element={<RequireAuth><Invoices invoiceType="sales" /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />
                 <Route path="/auxiliaries" element={<RequireAuth><Auxiliaries /></RequireAuth>} />

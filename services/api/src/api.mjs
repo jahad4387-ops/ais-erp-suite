@@ -75,7 +75,9 @@ const DEFAULT_PERMISSION_CODES = [
   "purchase_order.manage",
   "sales_order.manage",
   "purchase_receipt.manage",
-  "sales_delivery.manage"
+  "sales_delivery.manage",
+  "purchase_invoice.manage",
+  "sales_invoice.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -563,6 +565,12 @@ function permissionFor(request) {
   if (segments[0] === "sales-deliveries") {
     return "sales_delivery.manage";
   }
+  if (segments[0] === "purchase-invoices") {
+    return "purchase_invoice.manage";
+  }
+  if (segments[0] === "sales-invoices") {
+    return "sales_invoice.manage";
+  }
   if (request.method === "POST" && request.path === "/attachments/upload") return "attachment.upload";
   if (request.method === "POST" && request.path === "/attachment-links") return "attachment.upload";
   if (request.method === "DELETE" && segments.length === 2 && segments[0] === "attachments") return "attachment.delete";
@@ -645,6 +653,8 @@ function createState(options = {}) {
     salesOrders: new Map(),
     purchaseReceipts: new Map(),
     salesDeliveries: new Map(),
+    purchaseInvoices: new Map(),
+    salesInvoices: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1126,6 +1136,30 @@ async function listSalesDeliveries(state, accountSetId) {
   return [...deliveriesById.values()].sort((left, right) => left.deliveryNo.localeCompare(right.deliveryNo));
 }
 
+async function listPurchaseInvoices(state, accountSetId) {
+  const persistedInvoices = state.config.platformStore?.listPurchaseInvoices
+    ? await state.config.platformStore.listPurchaseInvoices(accountSetId)
+    : [];
+  const invoicesById = new Map(persistedInvoices.map((invoice) => [invoice.id, invoice]));
+  for (const invoice of state.purchaseInvoices.values()) {
+    if (accountSetId && invoice.accountSetId !== accountSetId) continue;
+    invoicesById.set(invoice.id, invoice);
+  }
+  return [...invoicesById.values()].sort((left, right) => left.invoiceNo.localeCompare(right.invoiceNo));
+}
+
+async function listSalesInvoices(state, accountSetId) {
+  const persistedInvoices = state.config.platformStore?.listSalesInvoices
+    ? await state.config.platformStore.listSalesInvoices(accountSetId)
+    : [];
+  const invoicesById = new Map(persistedInvoices.map((invoice) => [invoice.id, invoice]));
+  for (const invoice of state.salesInvoices.values()) {
+    if (accountSetId && invoice.accountSetId !== accountSetId) continue;
+    invoicesById.set(invoice.id, invoice);
+  }
+  return [...invoicesById.values()].sort((left, right) => left.invoiceNo.localeCompare(right.invoiceNo));
+}
+
 function normalizeFulfillmentLines(order, lines = [], { sourceLineIdField, executedQuantityField }) {
   if (!Array.isArray(lines) || lines.length === 0) {
     throw new Error("Fulfillment lines are required.");
@@ -1175,6 +1209,71 @@ function applyOrderExecution(order, fulfillmentLines, executedQuantityField) {
     status: allExecuted ? "executed" : anyExecuted ? "partially_executed" : order.status,
     lines
   };
+}
+
+function normalizeInvoiceLines(sourceDocument, order, lines = [], { sourceLineNoField, sourceLineIdField, orderLineIdField }) {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new Error("Invoice lines are required.");
+  }
+  return lines.map((line, index) => {
+    const sourceLineNo = Number(line[sourceLineNoField] ?? line.lineNo);
+    const quantity = Number(line.quantity);
+    const unitPrice = Number(line.unitPrice);
+    const taxRate = Number(line.taxRate ?? 0);
+    const sourceLine = sourceDocument.lines?.find((candidate) => candidate.lineNo === sourceLineNo);
+    if (!sourceLine) {
+      throw new Error(`Source document line ${sourceLineNo} was not found.`);
+    }
+    const orderLine = order.lines?.find((candidate) => candidate.id === sourceLine[orderLineIdField]);
+    if (!orderLine) {
+      throw new Error(`Order source line for ${sourceLineNo} was not found.`);
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error("Invoice line quantity must be greater than 0.");
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      throw new Error("Invoice line unitPrice must be non-negative.");
+    }
+    if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) {
+      throw new Error("Invoice line taxRate must be a number from 0 to 1.");
+    }
+    const remainingQuantity = Math.min(
+      Number(sourceLine.quantity ?? 0),
+      Number(orderLine.quantity ?? 0) - Number(orderLine.invoicedQuantity ?? 0)
+    );
+    if (quantity > remainingQuantity) {
+      throw new Error(`Invoice quantity ${quantity} exceeds remaining quantity ${remainingQuantity}.`);
+    }
+    const netAmount = quantity * unitPrice;
+    const taxAmount = Number(line.taxAmount ?? Number((netAmount * taxRate).toFixed(2)));
+    const totalAmount = Number(line.totalAmount ?? Number((netAmount + taxAmount).toFixed(2)));
+    return {
+      lineNo: line.lineNo ?? index + 1,
+      [sourceLineIdField]: sourceLine[orderLineIdField],
+      sourceLineNo,
+      itemCode: sourceLine.itemCode,
+      itemName: sourceLine.itemName,
+      quantity,
+      unitPrice,
+      taxRate,
+      taxAmount,
+      totalAmount,
+      expectedTotalAmount: Number((quantity * Number(orderLine.unitPrice ?? 0) * (1 + Number(orderLine.taxRate ?? 0))).toFixed(2))
+    };
+  });
+}
+
+function applyOrderInvoicing(order, invoiceLines) {
+  const invoicedBySourceId = new Map();
+  for (const line of invoiceLines) {
+    const sourceId = line.purchaseOrderLineId ?? line.salesOrderLineId;
+    invoicedBySourceId.set(sourceId, (invoicedBySourceId.get(sourceId) ?? 0) + line.quantity);
+  }
+  const lines = (order.lines ?? []).map((line) => ({
+    ...line,
+    invoicedQuantity: Number((Number(line.invoicedQuantity ?? 0) + Number(invoicedBySourceId.get(line.id) ?? 0)).toFixed(4))
+  }));
+  return { ...order, lines };
 }
 
 async function enabledAccountSetLockError(state, accountSetId) {
@@ -2172,6 +2271,170 @@ async function route(request, state) {
         objectId: savedDelivery.id
       });
       return jsonResponse(201, savedDelivery);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "purchase-invoices") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, await listPurchaseInvoices(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const receipt = (await listPurchaseReceipts(state, body.accountSetId)).find(
+        (candidate) => candidate.id === body.purchaseReceiptId || candidate.receiptNo === body.purchaseReceiptId
+      );
+      if (!receipt) {
+        return errorResponse(404, "PURCHASE_RECEIPT_NOT_FOUND", "Purchase receipt was not found.");
+      }
+      const order = await findPurchaseOrderByIdentifier(state, receipt.purchaseOrderId);
+      if (!order) {
+        return errorResponse(404, "PURCHASE_ORDER_NOT_FOUND", "Purchase order was not found.");
+      }
+      let lines;
+      try {
+        lines = normalizeInvoiceLines(receipt, order, body.lines, {
+          sourceLineNoField: "receiptLineNo",
+          sourceLineIdField: "purchaseOrderLineId",
+          orderLineIdField: "purchaseOrderLineId"
+        });
+      } catch (error) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", error.message);
+      }
+      const existingInvoices = await listPurchaseInvoices(state, body.accountSetId);
+      const totalAmount = Number(lines.reduce((sum, line) => sum + line.totalAmount, 0).toFixed(2));
+      const taxAmount = Number(lines.reduce((sum, line) => sum + line.taxAmount, 0).toFixed(2));
+      const estimatedDifference = Number(lines.reduce((sum, line) => sum + line.totalAmount - line.expectedTotalAmount, 0).toFixed(2));
+      const invoice = {
+        id: body.id ?? `purchase-invoice:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        purchaseReceiptId: receipt.id,
+        purchaseReceiptNo: receipt.receiptNo,
+        supplierId: receipt.supplierId,
+        supplierName: receipt.supplierName ?? null,
+        invoiceNo: body.invoiceNo ?? nextFulfillmentNo("PI", body.accountSetId, body.invoiceDate, existingInvoices, "invoiceNo"),
+        externalInvoiceNo: body.externalInvoiceNo ?? null,
+        invoiceDate: body.invoiceDate,
+        dueDate: body.dueDate ?? null,
+        invoiceSource: body.invoiceSource ?? "manual",
+        status: body.status ?? "confirmed",
+        totalAmount,
+        taxAmount,
+        payableAmount: body.payableAmount ?? totalAmount,
+        paidAmount: 0,
+        settledAmount: 0,
+        estimatedDifference,
+        glVoucherId: null,
+        createdBy: body.createdBy ?? actorId,
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : [],
+        lines
+      };
+      const savedInvoice = platformStore?.createPurchaseInvoice ? await platformStore.createPurchaseInvoice(invoice) : invoice;
+      state.purchaseInvoices.set(savedInvoice.id, savedInvoice);
+      const updatedOrder = applyOrderInvoicing(order, lines);
+      const savedOrder = platformStore?.updatePurchaseOrderStatus
+        ? await platformStore.updatePurchaseOrderStatus(updatedOrder)
+        : updatedOrder;
+      state.purchaseOrders.set(savedOrder.id, savedOrder);
+      appendAuditLog(state, {
+        actorId: invoice.createdBy,
+        action: "purchase_invoice.confirm",
+        objectType: "purchase_invoice",
+        objectId: savedInvoice.id
+      });
+      return jsonResponse(201, savedInvoice);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "sales-invoices") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, await listSalesInvoices(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const delivery = (await listSalesDeliveries(state, body.accountSetId)).find(
+        (candidate) => candidate.id === body.salesDeliveryId || candidate.deliveryNo === body.salesDeliveryId
+      );
+      if (!delivery) {
+        return errorResponse(404, "SALES_DELIVERY_NOT_FOUND", "Sales delivery was not found.");
+      }
+      const order = await findSalesOrderByIdentifier(state, delivery.salesOrderId);
+      if (!order) {
+        return errorResponse(404, "SALES_ORDER_NOT_FOUND", "Sales order was not found.");
+      }
+      let lines;
+      try {
+        lines = normalizeInvoiceLines(delivery, order, body.lines, {
+          sourceLineNoField: "deliveryLineNo",
+          sourceLineIdField: "salesOrderLineId",
+          orderLineIdField: "salesOrderLineId"
+        });
+      } catch (error) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", error.message);
+      }
+      const existingInvoices = await listSalesInvoices(state, body.accountSetId);
+      const totalAmount = Number(lines.reduce((sum, line) => sum + line.totalAmount, 0).toFixed(2));
+      const taxAmount = Number(lines.reduce((sum, line) => sum + line.taxAmount, 0).toFixed(2));
+      const invoice = {
+        id: body.id ?? `sales-invoice:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        salesDeliveryId: delivery.id,
+        salesDeliveryNo: delivery.deliveryNo,
+        customerId: delivery.customerId,
+        customerName: delivery.customerName ?? null,
+        invoiceNo: body.invoiceNo ?? nextFulfillmentNo("SI", body.accountSetId, body.invoiceDate, existingInvoices, "invoiceNo"),
+        externalInvoiceNo: body.externalInvoiceNo ?? null,
+        invoiceDate: body.invoiceDate,
+        dueDate: body.dueDate ?? null,
+        invoiceSource: body.invoiceSource ?? "manual",
+        status: body.status ?? "confirmed",
+        totalAmount,
+        taxAmount,
+        receivableAmount: body.receivableAmount ?? totalAmount,
+        receivedAmount: 0,
+        settledAmount: 0,
+        glVoucherId: null,
+        createdBy: body.createdBy ?? actorId,
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : [],
+        lines
+      };
+      const savedInvoice = platformStore?.createSalesInvoice ? await platformStore.createSalesInvoice(invoice) : invoice;
+      state.salesInvoices.set(savedInvoice.id, savedInvoice);
+      const updatedOrder = applyOrderInvoicing(order, lines);
+      const savedOrder = platformStore?.updateSalesOrderStatus ? await platformStore.updateSalesOrderStatus(updatedOrder) : updatedOrder;
+      state.salesOrders.set(savedOrder.id, savedOrder);
+      appendAuditLog(state, {
+        actorId: invoice.createdBy,
+        action: "sales_invoice.confirm",
+        objectType: "sales_invoice",
+        objectId: savedInvoice.id
+      });
+      return jsonResponse(201, savedInvoice);
     }
   }
 

@@ -18,6 +18,10 @@ const phase2FulfillmentMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610110000_phase2_fulfillment_workflow/migration.sql", import.meta.url)
 );
 const phase2FulfillmentMigrationText = phase2FulfillmentMigrationSql.toString("utf8");
+const phase2InvoiceMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610120000_phase2_invoice_confirmation/migration.sql", import.meta.url)
+);
+const phase2InvoiceMigrationText = phase2InvoiceMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -109,4 +113,16 @@ test("Phase 2 fulfillment migration creates purchase receipt and sales delivery 
     /CREATE UNIQUE INDEX "SalesDelivery_accountSetId_deliveryNo_key"/,
     "Sales delivery numbers must be unique inside an account set."
   );
+});
+
+test("Phase 2 invoice migration creates payable and receivable confirmation documents", () => {
+  for (const table of ["PurchaseInvoice", "PurchaseInvoiceLine", "SalesInvoice", "SalesInvoiceLine"]) {
+    assert.match(phase2InvoiceMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase2InvoiceMigrationText, /"invoiceSource" TEXT NOT NULL DEFAULT 'manual'/, "Invoice source must support OCR/import/manual confirmation.");
+  assert.match(phase2InvoiceMigrationText, /"estimatedDifference" REAL NOT NULL DEFAULT 0/, "Purchase invoices must retain estimated variance.");
+  assert.match(phase2InvoiceMigrationText, /"payableAmount" REAL NOT NULL DEFAULT 0/, "Purchase invoices must confirm AP amount.");
+  assert.match(phase2InvoiceMigrationText, /"receivableAmount" REAL NOT NULL DEFAULT 0/, "Sales invoices must confirm AR amount.");
+  assert.match(phase2InvoiceMigrationText, /CREATE UNIQUE INDEX "PurchaseInvoice_accountSetId_invoiceNo_key"/);
+  assert.match(phase2InvoiceMigrationText, /CREATE UNIQUE INDEX "SalesInvoice_accountSetId_invoiceNo_key"/);
 });

@@ -192,6 +192,78 @@ function salesDeliveryToDto(delivery) {
   };
 }
 
+function invoiceLineToDto(line, sourceLineKey) {
+  return {
+    id: line.id,
+    lineNo: line.lineNo,
+    [sourceLineKey]: line[sourceLineKey],
+    itemCode: line.itemCode,
+    itemName: line.itemName,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    taxRate: line.taxRate,
+    taxAmount: line.taxAmount,
+    totalAmount: line.totalAmount
+  };
+}
+
+function purchaseInvoiceToDto(invoice) {
+  return {
+    id: invoice.id,
+    accountSetId: invoice.accountSetId,
+    purchaseReceiptId: invoice.purchaseReceiptId,
+    purchaseReceiptNo: invoice.purchaseReceipt?.receiptNo ?? null,
+    supplierId: invoice.supplierId,
+    supplierName: invoice.supplier?.name ?? null,
+    invoiceNo: invoice.invoiceNo,
+    externalInvoiceNo: invoice.externalInvoiceNo ?? null,
+    invoiceDate: dateOnly(invoice.invoiceDate),
+    dueDate: dateOnly(invoice.dueDate),
+    invoiceSource: invoice.invoiceSource,
+    status: invoice.status,
+    totalAmount: invoice.totalAmount,
+    taxAmount: invoice.taxAmount,
+    payableAmount: invoice.payableAmount,
+    paidAmount: invoice.paidAmount,
+    settledAmount: invoice.settledAmount,
+    estimatedDifference: invoice.estimatedDifference,
+    glVoucherId: invoice.glVoucherId ?? null,
+    createdBy: invoice.createdBy,
+    evidenceRefs: evidenceRefsFromJson(invoice.evidenceRefsJson),
+    lines: (invoice.lines ?? [])
+      .map((line) => invoiceLineToDto(line, "purchaseOrderLineId"))
+      .sort((left, right) => left.lineNo - right.lineNo)
+  };
+}
+
+function salesInvoiceToDto(invoice) {
+  return {
+    id: invoice.id,
+    accountSetId: invoice.accountSetId,
+    salesDeliveryId: invoice.salesDeliveryId,
+    salesDeliveryNo: invoice.salesDelivery?.deliveryNo ?? null,
+    customerId: invoice.customerId,
+    customerName: invoice.customer?.name ?? null,
+    invoiceNo: invoice.invoiceNo,
+    externalInvoiceNo: invoice.externalInvoiceNo ?? null,
+    invoiceDate: dateOnly(invoice.invoiceDate),
+    dueDate: dateOnly(invoice.dueDate),
+    invoiceSource: invoice.invoiceSource,
+    status: invoice.status,
+    totalAmount: invoice.totalAmount,
+    taxAmount: invoice.taxAmount,
+    receivableAmount: invoice.receivableAmount,
+    receivedAmount: invoice.receivedAmount,
+    settledAmount: invoice.settledAmount,
+    glVoucherId: invoice.glVoucherId ?? null,
+    createdBy: invoice.createdBy,
+    evidenceRefs: evidenceRefsFromJson(invoice.evidenceRefsJson),
+    lines: (invoice.lines ?? [])
+      .map((line) => invoiceLineToDto(line, "salesOrderLineId"))
+      .sort((left, right) => left.lineNo - right.lineNo)
+  };
+}
+
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
@@ -939,6 +1011,105 @@ export function createPlatformPersistence(prisma) {
         include: { customer: true, salesOrder: true, lines: true }
       });
       return deliveries.map(salesDeliveryToDto).sort((left, right) => left.deliveryNo.localeCompare(right.deliveryNo));
+    },
+
+    async createPurchaseInvoice(invoice) {
+      const saved = await prisma.purchaseInvoice.create({
+        data: {
+          id: invoice.id,
+          accountSetId: invoice.accountSetId,
+          purchaseReceiptId: invoice.purchaseReceiptId,
+          supplierId: invoice.supplierId,
+          invoiceNo: invoice.invoiceNo,
+          externalInvoiceNo: invoice.externalInvoiceNo ?? null,
+          invoiceDate: dateTime(invoice.invoiceDate),
+          dueDate: invoice.dueDate ? dateTime(invoice.dueDate) : null,
+          invoiceSource: invoice.invoiceSource ?? "manual",
+          status: invoice.status ?? "confirmed",
+          totalAmount: invoice.totalAmount,
+          taxAmount: invoice.taxAmount,
+          payableAmount: invoice.payableAmount,
+          paidAmount: invoice.paidAmount ?? 0,
+          settledAmount: invoice.settledAmount ?? 0,
+          estimatedDifference: invoice.estimatedDifference ?? 0,
+          glVoucherId: invoice.glVoucherId ?? null,
+          createdBy: invoice.createdBy,
+          evidenceRefsJson: JSON.stringify(invoice.evidenceRefs ?? []),
+          lines: {
+            create: invoice.lines.map((line) => ({
+              id: `purchase-invoice-line:${invoice.id}:${line.lineNo}`,
+              purchaseOrderLineId: line.purchaseOrderLineId,
+              lineNo: line.lineNo,
+              itemCode: line.itemCode,
+              itemName: line.itemName,
+              quantity: line.quantity,
+              unitPrice: line.unitPrice,
+              taxRate: line.taxRate,
+              taxAmount: line.taxAmount,
+              totalAmount: line.totalAmount
+            }))
+          }
+        },
+        include: { supplier: true, purchaseReceipt: true, lines: true }
+      });
+      return purchaseInvoiceToDto(saved);
+    },
+
+    async listPurchaseInvoices(accountSetId) {
+      const invoices = await prisma.purchaseInvoice.findMany({
+        where: accountSetId ? { accountSetId } : undefined,
+        include: { supplier: true, purchaseReceipt: true, lines: true }
+      });
+      return invoices.map(purchaseInvoiceToDto).sort((left, right) => left.invoiceNo.localeCompare(right.invoiceNo));
+    },
+
+    async createSalesInvoice(invoice) {
+      const saved = await prisma.salesInvoice.create({
+        data: {
+          id: invoice.id,
+          accountSetId: invoice.accountSetId,
+          salesDeliveryId: invoice.salesDeliveryId,
+          customerId: invoice.customerId,
+          invoiceNo: invoice.invoiceNo,
+          externalInvoiceNo: invoice.externalInvoiceNo ?? null,
+          invoiceDate: dateTime(invoice.invoiceDate),
+          dueDate: invoice.dueDate ? dateTime(invoice.dueDate) : null,
+          invoiceSource: invoice.invoiceSource ?? "manual",
+          status: invoice.status ?? "confirmed",
+          totalAmount: invoice.totalAmount,
+          taxAmount: invoice.taxAmount,
+          receivableAmount: invoice.receivableAmount,
+          receivedAmount: invoice.receivedAmount ?? 0,
+          settledAmount: invoice.settledAmount ?? 0,
+          glVoucherId: invoice.glVoucherId ?? null,
+          createdBy: invoice.createdBy,
+          evidenceRefsJson: JSON.stringify(invoice.evidenceRefs ?? []),
+          lines: {
+            create: invoice.lines.map((line) => ({
+              id: `sales-invoice-line:${invoice.id}:${line.lineNo}`,
+              salesOrderLineId: line.salesOrderLineId,
+              lineNo: line.lineNo,
+              itemCode: line.itemCode,
+              itemName: line.itemName,
+              quantity: line.quantity,
+              unitPrice: line.unitPrice,
+              taxRate: line.taxRate,
+              taxAmount: line.taxAmount,
+              totalAmount: line.totalAmount
+            }))
+          }
+        },
+        include: { customer: true, salesDelivery: true, lines: true }
+      });
+      return salesInvoiceToDto(saved);
+    },
+
+    async listSalesInvoices(accountSetId) {
+      const invoices = await prisma.salesInvoice.findMany({
+        where: accountSetId ? { accountSetId } : undefined,
+        include: { customer: true, salesDelivery: true, lines: true }
+      });
+      return invoices.map(salesInvoiceToDto).sort((left, right) => left.invoiceNo.localeCompare(right.invoiceNo));
     },
 
     async createAccount(account) {

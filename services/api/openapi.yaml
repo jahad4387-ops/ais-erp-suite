@@ -1836,6 +1836,94 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /purchase-invoices:
+    get:
+      summary: List Phase 2 purchase invoice and AP confirmations.
+      x-permission: purchase_invoice.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Purchase invoice list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PurchaseInvoice"
+    post:
+      summary: Confirm a purchase invoice from a purchase receipt and create an AP amount.
+      x-permission: purchase_invoice.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchaseInvoiceCreateRequest"
+      responses:
+        "201":
+          description: Purchase invoice confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseInvoice"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /sales-invoices:
+    get:
+      summary: List Phase 2 sales invoice and AR confirmations.
+      x-permission: sales_invoice.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sales invoice list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SalesInvoice"
+    post:
+      summary: Confirm a sales invoice from a sales delivery and create an AR amount.
+      x-permission: sales_invoice.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SalesInvoiceCreateRequest"
+      responses:
+        "201":
+          description: Sales invoice confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalesInvoice"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /attachments/upload:
     post:
       summary: Upload an attachment and return its central status.
@@ -3143,6 +3231,228 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FulfillmentLine"
+
+    InvoiceLineRequest:
+      type: object
+      required: [quantity, unitPrice]
+      properties:
+        receiptLineNo:
+          type: integer
+          minimum: 1
+        deliveryLineNo:
+          type: integer
+          minimum: 1
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        unitPrice:
+          type: number
+          minimum: 0
+        taxRate:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    InvoiceLine:
+      type: object
+      required: [lineNo, itemCode, itemName, quantity, unitPrice, taxRate, taxAmount, totalAmount]
+      properties:
+        id:
+          type: string
+        lineNo:
+          type: integer
+        purchaseOrderLineId:
+          type: string
+        salesOrderLineId:
+          type: string
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+        taxRate:
+          type: number
+        taxAmount:
+          type: number
+        totalAmount:
+          type: number
+
+    PurchaseInvoiceCreateRequest:
+      type: object
+      required: [accountSetId, purchaseReceiptId, invoiceDate, lines]
+      properties:
+        accountSetId:
+          type: string
+        purchaseReceiptId:
+          type: string
+        invoiceNo:
+          type: string
+        externalInvoiceNo:
+          type: string
+        invoiceDate:
+          type: string
+          format: date
+        dueDate:
+          type: string
+          format: date
+        invoiceSource:
+          type: string
+          enum: [manual, ocr, import]
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        lines:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/InvoiceLineRequest"
+
+    SalesInvoiceCreateRequest:
+      type: object
+      required: [accountSetId, salesDeliveryId, invoiceDate, lines]
+      properties:
+        accountSetId:
+          type: string
+        salesDeliveryId:
+          type: string
+        invoiceNo:
+          type: string
+        externalInvoiceNo:
+          type: string
+        invoiceDate:
+          type: string
+          format: date
+        dueDate:
+          type: string
+          format: date
+        invoiceSource:
+          type: string
+          enum: [manual, ocr, import]
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        lines:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/InvoiceLineRequest"
+
+    PurchaseInvoice:
+      type: object
+      required: [id, accountSetId, purchaseReceiptId, supplierId, invoiceNo, invoiceDate, invoiceSource, status, totalAmount, taxAmount, payableAmount, estimatedDifference, createdBy, evidenceRefs, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        purchaseReceiptId:
+          type: string
+        purchaseReceiptNo:
+          type: string
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        invoiceNo:
+          type: string
+        externalInvoiceNo:
+          type: string
+        invoiceDate:
+          type: string
+          format: date
+        dueDate:
+          type: string
+          format: date
+        invoiceSource:
+          type: string
+          enum: [manual, ocr, import]
+        status:
+          type: string
+          enum: [confirmed]
+        totalAmount:
+          type: number
+        taxAmount:
+          type: number
+        payableAmount:
+          type: number
+        paidAmount:
+          type: number
+        settledAmount:
+          type: number
+        estimatedDifference:
+          type: number
+        glVoucherId:
+          type: string
+        createdBy:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoiceLine"
+
+    SalesInvoice:
+      type: object
+      required: [id, accountSetId, salesDeliveryId, customerId, invoiceNo, invoiceDate, invoiceSource, status, totalAmount, taxAmount, receivableAmount, createdBy, evidenceRefs, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        salesDeliveryId:
+          type: string
+        salesDeliveryNo:
+          type: string
+        customerId:
+          type: string
+        customerName:
+          type: string
+        invoiceNo:
+          type: string
+        externalInvoiceNo:
+          type: string
+        invoiceDate:
+          type: string
+          format: date
+        dueDate:
+          type: string
+          format: date
+        invoiceSource:
+          type: string
+          enum: [manual, ocr, import]
+        status:
+          type: string
+          enum: [confirmed]
+        totalAmount:
+          type: number
+        taxAmount:
+          type: number
+        receivableAmount:
+          type: number
+        receivedAmount:
+          type: number
+        settledAmount:
+          type: number
+        glVoucherId:
+          type: string
+        createdBy:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoiceLine"
 
     AccountingPeriod:
       type: object
