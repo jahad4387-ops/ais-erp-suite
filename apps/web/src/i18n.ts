@@ -3,6 +3,8 @@ export const statusText: Record<string, string> = {
   submitted: '已提交',
   approved: '已审核',
   posted: '已记账',
+  partially_executed: '部分执行',
+  executed: '已执行',
   rejected: '已驳回',
   voided: '已作废',
   unopened: '未打开',
@@ -94,6 +96,8 @@ export const permissionText: Record<string, string> = {
   'partner.manage': '管理往来单位',
   'purchase_order.manage': '管理采购订单',
   'sales_order.manage': '管理销售订单',
+  'purchase_receipt.manage': '管理采购入库',
+  'sales_delivery.manage': '管理销售出库',
   'auxiliary.manage': '管理辅助核算',
   'opening_balance.manage': '管理期初余额',
   'opening_balance.view': '查看期初余额',
@@ -125,9 +129,11 @@ export const actionText: Record<string, string> = {
   'purchase_order.create': '创建采购订单',
   'purchase_order.submit': '提交采购订单',
   'purchase_order.approve': '审核采购订单',
+  'purchase_receipt.create': '创建采购入库',
   'sales_order.create': '创建销售订单',
   'sales_order.submit': '提交销售订单',
   'sales_order.approve': '审核销售订单',
+  'sales_delivery.create': '创建销售出库',
 };
 
 export const objectTypeText: Record<string, string> = {
@@ -147,6 +153,8 @@ export const objectTypeText: Record<string, string> = {
   partner: '往来单位',
   purchase_order: '采购订单',
   sales_order: '销售订单',
+  purchase_receipt: '采购入库',
+  sales_delivery: '销售出库',
 };
 
 export const actorText: Record<string, string> = {

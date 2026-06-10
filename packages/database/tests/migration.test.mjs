@@ -14,6 +14,10 @@ const phase2OrderMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610100000_phase2_order_workflow/migration.sql", import.meta.url)
 );
 const phase2OrderMigrationText = phase2OrderMigrationSql.toString("utf8");
+const phase2FulfillmentMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610110000_phase2_fulfillment_workflow/migration.sql", import.meta.url)
+);
+const phase2FulfillmentMigrationText = phase2FulfillmentMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -85,5 +89,24 @@ test("Phase 2 order migration creates purchase and sales order workflows", () =>
     phase2OrderMigrationText,
     /CREATE UNIQUE INDEX "SalesOrder_accountSetId_orderNo_key"/,
     "Sales order number must be unique inside an account set."
+  );
+});
+
+test("Phase 2 fulfillment migration creates purchase receipt and sales delivery source chains", () => {
+  for (const table of ["PurchaseReceipt", "PurchaseReceiptLine", "SalesDelivery", "SalesDeliveryLine"]) {
+    assert.match(phase2FulfillmentMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase2FulfillmentMigrationText, /"purchaseOrderId" TEXT NOT NULL/, "Purchase receipts must keep source order ids.");
+  assert.match(phase2FulfillmentMigrationText, /"salesOrderId" TEXT NOT NULL/, "Sales deliveries must keep source order ids.");
+  assert.match(phase2FulfillmentMigrationText, /"evidenceRefsJson" TEXT/, "Fulfillment documents must retain evidence refs.");
+  assert.match(
+    phase2FulfillmentMigrationText,
+    /CREATE UNIQUE INDEX "PurchaseReceipt_accountSetId_receiptNo_key"/,
+    "Purchase receipt numbers must be unique inside an account set."
+  );
+  assert.match(
+    phase2FulfillmentMigrationText,
+    /CREATE UNIQUE INDEX "SalesDelivery_accountSetId_deliveryNo_key"/,
+    "Sales delivery numbers must be unique inside an account set."
   );
 });

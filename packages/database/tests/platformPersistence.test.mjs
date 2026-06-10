@@ -15,6 +15,8 @@ function createFakePrisma() {
   const partners = new Map();
   const purchaseOrders = new Map();
   const salesOrders = new Map();
+  const purchaseReceipts = new Map();
+  const salesDeliveries = new Map();
   const periods = new Map();
   const chartOfAccounts = new Map();
   const auxiliaryTypes = new Map();
@@ -215,6 +217,20 @@ function createFakePrisma() {
         return include?.lines ? order : { ...order, lines: undefined };
       }
     },
+    purchaseOrderLine: {
+      updateMany: async ({ where, data }) => {
+        const order = purchaseOrders.get(where.purchaseOrderId);
+        if (!order) return { count: 0 };
+        let count = 0;
+        order.lines = order.lines.map((line) => {
+          if (line.lineNo !== where.lineNo) return line;
+          count += 1;
+          return { ...line, ...data };
+        });
+        purchaseOrders.set(order.id, order);
+        return { count };
+      }
+    },
     salesOrder: {
       create: async ({ data, include }) => {
         const order = {
@@ -240,6 +256,50 @@ function createFakePrisma() {
         const order = { ...salesOrders.get(where.id), ...data };
         salesOrders.set(where.id, order);
         return include?.lines ? order : { ...order, lines: undefined };
+      }
+    },
+    salesOrderLine: {
+      updateMany: async ({ where, data }) => {
+        const order = salesOrders.get(where.salesOrderId);
+        if (!order) return { count: 0 };
+        let count = 0;
+        order.lines = order.lines.map((line) => {
+          if (line.lineNo !== where.lineNo) return line;
+          count += 1;
+          return { ...line, ...data };
+        });
+        salesOrders.set(order.id, order);
+        return { count };
+      }
+    },
+    purchaseReceipt: {
+      create: async ({ data, include }) => {
+        const receipt = {
+          ...data,
+          purchaseOrder: purchaseOrders.get(data.purchaseOrderId),
+          lines: data.lines.create.map((line) => ({ ...line }))
+        };
+        purchaseReceipts.set(receipt.id, receipt);
+        return include?.lines ? receipt : { ...receipt, lines: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        const rows = [...purchaseReceipts.values()].filter((receipt) => !where?.accountSetId || receipt.accountSetId === where.accountSetId);
+        return rows.map((receipt) => (include?.lines ? receipt : { ...receipt, lines: undefined }));
+      }
+    },
+    salesDelivery: {
+      create: async ({ data, include }) => {
+        const delivery = {
+          ...data,
+          salesOrder: salesOrders.get(data.salesOrderId),
+          lines: data.lines.create.map((line) => ({ ...line }))
+        };
+        salesDeliveries.set(delivery.id, delivery);
+        return include?.lines ? delivery : { ...delivery, lines: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        const rows = [...salesDeliveries.values()].filter((delivery) => !where?.accountSetId || delivery.accountSetId === where.accountSetId);
+        return rows.map((delivery) => (include?.lines ? delivery : { ...delivery, lines: undefined }));
       }
     },
     accountingPeriod: {
@@ -788,6 +848,100 @@ test("Prisma platform persistence stores Phase 2 purchase and sales orders", asy
   assert.equal(submittedSales.status, "submitted");
   assert.deepEqual(purchaseOrders.map((order) => order.orderNo), ["PO-202601-001"]);
   assert.deepEqual(salesOrders.map((order) => order.orderNo), ["SO-202601-001"]);
+});
+
+test("Prisma platform persistence stores Phase 2 fulfillment source documents", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  const accountSet = await store.createAccountSet({
+    id: "account-set:phase2-fulfillment",
+    code: "P2F",
+    name: "Phase 2 Fulfillment",
+    companyName: "Phase 2 Fulfillment Co.",
+    baseCurrency: "CNY",
+    accountingStandard: "Small Business Accounting Standards",
+    startYear: 2026,
+    startPeriod: 1,
+    status: "draft",
+    createdBy: "system"
+  });
+  const supplier = await store.createPartner({
+    id: "partner:fulfillment-supplier",
+    accountSetId: accountSet.id,
+    partnerType: "supplier",
+    code: "SUP-FUL",
+    name: "Fulfillment Supplier",
+    isEnabled: true
+  });
+  const customer = await store.createPartner({
+    id: "partner:fulfillment-customer",
+    accountSetId: accountSet.id,
+    partnerType: "customer",
+    code: "CUS-FUL",
+    name: "Fulfillment Customer",
+    isEnabled: true
+  });
+  const purchaseOrder = await store.createPurchaseOrder({
+    id: "purchase-order:fulfillment",
+    accountSetId: accountSet.id,
+    supplierId: supplier.id,
+    orderNo: "PO-202602-001",
+    orderDate: "2026-02-01",
+    totalAmount: 1130,
+    status: "approved",
+    currency: "CNY",
+    exchangeRate: 1,
+    createdBy: "buyer",
+    lines: [{ lineNo: 1, itemCode: "MAT-FUL", itemName: "Fulfillment Material", quantity: 10, unitPrice: 100, taxRate: 0.13, taxAmount: 130, totalAmount: 1130 }]
+  });
+  const salesOrder = await store.createSalesOrder({
+    id: "sales-order:fulfillment",
+    accountSetId: accountSet.id,
+    customerId: customer.id,
+    orderNo: "SO-202602-001",
+    orderDate: "2026-02-02",
+    totalAmount: 2120,
+    status: "approved",
+    currency: "CNY",
+    exchangeRate: 1,
+    createdBy: "seller",
+    lines: [{ lineNo: 1, itemCode: "SKU-FUL", itemName: "Fulfillment SKU", quantity: 4, unitPrice: 500, taxRate: 0.06, taxAmount: 120, totalAmount: 2120 }]
+  });
+
+  const receipt = await store.createPurchaseReceipt({
+    id: "purchase-receipt:1",
+    accountSetId: accountSet.id,
+    purchaseOrderId: purchaseOrder.id,
+    supplierId: supplier.id,
+    receiptNo: "PR-202602-001",
+    receiptDate: "2026-02-03",
+    status: "approved",
+    totalQuantity: 6,
+    createdBy: "warehouse",
+    evidenceRefs: ["attachment:receipt-photo"],
+    lines: [{ lineNo: 1, purchaseOrderLineId: "purchase-order-line:purchase-order:fulfillment:1", itemCode: "MAT-FUL", itemName: "Fulfillment Material", quantity: 6 }]
+  });
+  const delivery = await store.createSalesDelivery({
+    id: "sales-delivery:1",
+    accountSetId: accountSet.id,
+    salesOrderId: salesOrder.id,
+    customerId: customer.id,
+    deliveryNo: "SD-202602-001",
+    deliveryDate: "2026-02-04",
+    status: "approved",
+    totalQuantity: 3,
+    createdBy: "warehouse",
+    evidenceRefs: ["attachment:delivery-slip"],
+    lines: [{ lineNo: 1, salesOrderLineId: "sales-order-line:sales-order:fulfillment:1", itemCode: "SKU-FUL", itemName: "Fulfillment SKU", quantity: 3 }]
+  });
+  const receipts = await store.listPurchaseReceipts(accountSet.id);
+  const deliveries = await store.listSalesDeliveries(accountSet.id);
+
+  assert.equal(receipt.purchaseOrderNo, "PO-202602-001");
+  assert.deepEqual(receipt.evidenceRefs, ["attachment:receipt-photo"]);
+  assert.equal(delivery.salesOrderNo, "SO-202602-001");
+  assert.deepEqual(delivery.evidenceRefs, ["attachment:delivery-slip"]);
+  assert.deepEqual(receipts.map((row) => row.receiptNo), ["PR-202602-001"]);
+  assert.deepEqual(deliveries.map((row) => row.deliveryNo), ["SD-202602-001"]);
 });
 
 test("Prisma platform persistence stores accounting periods and lifecycle status", async () => {

@@ -1748,6 +1748,94 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /purchase-receipts:
+    get:
+      summary: List Phase 2 purchase receipt source-chain documents.
+      x-permission: purchase_receipt.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Purchase receipt list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PurchaseReceipt"
+    post:
+      summary: Create a purchase receipt from an approved purchase order and update received quantity.
+      x-permission: purchase_receipt.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchaseReceiptCreateRequest"
+      responses:
+        "201":
+          description: Purchase receipt created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseReceipt"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /sales-deliveries:
+    get:
+      summary: List Phase 2 sales delivery source-chain documents.
+      x-permission: sales_delivery.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sales delivery list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SalesDelivery"
+    post:
+      summary: Create a sales delivery from an approved sales order and update shipped quantity.
+      x-permission: sales_delivery.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SalesDeliveryCreateRequest"
+      responses:
+        "201":
+          description: Sales delivery created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalesDelivery"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /attachments/upload:
     post:
       summary: Upload an attachment and return its central status.
@@ -2774,6 +2862,36 @@ components:
         closedBy:
           type: string
 
+    FulfillmentLineRequest:
+      type: object
+      required: [orderLineNo, quantity]
+      properties:
+        orderLineNo:
+          type: integer
+          minimum: 1
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+
+    FulfillmentLine:
+      type: object
+      required: [lineNo, itemCode, itemName, quantity]
+      properties:
+        id:
+          type: string
+        lineNo:
+          type: integer
+        purchaseOrderLineId:
+          type: string
+        salesOrderLineId:
+          type: string
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+
     PurchaseOrderCreateRequest:
       type: object
       required: [accountSetId, supplierId, orderDate, lines]
@@ -2901,6 +3019,130 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OrderLine"
+
+    PurchaseReceiptCreateRequest:
+      type: object
+      required: [accountSetId, purchaseOrderId, receiptDate, lines]
+      properties:
+        accountSetId:
+          type: string
+        purchaseOrderId:
+          type: string
+        receiptNo:
+          type: string
+        receiptDate:
+          type: string
+          format: date
+        createdBy:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        lines:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/FulfillmentLineRequest"
+
+    SalesDeliveryCreateRequest:
+      type: object
+      required: [accountSetId, salesOrderId, deliveryDate, lines]
+      properties:
+        accountSetId:
+          type: string
+        salesOrderId:
+          type: string
+        deliveryNo:
+          type: string
+        deliveryDate:
+          type: string
+          format: date
+        createdBy:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        lines:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/FulfillmentLineRequest"
+
+    PurchaseReceipt:
+      type: object
+      required: [id, accountSetId, purchaseOrderId, supplierId, receiptNo, receiptDate, status, totalQuantity, createdBy, evidenceRefs, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        purchaseOrderId:
+          type: string
+        purchaseOrderNo:
+          type: string
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        receiptNo:
+          type: string
+        receiptDate:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [approved]
+        totalQuantity:
+          type: number
+        createdBy:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/FulfillmentLine"
+
+    SalesDelivery:
+      type: object
+      required: [id, accountSetId, salesOrderId, customerId, deliveryNo, deliveryDate, status, totalQuantity, createdBy, evidenceRefs, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        salesOrderId:
+          type: string
+        salesOrderNo:
+          type: string
+        customerId:
+          type: string
+        customerName:
+          type: string
+        deliveryNo:
+          type: string
+        deliveryDate:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [approved]
+        totalQuantity:
+          type: number
+        createdBy:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/FulfillmentLine"
 
     AccountingPeriod:
       type: object

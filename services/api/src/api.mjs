@@ -73,7 +73,9 @@ const DEFAULT_PERMISSION_CODES = [
   "role.manage",
   "partner.manage",
   "purchase_order.manage",
-  "sales_order.manage"
+  "sales_order.manage",
+  "purchase_receipt.manage",
+  "sales_delivery.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -555,6 +557,12 @@ function permissionFor(request) {
   if (segments[0] === "sales-orders") {
     return "sales_order.manage";
   }
+  if (segments[0] === "purchase-receipts") {
+    return "purchase_receipt.manage";
+  }
+  if (segments[0] === "sales-deliveries") {
+    return "sales_delivery.manage";
+  }
   if (request.method === "POST" && request.path === "/attachments/upload") return "attachment.upload";
   if (request.method === "POST" && request.path === "/attachment-links") return "attachment.upload";
   if (request.method === "DELETE" && segments.length === 2 && segments[0] === "attachments") return "attachment.delete";
@@ -635,6 +643,8 @@ function createState(options = {}) {
     partners: new Map(),
     purchaseOrders: new Map(),
     salesOrders: new Map(),
+    purchaseReceipts: new Map(),
+    salesDeliveries: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1079,6 +1089,92 @@ function nextOrderStatus(order, action, actorId) {
     return { ...order, status: "closed", closedBy: actorId };
   }
   throw new Error(`Cannot ${action} order in status ${order.status}.`);
+}
+
+function nextFulfillmentNo(prefix, accountSetId, documentDate, existingDocuments, numberField) {
+  const periodKey = String(documentDate ?? "").slice(0, 7).replace("-", "");
+  const base = `${prefix}-${periodKey || "000000"}-`;
+  const used = existingDocuments
+    .filter((document) => document.accountSetId === accountSetId && typeof document[numberField] === "string" && document[numberField].startsWith(base))
+    .map((document) => Number(document[numberField].slice(base.length)))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  const next = used.length === 0 ? 1 : Math.max(...used) + 1;
+  return `${base}${String(next).padStart(3, "0")}`;
+}
+
+async function listPurchaseReceipts(state, accountSetId) {
+  const persistedReceipts = state.config.platformStore?.listPurchaseReceipts
+    ? await state.config.platformStore.listPurchaseReceipts(accountSetId)
+    : [];
+  const receiptsById = new Map(persistedReceipts.map((receipt) => [receipt.id, receipt]));
+  for (const receipt of state.purchaseReceipts.values()) {
+    if (accountSetId && receipt.accountSetId !== accountSetId) continue;
+    receiptsById.set(receipt.id, receipt);
+  }
+  return [...receiptsById.values()].sort((left, right) => left.receiptNo.localeCompare(right.receiptNo));
+}
+
+async function listSalesDeliveries(state, accountSetId) {
+  const persistedDeliveries = state.config.platformStore?.listSalesDeliveries
+    ? await state.config.platformStore.listSalesDeliveries(accountSetId)
+    : [];
+  const deliveriesById = new Map(persistedDeliveries.map((delivery) => [delivery.id, delivery]));
+  for (const delivery of state.salesDeliveries.values()) {
+    if (accountSetId && delivery.accountSetId !== accountSetId) continue;
+    deliveriesById.set(delivery.id, delivery);
+  }
+  return [...deliveriesById.values()].sort((left, right) => left.deliveryNo.localeCompare(right.deliveryNo));
+}
+
+function normalizeFulfillmentLines(order, lines = [], { sourceLineIdField, executedQuantityField }) {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new Error("Fulfillment lines are required.");
+  }
+  return lines.map((line, index) => {
+    const orderLineNo = Number(line.orderLineNo ?? line.lineNo);
+    const quantity = Number(line.quantity);
+    const orderLine = order.lines?.find((candidate) => candidate.lineNo === orderLineNo);
+    if (!orderLine) {
+      throw new Error(`Order line ${orderLineNo} was not found.`);
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error("Fulfillment line quantity must be greater than 0.");
+    }
+    const executedQuantity = Number(orderLine[executedQuantityField] ?? 0);
+    const remainingQuantity = Number(orderLine.quantity ?? 0) - executedQuantity;
+    if (quantity > remainingQuantity) {
+      throw new Error(`Fulfillment quantity ${quantity} exceeds remaining quantity ${remainingQuantity}.`);
+    }
+    return {
+      lineNo: line.lineNo ?? index + 1,
+      [sourceLineIdField]: orderLine.id ?? `${sourceLineIdField}:${order.id}:${orderLine.lineNo}`,
+      orderLineNo,
+      itemCode: orderLine.itemCode,
+      itemName: orderLine.itemName,
+      quantity
+    };
+  });
+}
+
+function applyOrderExecution(order, fulfillmentLines, executedQuantityField) {
+  const fulfilledByLineNo = new Map();
+  for (const line of fulfillmentLines) {
+    fulfilledByLineNo.set(line.orderLineNo, (fulfilledByLineNo.get(line.orderLineNo) ?? 0) + line.quantity);
+  }
+  const lines = (order.lines ?? []).map((line) => {
+    const addition = fulfilledByLineNo.get(line.lineNo) ?? 0;
+    return {
+      ...line,
+      [executedQuantityField]: Number((Number(line[executedQuantityField] ?? 0) + addition).toFixed(4))
+    };
+  });
+  const anyExecuted = lines.some((line) => Number(line[executedQuantityField] ?? 0) > 0);
+  const allExecuted = lines.every((line) => Number(line[executedQuantityField] ?? 0) >= Number(line.quantity ?? 0));
+  return {
+    ...order,
+    status: allExecuted ? "executed" : anyExecuted ? "partially_executed" : order.status,
+    lines
+  };
 }
 
 async function enabledAccountSetLockError(state, accountSetId) {
@@ -1802,8 +1898,9 @@ async function route(request, state) {
       }
       const lines = normalizeOrderLines(body.lines);
       const existingOrders = await listPurchaseOrders(state, body.accountSetId);
+      const orderId = body.id ?? `purchase-order:${randomUUID()}`;
       const order = {
-        id: body.id ?? `purchase-order:${randomUUID()}`,
+        id: orderId,
         accountSetId: body.accountSetId,
         supplierId: supplier.id,
         supplierName: supplier.name,
@@ -1814,7 +1911,7 @@ async function route(request, state) {
         currency: body.currency ?? "CNY",
         exchangeRate: body.exchangeRate ?? 1,
         createdBy: body.createdBy ?? actorId,
-        lines
+        lines: lines.map((line) => ({ ...line, id: `purchase-order-line:${orderId}:${line.lineNo}` }))
       };
       const savedOrder = platformStore?.createPurchaseOrder ? await platformStore.createPurchaseOrder(order) : order;
       state.purchaseOrders.set(savedOrder.id, savedOrder);
@@ -1888,8 +1985,9 @@ async function route(request, state) {
       }
       const lines = normalizeOrderLines(body.lines);
       const existingOrders = await listSalesOrders(state, body.accountSetId);
+      const orderId = body.id ?? `sales-order:${randomUUID()}`;
       const order = {
-        id: body.id ?? `sales-order:${randomUUID()}`,
+        id: orderId,
         accountSetId: body.accountSetId,
         customerId: customer.id,
         customerName: customer.name,
@@ -1900,7 +1998,7 @@ async function route(request, state) {
         currency: body.currency ?? "CNY",
         exchangeRate: body.exchangeRate ?? 1,
         createdBy: body.createdBy ?? actorId,
-        lines
+        lines: lines.map((line) => ({ ...line, id: `sales-order-line:${orderId}:${line.lineNo}` }))
       };
       const savedOrder = platformStore?.createSalesOrder ? await platformStore.createSalesOrder(order) : order;
       state.salesOrders.set(savedOrder.id, savedOrder);
@@ -1940,6 +2038,140 @@ async function route(request, state) {
         objectId: savedOrder.id
       });
       return jsonResponse(200, savedOrder);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "purchase-receipts") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, await listPurchaseReceipts(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const order = await findPurchaseOrderByIdentifier(state, body.purchaseOrderId);
+      if (!order || order.accountSetId !== body.accountSetId) {
+        return errorResponse(404, "PURCHASE_ORDER_NOT_FOUND", "Purchase order was not found.");
+      }
+      if (!["approved", "partially_executed"].includes(order.status)) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "Only approved purchase orders can be received.");
+      }
+      let lines;
+      try {
+        lines = normalizeFulfillmentLines(order, body.lines, {
+          sourceLineIdField: "purchaseOrderLineId",
+          executedQuantityField: "receivedQuantity"
+        });
+      } catch (error) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", error.message);
+      }
+      const existingReceipts = await listPurchaseReceipts(state, body.accountSetId);
+      const receipt = {
+        id: body.id ?? `purchase-receipt:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        purchaseOrderId: order.id,
+        purchaseOrderNo: order.orderNo,
+        supplierId: order.supplierId,
+        supplierName: order.supplierName ?? null,
+        receiptNo: body.receiptNo ?? nextFulfillmentNo("PR", body.accountSetId, body.receiptDate, existingReceipts, "receiptNo"),
+        receiptDate: body.receiptDate,
+        status: body.status ?? "approved",
+        totalQuantity: Number(lines.reduce((sum, line) => sum + line.quantity, 0).toFixed(4)),
+        createdBy: body.createdBy ?? actorId,
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : [],
+        lines
+      };
+      const savedReceipt = platformStore?.createPurchaseReceipt ? await platformStore.createPurchaseReceipt(receipt) : receipt;
+      state.purchaseReceipts.set(savedReceipt.id, savedReceipt);
+      const updatedOrder = applyOrderExecution(order, lines, "receivedQuantity");
+      const savedOrder = platformStore?.updatePurchaseOrderStatus
+        ? await platformStore.updatePurchaseOrderStatus(updatedOrder)
+        : updatedOrder;
+      state.purchaseOrders.set(savedOrder.id, savedOrder);
+      appendAuditLog(state, {
+        actorId: receipt.createdBy,
+        action: "purchase_receipt.create",
+        objectType: "purchase_receipt",
+        objectId: savedReceipt.id
+      });
+      return jsonResponse(201, savedReceipt);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "sales-deliveries") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, await listSalesDeliveries(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const order = await findSalesOrderByIdentifier(state, body.salesOrderId);
+      if (!order || order.accountSetId !== body.accountSetId) {
+        return errorResponse(404, "SALES_ORDER_NOT_FOUND", "Sales order was not found.");
+      }
+      if (!["approved", "partially_executed"].includes(order.status)) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "Only approved sales orders can be delivered.");
+      }
+      let lines;
+      try {
+        lines = normalizeFulfillmentLines(order, body.lines, {
+          sourceLineIdField: "salesOrderLineId",
+          executedQuantityField: "shippedQuantity"
+        });
+      } catch (error) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", error.message);
+      }
+      const existingDeliveries = await listSalesDeliveries(state, body.accountSetId);
+      const delivery = {
+        id: body.id ?? `sales-delivery:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        salesOrderId: order.id,
+        salesOrderNo: order.orderNo,
+        customerId: order.customerId,
+        customerName: order.customerName ?? null,
+        deliveryNo: body.deliveryNo ?? nextFulfillmentNo("SD", body.accountSetId, body.deliveryDate, existingDeliveries, "deliveryNo"),
+        deliveryDate: body.deliveryDate,
+        status: body.status ?? "approved",
+        totalQuantity: Number(lines.reduce((sum, line) => sum + line.quantity, 0).toFixed(4)),
+        createdBy: body.createdBy ?? actorId,
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : [],
+        lines
+      };
+      const savedDelivery = platformStore?.createSalesDelivery ? await platformStore.createSalesDelivery(delivery) : delivery;
+      state.salesDeliveries.set(savedDelivery.id, savedDelivery);
+      const updatedOrder = applyOrderExecution(order, lines, "shippedQuantity");
+      const savedOrder = platformStore?.updateSalesOrderStatus ? await platformStore.updateSalesOrderStatus(updatedOrder) : updatedOrder;
+      state.salesOrders.set(savedOrder.id, savedOrder);
+      appendAuditLog(state, {
+        actorId: delivery.createdBy,
+        action: "sales_delivery.create",
+        objectType: "sales_delivery",
+        objectId: savedDelivery.id
+      });
+      return jsonResponse(201, savedDelivery);
     }
   }
 

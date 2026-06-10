@@ -76,6 +76,7 @@ function partnerToDto(partner) {
 
 function orderLineToDto(line) {
   return {
+    id: line.id,
     lineNo: line.lineNo,
     itemCode: line.itemCode,
     itemName: line.itemName,
@@ -127,6 +128,67 @@ function salesOrderToDto(order) {
     approvedBy: order.approvedBy ?? null,
     closedBy: order.closedBy ?? null,
     lines: (order.lines ?? []).map(orderLineToDto).sort((left, right) => left.lineNo - right.lineNo)
+  };
+}
+
+function evidenceRefsFromJson(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function fulfillmentLineToDto(line, sourceLineKey) {
+  return {
+    id: line.id,
+    lineNo: line.lineNo,
+    [sourceLineKey]: line[sourceLineKey],
+    itemCode: line.itemCode,
+    itemName: line.itemName,
+    quantity: line.quantity
+  };
+}
+
+function purchaseReceiptToDto(receipt) {
+  return {
+    id: receipt.id,
+    accountSetId: receipt.accountSetId,
+    purchaseOrderId: receipt.purchaseOrderId,
+    purchaseOrderNo: receipt.purchaseOrder?.orderNo ?? null,
+    supplierId: receipt.supplierId,
+    supplierName: receipt.supplier?.name ?? null,
+    receiptNo: receipt.receiptNo,
+    receiptDate: dateOnly(receipt.receiptDate),
+    status: receipt.status,
+    totalQuantity: receipt.totalQuantity,
+    createdBy: receipt.createdBy,
+    evidenceRefs: evidenceRefsFromJson(receipt.evidenceRefsJson),
+    lines: (receipt.lines ?? [])
+      .map((line) => fulfillmentLineToDto(line, "purchaseOrderLineId"))
+      .sort((left, right) => left.lineNo - right.lineNo)
+  };
+}
+
+function salesDeliveryToDto(delivery) {
+  return {
+    id: delivery.id,
+    accountSetId: delivery.accountSetId,
+    salesOrderId: delivery.salesOrderId,
+    salesOrderNo: delivery.salesOrder?.orderNo ?? null,
+    customerId: delivery.customerId,
+    customerName: delivery.customer?.name ?? null,
+    deliveryNo: delivery.deliveryNo,
+    deliveryDate: dateOnly(delivery.deliveryDate),
+    status: delivery.status,
+    totalQuantity: delivery.totalQuantity,
+    createdBy: delivery.createdBy,
+    evidenceRefs: evidenceRefsFromJson(delivery.evidenceRefsJson),
+    lines: (delivery.lines ?? [])
+      .map((line) => fulfillmentLineToDto(line, "salesOrderLineId"))
+      .sort((left, right) => left.lineNo - right.lineNo)
   };
 }
 
@@ -707,6 +769,15 @@ export function createPlatformPersistence(prisma) {
     },
 
     async updatePurchaseOrderStatus(order) {
+      for (const line of order.lines ?? []) {
+        await prisma.purchaseOrderLine.updateMany({
+          where: { purchaseOrderId: order.id, lineNo: line.lineNo },
+          data: {
+            receivedQuantity: line.receivedQuantity ?? 0,
+            invoicedQuantity: line.invoicedQuantity ?? 0
+          }
+        });
+      }
       const saved = await prisma.purchaseOrder.update({
         where: { id: order.id },
         data: {
@@ -774,6 +845,15 @@ export function createPlatformPersistence(prisma) {
     },
 
     async updateSalesOrderStatus(order) {
+      for (const line of order.lines ?? []) {
+        await prisma.salesOrderLine.updateMany({
+          where: { salesOrderId: order.id, lineNo: line.lineNo },
+          data: {
+            shippedQuantity: line.shippedQuantity ?? 0,
+            invoicedQuantity: line.invoicedQuantity ?? 0
+          }
+        });
+      }
       const saved = await prisma.salesOrder.update({
         where: { id: order.id },
         data: {
@@ -785,6 +865,80 @@ export function createPlatformPersistence(prisma) {
         include: { customer: true, lines: true }
       });
       return salesOrderToDto(saved);
+    },
+
+    async createPurchaseReceipt(receipt) {
+      const saved = await prisma.purchaseReceipt.create({
+        data: {
+          id: receipt.id,
+          accountSetId: receipt.accountSetId,
+          purchaseOrderId: receipt.purchaseOrderId,
+          supplierId: receipt.supplierId,
+          receiptNo: receipt.receiptNo,
+          receiptDate: dateTime(receipt.receiptDate),
+          status: receipt.status ?? "approved",
+          totalQuantity: receipt.totalQuantity,
+          createdBy: receipt.createdBy,
+          evidenceRefsJson: JSON.stringify(receipt.evidenceRefs ?? []),
+          lines: {
+            create: receipt.lines.map((line) => ({
+              id: `purchase-receipt-line:${receipt.id}:${line.lineNo}`,
+              purchaseOrderLineId: line.purchaseOrderLineId,
+              lineNo: line.lineNo,
+              itemCode: line.itemCode,
+              itemName: line.itemName,
+              quantity: line.quantity
+            }))
+          }
+        },
+        include: { supplier: true, purchaseOrder: true, lines: true }
+      });
+      return purchaseReceiptToDto(saved);
+    },
+
+    async listPurchaseReceipts(accountSetId) {
+      const receipts = await prisma.purchaseReceipt.findMany({
+        where: accountSetId ? { accountSetId } : undefined,
+        include: { supplier: true, purchaseOrder: true, lines: true }
+      });
+      return receipts.map(purchaseReceiptToDto).sort((left, right) => left.receiptNo.localeCompare(right.receiptNo));
+    },
+
+    async createSalesDelivery(delivery) {
+      const saved = await prisma.salesDelivery.create({
+        data: {
+          id: delivery.id,
+          accountSetId: delivery.accountSetId,
+          salesOrderId: delivery.salesOrderId,
+          customerId: delivery.customerId,
+          deliveryNo: delivery.deliveryNo,
+          deliveryDate: dateTime(delivery.deliveryDate),
+          status: delivery.status ?? "approved",
+          totalQuantity: delivery.totalQuantity,
+          createdBy: delivery.createdBy,
+          evidenceRefsJson: JSON.stringify(delivery.evidenceRefs ?? []),
+          lines: {
+            create: delivery.lines.map((line) => ({
+              id: `sales-delivery-line:${delivery.id}:${line.lineNo}`,
+              salesOrderLineId: line.salesOrderLineId,
+              lineNo: line.lineNo,
+              itemCode: line.itemCode,
+              itemName: line.itemName,
+              quantity: line.quantity
+            }))
+          }
+        },
+        include: { customer: true, salesOrder: true, lines: true }
+      });
+      return salesDeliveryToDto(saved);
+    },
+
+    async listSalesDeliveries(accountSetId) {
+      const deliveries = await prisma.salesDelivery.findMany({
+        where: accountSetId ? { accountSetId } : undefined,
+        include: { customer: true, salesOrder: true, lines: true }
+      });
+      return deliveries.map(salesDeliveryToDto).sort((left, right) => left.deliveryNo.localeCompare(right.deliveryNo));
     },
 
     async createAccount(account) {

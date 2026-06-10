@@ -39,6 +39,8 @@ model AccountSet {
   partners           Partner[]
   purchaseOrders     PurchaseOrder[]
   salesOrders        SalesOrder[]
+  purchaseReceipts   PurchaseReceipt[]
+  salesDeliveries    SalesDelivery[]
 }
 
 model User {
@@ -468,8 +470,10 @@ model Partner {
   updatedAt        DateTime @updatedAt
 
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
-  purchaseOrders PurchaseOrder[] @relation("PurchaseOrderSupplier")
-  salesOrders    SalesOrder[]    @relation("SalesOrderCustomer")
+  purchaseOrders   PurchaseOrder[]   @relation("PurchaseOrderSupplier")
+  salesOrders      SalesOrder[]      @relation("SalesOrderCustomer")
+  purchaseReceipts PurchaseReceipt[] @relation("PurchaseReceiptSupplier")
+  salesDeliveries  SalesDelivery[]   @relation("SalesDeliveryCustomer")
 
   @@unique([accountSetId, code])
   @@index([accountSetId, partnerType])
@@ -495,6 +499,7 @@ model PurchaseOrder {
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
   supplier   Partner    @relation("PurchaseOrderSupplier", fields: [supplierId], references: [id])
   lines      PurchaseOrderLine[]
+  receipts   PurchaseReceipt[]
 
   @@unique([accountSetId, orderNo])
   @@index([accountSetId, status])
@@ -516,6 +521,7 @@ model PurchaseOrderLine {
   invoicedQuantity  Float  @default(0)
 
   purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  receiptLines  PurchaseReceiptLine[]
 
   @@unique([purchaseOrderId, lineNo])
 }
@@ -540,6 +546,7 @@ model SalesOrder {
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
   customer   Partner    @relation("SalesOrderCustomer", fields: [customerId], references: [id])
   lines      SalesOrderLine[]
+  deliveries SalesDelivery[]
 
   @@unique([accountSetId, orderNo])
   @@index([accountSetId, status])
@@ -561,6 +568,85 @@ model SalesOrderLine {
   invoicedQuantity Float  @default(0)
 
   salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id])
+  deliveryLines SalesDeliveryLine[]
 
   @@unique([salesOrderId, lineNo])
+}
+
+model PurchaseReceipt {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  purchaseOrderId  String
+  supplierId       String
+  receiptNo        String
+  receiptDate      DateTime
+  status           String   @default("approved")
+  totalQuantity    Float    @default(0)
+  createdBy        String
+  evidenceRefsJson String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  accountSet    AccountSet            @relation(fields: [accountSetId], references: [id])
+  purchaseOrder PurchaseOrder         @relation(fields: [purchaseOrderId], references: [id])
+  supplier      Partner               @relation("PurchaseReceiptSupplier", fields: [supplierId], references: [id])
+  lines         PurchaseReceiptLine[]
+
+  @@unique([accountSetId, receiptNo])
+  @@index([purchaseOrderId])
+  @@index([supplierId])
+}
+
+model PurchaseReceiptLine {
+  id                  String @id @default(uuid())
+  purchaseReceiptId   String
+  purchaseOrderLineId String
+  lineNo              Int
+  itemCode            String
+  itemName            String
+  quantity            Float
+
+  purchaseReceipt   PurchaseReceipt   @relation(fields: [purchaseReceiptId], references: [id])
+  purchaseOrderLine PurchaseOrderLine @relation(fields: [purchaseOrderLineId], references: [id])
+
+  @@unique([purchaseReceiptId, lineNo])
+}
+
+model SalesDelivery {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  salesOrderId     String
+  customerId       String
+  deliveryNo       String
+  deliveryDate     DateTime
+  status           String   @default("approved")
+  totalQuantity    Float    @default(0)
+  createdBy        String
+  evidenceRefsJson String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  accountSet AccountSet          @relation(fields: [accountSetId], references: [id])
+  salesOrder SalesOrder          @relation(fields: [salesOrderId], references: [id])
+  customer   Partner             @relation("SalesDeliveryCustomer", fields: [customerId], references: [id])
+  lines      SalesDeliveryLine[]
+
+  @@unique([accountSetId, deliveryNo])
+  @@index([salesOrderId])
+  @@index([customerId])
+}
+
+model SalesDeliveryLine {
+  id               String @id @default(uuid())
+  salesDeliveryId  String
+  salesOrderLineId String
+  lineNo           Int
+  itemCode         String
+  itemName         String
+  quantity         Float
+
+  salesDelivery  SalesDelivery @relation(fields: [salesDeliveryId], references: [id])
+  salesOrderLine SalesOrderLine @relation(fields: [salesOrderLineId], references: [id])
+
+  @@unique([salesDeliveryId, lineNo])
 }
