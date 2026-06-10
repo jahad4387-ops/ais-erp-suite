@@ -356,6 +356,40 @@ function apSettlementToDto(settlement) {
   };
 }
 
+function voucherDraftFromJson(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function arSettlementToDto(settlement) {
+  return {
+    id: settlement.id,
+    accountSetId: settlement.accountSetId,
+    customerId: settlement.customerId,
+    customerName: settlement.customer?.name ?? null,
+    counterpartyLedgerEntryId: settlement.counterpartyLedgerEntryId,
+    sourceNo: settlement.counterpartyLedgerEntry?.sourceNo ?? null,
+    customerReceiptId: settlement.customerReceiptId ?? null,
+    customerReceiptNo: settlement.customerReceipt?.receiptNo ?? null,
+    nettingCounterpartyLedgerEntryId: settlement.nettingCounterpartyLedgerEntryId ?? null,
+    nettingSourceNo: settlement.nettingCounterpartyLedgerEntry?.sourceNo ?? null,
+    settlementNo: settlement.settlementNo,
+    settlementDate: dateOnly(settlement.settlementDate),
+    settlementType: settlement.settlementType,
+    settledAmount: settlement.settledAmount,
+    differenceAmount: settlement.differenceAmount,
+    differenceReason: settlement.differenceReason ?? null,
+    voucherDraft: voucherDraftFromJson(settlement.voucherDraftJson),
+    status: settlement.status,
+    createdBy: settlement.createdBy,
+    evidenceRefs: evidenceRefsFromJson(settlement.evidenceRefsJson)
+  };
+}
+
 function customerReceiptToDto(receipt) {
   return {
     id: receipt.id,
@@ -422,6 +456,14 @@ function settlementWorkflowWhere(accountSetId, filters = {}) {
     ...(accountSetId ? { accountSetId } : {}),
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.supplierId ? { supplierId: filters.supplierId } : {})
+  };
+}
+
+function arSettlementWorkflowWhere(accountSetId, filters = {}) {
+  return {
+    ...(accountSetId ? { accountSetId } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.customerId ? { customerId: filters.customerId } : {})
   };
 }
 
@@ -1430,6 +1472,49 @@ export function createPlatformPersistence(prisma) {
         include: { supplier: true, supplierPayment: true, counterpartyLedgerEntry: true }
       });
       return settlements.map(apSettlementToDto).sort((left, right) => left.settlementNo.localeCompare(right.settlementNo));
+    },
+
+    async createArSettlement(settlement) {
+      const saved = await prisma.arSettlement.create({
+        data: {
+          id: settlement.id,
+          accountSetId: settlement.accountSetId,
+          customerId: settlement.customerId,
+          counterpartyLedgerEntryId: settlement.counterpartyLedgerEntryId,
+          customerReceiptId: settlement.customerReceiptId ?? null,
+          nettingCounterpartyLedgerEntryId: settlement.nettingCounterpartyLedgerEntryId ?? null,
+          settlementNo: settlement.settlementNo,
+          settlementDate: dateTime(settlement.settlementDate),
+          settlementType: settlement.settlementType,
+          settledAmount: settlement.settledAmount,
+          differenceAmount: settlement.differenceAmount ?? 0,
+          differenceReason: settlement.differenceReason ?? null,
+          voucherDraftJson: settlement.voucherDraft ? JSON.stringify(settlement.voucherDraft) : null,
+          status: settlement.status ?? "settled",
+          createdBy: settlement.createdBy,
+          evidenceRefsJson: JSON.stringify(settlement.evidenceRefs ?? [])
+        },
+        include: {
+          customer: true,
+          customerReceipt: true,
+          counterpartyLedgerEntry: true,
+          nettingCounterpartyLedgerEntry: true
+        }
+      });
+      return arSettlementToDto(saved);
+    },
+
+    async listArSettlements(accountSetId, filters = {}) {
+      const settlements = await prisma.arSettlement.findMany({
+        where: arSettlementWorkflowWhere(accountSetId, filters),
+        include: {
+          customer: true,
+          customerReceipt: true,
+          counterpartyLedgerEntry: true,
+          nettingCounterpartyLedgerEntry: true
+        }
+      });
+      return settlements.map(arSettlementToDto).sort((left, right) => left.settlementNo.localeCompare(right.settlementNo));
     },
 
     async updateCounterpartyLedgerSettlement(entryId, updates) {

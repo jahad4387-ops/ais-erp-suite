@@ -1186,7 +1186,8 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
         "customer_receipt.manage",
         "collection_plan.view",
         "credit_exposure.view",
-        "ap_settlement.manage"
+        "ap_settlement.manage",
+        "ar_settlement.manage"
       ]
     },
     "phase2-invoice-role"
@@ -1482,9 +1483,36 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
     path: `/ap-settlements?accountSetId=${accountSet.body.id}&supplierId=${supplier.body.id}`,
     headers: { "Actor-Id": actor.body.id }
   });
+  const arSettlement = await api.handle({
+    method: "POST",
+    path: "/ar-settlements",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-ar-settlement" },
+    body: {
+      accountSetId: accountSet.body.id,
+      counterpartyLedgerEntryId: receivableLedger.body[0].id,
+      customerReceiptId: customerReceipt.body.id,
+      settlementDate: "2026-04-23",
+      settlementType: "receipt_to_bill",
+      settledAmount: 1200,
+      differenceAmount: 5,
+      differenceReason: "Collection fee difference",
+      createdBy: actor.body.id,
+      evidenceRefs: ["attachment:ar-settlement"]
+    }
+  });
+  const arSettlements = await api.handle({
+    method: "GET",
+    path: `/ar-settlements?accountSetId=${accountSet.body.id}&customerId=${customer.body.id}`,
+    headers: { "Actor-Id": actor.body.id }
+  });
   const settledPayableLedger = await api.handle({
     method: "GET",
     path: `/counterparty-ledger?accountSetId=${accountSet.body.id}&direction=ap`,
+    headers: { "Actor-Id": actor.body.id }
+  });
+  const settledReceivableLedger = await api.handle({
+    method: "GET",
+    path: `/counterparty-ledger?accountSetId=${accountSet.body.id}&direction=ar`,
     headers: { "Actor-Id": actor.body.id }
   });
   const approvedPaymentRequests = await api.handle({
@@ -1596,9 +1624,22 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
   assert.equal(apSettlement.body.differenceAmount, 10);
   assert.equal(apSettlement.body.differenceReason, "Bank fee difference");
   assert.deepEqual(apSettlements.body.map((settlement) => settlement.settlementNo), [apSettlement.body.settlementNo]);
+  assert.equal(arSettlement.status, 201);
+  assert.equal(arSettlement.body.settlementType, "receipt_to_bill");
+  assert.equal(arSettlement.body.sourceNo, salesInvoice.body.invoiceNo);
+  assert.equal(arSettlement.body.customerReceiptNo, customerReceipt.body.receiptNo);
+  assert.equal(arSettlement.body.settledAmount, 1200);
+  assert.equal(arSettlement.body.differenceAmount, 5);
+  assert.equal(arSettlement.body.differenceReason, "Collection fee difference");
+  assert.equal(arSettlement.body.voucherDraft.status, "draft");
+  assert.equal(arSettlement.body.voucherDraft.lines[1].accountCode, "1122");
+  assert.deepEqual(arSettlements.body.map((settlement) => settlement.settlementNo), [arSettlement.body.settlementNo]);
   assert.equal(settledPayableLedger.body[0].settledAmount, 600);
   assert.equal(settledPayableLedger.body[0].remainingAmount, 560);
   assert.equal(settledPayableLedger.body[0].status, "partially_settled");
+  assert.equal(settledReceivableLedger.body[0].settledAmount, 1200);
+  assert.equal(settledReceivableLedger.body[0].remainingAmount, 920);
+  assert.equal(settledReceivableLedger.body[0].status, "partially_settled");
   assert.deepEqual(approvedPaymentRequests.body.map((request) => request.requestNo), [paymentRequest.body.requestNo]);
   assert.deepEqual(supplierPayments.body.map((payment) => payment.paymentNo), [supplierPayment.body.paymentNo]);
   assert.equal(blockedLedger.status, 200);
@@ -1611,7 +1652,109 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
   assert.ok(api.state.auditLogs.some((log) => log.action === "payment_request.approve" && log.objectId === paymentRequest.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "supplier_payment.create" && log.objectId === supplierPayment.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "ap_settlement.create" && log.objectId === apSettlement.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "ar_settlement.create" && log.objectId === arSettlement.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "customer_receipt.create" && log.objectId === customerReceipt.body.id));
+});
+
+test("Phase 2 AR/AP netting settles receivable and payable entries for the same partner", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P2-NET",
+      name: "Phase 2 Netting Set",
+      companyName: "Phase 2 Netting Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase2-netting-account-set"
+  );
+  const actorId = "netting-actor";
+  const partner = {
+    id: "partner:netting",
+    accountSetId: accountSet.body.id,
+    partnerType: "both",
+    code: "BOTH-001",
+    name: "Netting Counterparty",
+    taxRate: 0,
+    creditLimit: 0,
+    paymentTerms: "NET30",
+    settlementMethod: "bank_transfer",
+    isEnabled: true
+  };
+  api.state.permissionsByActor.set(actorId, new Set(["ar_settlement.manage", "counterparty_ledger.view"]));
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+  api.state.partners.set(partner.id, partner);
+  api.state.counterpartyLedgerEntries.set("ledger:ar:netting", {
+    id: "ledger:ar:netting",
+    accountSetId: accountSet.body.id,
+    partnerId: partner.id,
+    partnerName: partner.name,
+    direction: "ar",
+    sourceType: "sales_invoice",
+    sourceId: "sales-invoice:netting",
+    sourceNo: "SI-NET-001",
+    documentDate: "2026-05-01",
+    dueDate: "2026-05-31",
+    originalAmount: 800,
+    settledAmount: 0,
+    remainingAmount: 800,
+    status: "open",
+    glAccountCode: "1122",
+    auxiliaryType: "customer",
+    auxiliaryPartnerId: partner.id,
+    createdBy: actorId
+  });
+  api.state.counterpartyLedgerEntries.set("ledger:ap:netting", {
+    id: "ledger:ap:netting",
+    accountSetId: accountSet.body.id,
+    partnerId: partner.id,
+    partnerName: partner.name,
+    direction: "ap",
+    sourceType: "purchase_invoice",
+    sourceId: "purchase-invoice:netting",
+    sourceNo: "PI-NET-001",
+    documentDate: "2026-05-02",
+    dueDate: "2026-05-30",
+    originalAmount: 500,
+    settledAmount: 0,
+    remainingAmount: 500,
+    status: "open",
+    glAccountCode: "2202",
+    auxiliaryType: "supplier",
+    auxiliaryPartnerId: partner.id,
+    isPaymentBlocked: false,
+    paymentBlockReason: null,
+    createdBy: actorId
+  });
+
+  const netting = await api.handle({
+    method: "POST",
+    path: "/ar-settlements",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase2-ar-ap-netting" },
+    body: {
+      accountSetId: accountSet.body.id,
+      counterpartyLedgerEntryId: "ledger:ar:netting",
+      nettingCounterpartyLedgerEntryId: "ledger:ap:netting",
+      settlementDate: "2026-05-10",
+      settlementType: "ar_ap_netting",
+      settledAmount: 300,
+      createdBy: actorId
+    }
+  });
+
+  assert.equal(netting.status, 201);
+  assert.equal(netting.body.settlementType, "ar_ap_netting");
+  assert.equal(netting.body.nettingSourceNo, "PI-NET-001");
+  assert.equal(netting.body.voucherDraft.lines[0].accountCode, "2202");
+  assert.equal(netting.body.voucherDraft.lines[0].debit, 300);
+  assert.equal(netting.body.voucherDraft.lines[1].accountCode, "1122");
+  assert.equal(api.state.counterpartyLedgerEntries.get("ledger:ar:netting").remainingAmount, 500);
+  assert.equal(api.state.counterpartyLedgerEntries.get("ledger:ap:netting").remainingAmount, 200);
 });
 
 test("API can persist account sets and scoped grants through platform store", async () => {

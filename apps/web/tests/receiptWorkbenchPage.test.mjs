@@ -15,7 +15,11 @@ test("receipt workbench exposes customer receipts, prepayments, credit exposure,
   assert.match(pageSource, /api\.get\(`\/counterparty-ledger\?accountSetId=\$\{currentAccountSetId\}&direction=ar/, "Workbench should load open AR entries.");
   assert.match(pageSource, /api\.get\(`\/collection-plans\?accountSetId=\$\{currentAccountSetId\}/, "Workbench should load collection plans.");
   assert.match(pageSource, /api\.get\(`\/credit-exposures\?accountSetId=\$\{currentAccountSetId\}/, "Workbench should load credit exposure.");
+  assert.match(pageSource, /api\.get\(`\/ar-settlements\?accountSetId=\$\{currentAccountSetId\}/, "Workbench should load AR settlements.");
   assert.match(pageSource, /api\.post\('\/customer-receipts'/, "Workbench should create customer receipts.");
+  assert.match(pageSource, /api\.post\('\/ar-settlements'/, "Workbench should create AR settlements.");
   assert.match(pageSource, /receiptType/, "Workbench should distinguish receipts and prepayments.");
+  assert.match(pageSource, /ar_ap_netting/, "Workbench should expose AR/AP netting.");
+  assert.match(pageSource, /voucherDraft/, "Workbench should expose voucher draft previews.");
   assert.match(pageSource, /availableCredit/, "Workbench should show available credit.");
 });

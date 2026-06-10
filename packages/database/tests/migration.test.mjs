@@ -38,6 +38,10 @@ const phase2ApSettlementMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610160000_phase2_ap_settlement_workflow/migration.sql", import.meta.url)
 );
 const phase2ApSettlementMigrationText = phase2ApSettlementMigrationSql.toString("utf8");
+const phase2ArSettlementMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610170000_phase2_ar_settlement_workflow/migration.sql", import.meta.url)
+);
+const phase2ArSettlementMigrationText = phase2ArSettlementMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -205,4 +209,22 @@ test("Phase 2 AP settlement migration creates payable settlement source chain an
   assert.match(phase2ApSettlementMigrationText, /"differenceReason" TEXT/);
   assert.match(phase2ApSettlementMigrationText, /CREATE INDEX "ApSettlement_accountSetId_status_idx"/);
   assert.match(phase2ApSettlementMigrationText, /CREATE INDEX "ApSettlement_counterpartyLedgerEntryId_idx"/);
+});
+
+test("Phase 2 AR settlement migration creates receivable settlement, netting, and voucher draft fields", () => {
+  assert.match(phase2ArSettlementMigrationText, /CREATE TABLE "ArSettlement"/, "AR settlements must be persisted.");
+  assert.match(
+    phase2ArSettlementMigrationText,
+    /"settlementType" TEXT NOT NULL/,
+    "Settlement type must distinguish receipt, prepayment, credit note, refund, and AR/AP netting."
+  );
+  assert.match(phase2ArSettlementMigrationText, /"counterpartyLedgerEntryId" TEXT NOT NULL/);
+  assert.match(phase2ArSettlementMigrationText, /"customerReceiptId" TEXT/);
+  assert.match(phase2ArSettlementMigrationText, /"nettingCounterpartyLedgerEntryId" TEXT/);
+  assert.match(phase2ArSettlementMigrationText, /"settledAmount" REAL NOT NULL DEFAULT 0/);
+  assert.match(phase2ArSettlementMigrationText, /"differenceAmount" REAL NOT NULL DEFAULT 0/);
+  assert.match(phase2ArSettlementMigrationText, /"voucherDraftJson" TEXT/);
+  assert.match(phase2ArSettlementMigrationText, /CREATE INDEX "ArSettlement_accountSetId_status_idx"/);
+  assert.match(phase2ArSettlementMigrationText, /CREATE INDEX "ArSettlement_counterpartyLedgerEntryId_idx"/);
+  assert.match(phase2ArSettlementMigrationText, /CREATE INDEX "ArSettlement_nettingCounterpartyLedgerEntryId_idx"/);
 });

@@ -49,6 +49,7 @@ model AccountSet {
   customerReceipts   CustomerReceipt[]
   collectionPlans    CollectionPlan[]
   apSettlements      ApSettlement[]
+  arSettlements      ArSettlement[]
 }
 
 model User {
@@ -490,6 +491,7 @@ model Partner {
   customerReceipts  CustomerReceipt[] @relation("CustomerReceiptCustomer")
   collectionPlans   CollectionPlan[]  @relation("CollectionPlanCustomer")
   apSettlements     ApSettlement[]    @relation("ApSettlementSupplier")
+  arSettlements     ArSettlement[]    @relation("ArSettlementCustomer")
 
   @@unique([accountSetId, code])
   @@index([accountSetId, partnerType])
@@ -804,6 +806,8 @@ model CounterpartyLedgerEntry {
   customerReceipts CustomerReceipt[]
   collectionPlan   CollectionPlan?
   apSettlements    ApSettlement[]
+  arSettlements    ArSettlement[] @relation("ArSettlementReceivable")
+  arNettingSettlements ArSettlement[] @relation("ArSettlementNetting")
 
   @@unique([sourceType, sourceId])
   @@index([accountSetId, direction, status])
@@ -893,6 +897,7 @@ model CustomerReceipt {
   accountSet              AccountSet               @relation(fields: [accountSetId], references: [id])
   counterpartyLedgerEntry CounterpartyLedgerEntry? @relation(fields: [counterpartyLedgerEntryId], references: [id])
   customer                Partner                  @relation("CustomerReceiptCustomer", fields: [customerId], references: [id])
+  arSettlements           ArSettlement[]
 
   @@unique([accountSetId, receiptNo])
   @@index([accountSetId, status])
@@ -928,6 +933,40 @@ model ApSettlement {
   @@index([counterpartyLedgerEntryId])
   @@index([supplierId])
   @@index([supplierPaymentId])
+}
+
+model ArSettlement {
+  id                               String   @id @default(uuid())
+  accountSetId                     String
+  customerId                       String
+  counterpartyLedgerEntryId        String
+  customerReceiptId                String?
+  nettingCounterpartyLedgerEntryId String?
+  settlementNo                     String
+  settlementDate                   DateTime
+  settlementType                   String
+  settledAmount                    Float    @default(0)
+  differenceAmount                 Float    @default(0)
+  differenceReason                 String?
+  voucherDraftJson                 String?
+  status                           String   @default("settled")
+  createdBy                        String
+  evidenceRefsJson                 String?
+  createdAt                        DateTime @default(now())
+  updatedAt                        DateTime @updatedAt
+
+  accountSet                     AccountSet              @relation(fields: [accountSetId], references: [id])
+  customer                       Partner                 @relation("ArSettlementCustomer", fields: [customerId], references: [id])
+  counterpartyLedgerEntry        CounterpartyLedgerEntry @relation("ArSettlementReceivable", fields: [counterpartyLedgerEntryId], references: [id])
+  customerReceipt                CustomerReceipt?        @relation(fields: [customerReceiptId], references: [id])
+  nettingCounterpartyLedgerEntry CounterpartyLedgerEntry? @relation("ArSettlementNetting", fields: [nettingCounterpartyLedgerEntryId], references: [id])
+
+  @@unique([accountSetId, settlementNo])
+  @@index([accountSetId, status])
+  @@index([counterpartyLedgerEntryId])
+  @@index([customerId])
+  @@index([customerReceiptId])
+  @@index([nettingCounterpartyLedgerEntryId])
 }
 
 model CollectionPlan {

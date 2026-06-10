@@ -46,6 +46,7 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/counterparty-ledger/{counterpartyLedgerEntryId}/block-payment:",
     "/customer-receipts:",
     "/ap-settlements:",
+    "/ar-settlements:",
     "/accounts:",
     "/accounts/{accountId}:",
     "/accounts/import:",
@@ -109,6 +110,7 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "CollectionPlan:",
     "CreditExposure:",
     "ApSettlement:",
+    "ArSettlement:",
     "AccountingPeriod:",
     "Account:",
     "AccountCodeRule:",
@@ -186,6 +188,16 @@ test("Phase 2 AP settlement workflow endpoint is documented with difference hand
   assert.match(contract, /settlementType:/);
   assert.match(contract, /differenceAmount:/);
   assert.match(contract, /differenceReason:/);
+});
+
+test("Phase 2 AR settlement workflow endpoint is documented with netting and voucher draft preview", () => {
+  const block = blockAfter("  /ar-settlements:");
+
+  assert.match(block, /x-permission: ar_settlement\.manage/);
+  assert.match(block, /ArSettlement/);
+  assert.match(contract, /nettingCounterpartyLedgerEntryId:/);
+  assert.match(contract, /customerReceiptId:/);
+  assert.match(contract, /voucherDraft:/);
 });
 
 test("deployment configuration check endpoint is documented", () => {

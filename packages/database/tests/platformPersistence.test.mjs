@@ -25,6 +25,7 @@ function createFakePrisma() {
   const customerReceipts = new Map();
   const collectionPlans = new Map();
   const apSettlements = new Map();
+  const arSettlements = new Map();
   const periods = new Map();
   const chartOfAccounts = new Map();
   const auxiliaryTypes = new Map();
@@ -423,6 +424,28 @@ function createFakePrisma() {
         if (where?.status) rows = rows.filter((settlement) => settlement.status === where.status);
         if (where?.supplierId) rows = rows.filter((settlement) => settlement.supplierId === where.supplierId);
         return rows.map((settlement) => (include?.supplier ? settlement : { ...settlement, supplier: undefined }));
+      }
+    },
+    arSettlement: {
+      create: async ({ data, include }) => {
+        const settlement = {
+          ...data,
+          customer: partners.get(data.customerId),
+          counterpartyLedgerEntry: counterpartyLedgerEntries.get(data.counterpartyLedgerEntryId),
+          customerReceipt: data.customerReceiptId ? customerReceipts.get(data.customerReceiptId) : null,
+          nettingCounterpartyLedgerEntry: data.nettingCounterpartyLedgerEntryId
+            ? counterpartyLedgerEntries.get(data.nettingCounterpartyLedgerEntryId)
+            : null
+        };
+        arSettlements.set(settlement.id, settlement);
+        return include?.customer ? settlement : { ...settlement, customer: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        let rows = [...arSettlements.values()];
+        if (where?.accountSetId) rows = rows.filter((settlement) => settlement.accountSetId === where.accountSetId);
+        if (where?.status) rows = rows.filter((settlement) => settlement.status === where.status);
+        if (where?.customerId) rows = rows.filter((settlement) => settlement.customerId === where.customerId);
+        return rows.map((settlement) => (include?.customer ? settlement : { ...settlement, customer: undefined }));
       }
     },
     customerReceipt: {
@@ -1374,11 +1397,42 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
     glVoucherId: null,
     evidenceRefs: []
   });
+  const arSettlement = await store.createArSettlement({
+    id: "ar-settlement:1",
+    accountSetId: accountSet.id,
+    customerId: customer.id,
+    counterpartyLedgerEntryId: receivableLedger[0].id,
+    customerReceiptId: customerReceipt.id,
+    nettingCounterpartyLedgerEntryId: null,
+    settlementNo: "AR-SET-202603-001",
+    settlementDate: "2026-03-24",
+    settlementType: "receipt_to_bill",
+    settledAmount: 1200,
+    differenceAmount: 5,
+    differenceReason: "Collection fee difference",
+    status: "settled",
+    createdBy: "ar",
+    voucherDraft: {
+      status: "draft",
+      sourceModule: "order-to-cash",
+      lines: [
+        { accountCode: "1002", debit: 1200, credit: 0 },
+        { accountCode: "1122", debit: 0, credit: 1200 }
+      ]
+    },
+    evidenceRefs: ["attachment:ar-settlement"]
+  });
+  const settledReceivable = await store.updateCounterpartyLedgerSettlement(receivableLedger[0].id, {
+    settledAmount: 1200,
+    remainingAmount: 920,
+    status: "partially_settled"
+  });
   const paymentRequests = await store.listPaymentRequests(accountSet.id, { status: "approved" });
   const supplierPayments = await store.listSupplierPayments(accountSet.id, { supplierId: supplier.id });
   const apSettlements = await store.listApSettlements(accountSet.id, { supplierId: supplier.id });
   const collectionPlans = await store.listCollectionPlans(accountSet.id, { customerId: customer.id });
   const customerReceipts = await store.listCustomerReceipts(accountSet.id, { customerId: customer.id });
+  const arSettlements = await store.listArSettlements(accountSet.id, { customerId: customer.id });
 
   assert.equal(purchaseInvoice.purchaseReceiptNo, "PR-202603-001");
   assert.equal(purchaseInvoice.payableAmount, 1160);
@@ -1427,6 +1481,16 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
   assert.equal(prepaymentReceipt.receiptType, "prepayment");
   assert.deepEqual(collectionPlans.map((row) => row.sourceNo), ["SI-202603-001"]);
   assert.deepEqual(customerReceipts.map((row) => row.receiptNo), ["REC-202603-001", "REC-202603-002"]);
+  assert.equal(arSettlement.settlementNo, "AR-SET-202603-001");
+  assert.equal(arSettlement.sourceNo, "SI-202603-001");
+  assert.equal(arSettlement.customerReceiptNo, "REC-202603-001");
+  assert.equal(arSettlement.settledAmount, 1200);
+  assert.equal(arSettlement.differenceAmount, 5);
+  assert.equal(arSettlement.voucherDraft.status, "draft");
+  assert.equal(arSettlement.voucherDraft.lines[1].accountCode, "1122");
+  assert.equal(settledReceivable.remainingAmount, 920);
+  assert.equal(settledReceivable.status, "partially_settled");
+  assert.deepEqual(arSettlements.map((row) => row.settlementNo), ["AR-SET-202603-001"]);
 });
 
 test("Prisma platform persistence stores accounting periods and lifecycle status", async () => {

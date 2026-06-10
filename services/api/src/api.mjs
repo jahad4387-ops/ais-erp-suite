@@ -85,7 +85,8 @@ const DEFAULT_PERMISSION_CODES = [
   "customer_receipt.manage",
   "collection_plan.view",
   "credit_exposure.view",
-  "ap_settlement.manage"
+  "ap_settlement.manage",
+  "ar_settlement.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -601,6 +602,9 @@ function permissionFor(request) {
   if (segments[0] === "ap-settlements") {
     return "ap_settlement.manage";
   }
+  if (segments[0] === "ar-settlements") {
+    return "ar_settlement.manage";
+  }
   if (request.method === "POST" && request.path === "/attachments/upload") return "attachment.upload";
   if (request.method === "POST" && request.path === "/attachment-links") return "attachment.upload";
   if (request.method === "DELETE" && segments.length === 2 && segments[0] === "attachments") return "attachment.delete";
@@ -691,6 +695,7 @@ function createState(options = {}) {
     customerReceipts: new Map(),
     collectionPlans: new Map(),
     apSettlements: new Map(),
+    arSettlements: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1390,6 +1395,28 @@ async function createApSettlement(state, settlement) {
   return savedSettlement;
 }
 
+async function listArSettlements(state, accountSetId, filters = {}) {
+  const persistedSettlements = state.config.platformStore?.listArSettlements
+    ? await state.config.platformStore.listArSettlements(accountSetId, filters)
+    : [];
+  const settlementsById = new Map(persistedSettlements.map((settlement) => [settlement.id, settlement]));
+  for (const settlement of state.arSettlements.values()) {
+    if (accountSetId && settlement.accountSetId !== accountSetId) continue;
+    if (filters.status && settlement.status !== filters.status) continue;
+    if (filters.customerId && settlement.customerId !== filters.customerId) continue;
+    settlementsById.set(settlement.id, settlement);
+  }
+  return [...settlementsById.values()].sort((left, right) => left.settlementNo.localeCompare(right.settlementNo));
+}
+
+async function createArSettlement(state, settlement) {
+  const savedSettlement = state.config.platformStore?.createArSettlement
+    ? await state.config.platformStore.createArSettlement(settlement)
+    : settlement;
+  state.arSettlements.set(savedSettlement.id, savedSettlement);
+  return savedSettlement;
+}
+
 async function listCustomerReceipts(state, accountSetId, filters = {}) {
   const persistedReceipts = state.config.platformStore?.listCustomerReceipts
     ? await state.config.platformStore.listCustomerReceipts(accountSetId, filters)
@@ -1410,6 +1437,42 @@ async function createCustomerReceipt(state, receipt) {
     : receipt;
   state.customerReceipts.set(savedReceipt.id, savedReceipt);
   return savedReceipt;
+}
+
+async function findCustomerReceiptById(state, receiptId) {
+  const receipt = state.customerReceipts.get(receiptId);
+  if (receipt) return receipt;
+  const persistedReceipts = state.config.platformStore?.listCustomerReceipts
+    ? await state.config.platformStore.listCustomerReceipts(null, {})
+    : [];
+  return persistedReceipts.find((item) => item.id === receiptId) ?? null;
+}
+
+function settlementVoucherDraft({ accountSetId, settlementNo, settlementDate, settlementType, amount, bankAccountCode, arAccountCode, apAccountCode }) {
+  if (settlementType === "ar_ap_netting") {
+    return {
+      status: "draft",
+      sourceModule: "order-to-cash",
+      sourceDocumentNo: settlementNo,
+      voucherDate: settlementDate,
+      accountSetId,
+      lines: [
+        { accountCode: apAccountCode ?? "2202", debit: amount, credit: 0 },
+        { accountCode: arAccountCode ?? "1122", debit: 0, credit: amount }
+      ]
+    };
+  }
+  return {
+    status: "draft",
+    sourceModule: "order-to-cash",
+    sourceDocumentNo: settlementNo,
+    voucherDate: settlementDate,
+    accountSetId,
+    lines: [
+      { accountCode: bankAccountCode ?? "1002", debit: amount, credit: 0 },
+      { accountCode: arAccountCode ?? "1122", debit: 0, credit: amount }
+    ]
+  };
 }
 
 async function listCollectionPlans(state, accountSetId, filters = {}) {
@@ -3064,6 +3127,149 @@ async function route(request, state) {
         actorId: savedSettlement.createdBy,
         action: "ap_settlement.create",
         objectType: "ap_settlement",
+        objectId: savedSettlement.id
+      });
+      return jsonResponse(201, savedSettlement);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "ar-settlements") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(
+        200,
+        await listArSettlements(state, accountSetId, {
+          status: query.get("status") ?? null,
+          customerId: query.get("customerId") ?? null
+        })
+      );
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const entry = await findCounterpartyLedgerEntryById(state, body.counterpartyLedgerEntryId);
+      if (!entry || entry.accountSetId !== body.accountSetId) {
+        return errorResponse(404, "COUNTERPARTY_LEDGER_ENTRY_NOT_FOUND", "Counterparty ledger entry was not found.");
+      }
+      if (entry.direction !== "ar") {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "AR settlements can only be created from receivable entries.");
+      }
+      const settlementType = body.settlementType ?? "receipt_to_bill";
+      if (!["receipt_to_bill", "prepayment_to_bill", "refund", "credit_note_to_bill", "ar_ap_netting"].includes(settlementType)) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", "settlementType is not supported.");
+      }
+      let customerReceipt = null;
+      if (["receipt_to_bill", "prepayment_to_bill"].includes(settlementType)) {
+        customerReceipt = body.customerReceiptId ? await findCustomerReceiptById(state, body.customerReceiptId) : null;
+        if (!customerReceipt || customerReceipt.accountSetId !== body.accountSetId) {
+          return errorResponse(404, "CUSTOMER_RECEIPT_NOT_FOUND", "Customer receipt was not found.");
+        }
+        if (customerReceipt.customerId !== entry.partnerId) {
+          return errorResponse(409, "BUSINESS_RULE_FAILED", "Customer receipt does not belong to the receivable customer.");
+        }
+        if (settlementType === "receipt_to_bill" && customerReceipt.receiptType !== "receipt") {
+          return errorResponse(409, "BUSINESS_RULE_FAILED", "receipt_to_bill requires a normal receipt.");
+        }
+        if (settlementType === "prepayment_to_bill" && customerReceipt.receiptType !== "prepayment") {
+          return errorResponse(409, "BUSINESS_RULE_FAILED", "prepayment_to_bill requires a prepayment receipt.");
+        }
+      }
+      let nettingEntry = null;
+      if (settlementType === "ar_ap_netting") {
+        nettingEntry = body.nettingCounterpartyLedgerEntryId
+          ? await findCounterpartyLedgerEntryById(state, body.nettingCounterpartyLedgerEntryId)
+          : null;
+        if (!nettingEntry || nettingEntry.accountSetId !== body.accountSetId) {
+          return errorResponse(404, "NETTING_COUNTERPARTY_LEDGER_ENTRY_NOT_FOUND", "Netting payable entry was not found.");
+        }
+        if (nettingEntry.direction !== "ap") {
+          return errorResponse(409, "BUSINESS_RULE_FAILED", "AR/AP netting requires a payable entry.");
+        }
+        if (nettingEntry.partnerId !== entry.partnerId) {
+          return errorResponse(409, "BUSINESS_RULE_FAILED", "AR/AP netting requires the same partner on receivable and payable entries.");
+        }
+      }
+      const settledAmount = Number(body.settledAmount);
+      if (!Number.isFinite(settledAmount) || settledAmount <= 0) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", "settledAmount must be greater than 0.");
+      }
+      if (settledAmount > Number(entry.remainingAmount ?? 0)) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "settledAmount exceeds remaining receivable amount.");
+      }
+      if (customerReceipt && settledAmount > Number(customerReceipt.receivedAmount ?? 0)) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "settledAmount exceeds receipt amount.");
+      }
+      if (nettingEntry && settledAmount > Number(nettingEntry.remainingAmount ?? 0)) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "settledAmount exceeds remaining payable amount for netting.");
+      }
+      const existingSettlements = await listArSettlements(state, body.accountSetId);
+      const settlementDate = body.settlementDate ?? new Date().toISOString().slice(0, 10);
+      const settlementNo =
+        body.settlementNo ?? nextFulfillmentNo("AR-SET", body.accountSetId, settlementDate, existingSettlements, "settlementNo");
+      const voucherDraft = settlementVoucherDraft({
+        accountSetId: body.accountSetId,
+        settlementNo,
+        settlementDate,
+        settlementType,
+        amount: settledAmount,
+        bankAccountCode: customerReceipt?.bankAccountCode,
+        arAccountCode: entry.glAccountCode,
+        apAccountCode: nettingEntry?.glAccountCode
+      });
+      const settlement = {
+        id: body.id ?? `ar-settlement:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        customerId: entry.partnerId,
+        customerName: entry.partnerName ?? null,
+        counterpartyLedgerEntryId: entry.id,
+        sourceNo: entry.sourceNo,
+        customerReceiptId: customerReceipt?.id ?? null,
+        customerReceiptNo: customerReceipt?.receiptNo ?? null,
+        nettingCounterpartyLedgerEntryId: nettingEntry?.id ?? null,
+        nettingSourceNo: nettingEntry?.sourceNo ?? null,
+        settlementNo,
+        settlementDate,
+        settlementType,
+        settledAmount,
+        differenceAmount: Number(body.differenceAmount ?? 0),
+        differenceReason: body.differenceReason ?? null,
+        voucherDraft,
+        status: "settled",
+        createdBy: body.createdBy ?? actorId,
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : []
+      };
+      const savedSettlement = await createArSettlement(state, settlement);
+      const nextReceivableSettledAmount = Number((Number(entry.settledAmount ?? 0) + settledAmount).toFixed(2));
+      const nextReceivableRemainingAmount = Number((Number(entry.remainingAmount ?? 0) - settledAmount).toFixed(2));
+      await updateCounterpartyLedgerSettlement(state, entry.id, {
+        settledAmount: nextReceivableSettledAmount,
+        remainingAmount: nextReceivableRemainingAmount,
+        status: nextReceivableRemainingAmount <= 0 ? "settled" : "partially_settled"
+      });
+      if (nettingEntry) {
+        const nextPayableSettledAmount = Number((Number(nettingEntry.settledAmount ?? 0) + settledAmount).toFixed(2));
+        const nextPayableRemainingAmount = Number((Number(nettingEntry.remainingAmount ?? 0) - settledAmount).toFixed(2));
+        await updateCounterpartyLedgerSettlement(state, nettingEntry.id, {
+          settledAmount: nextPayableSettledAmount,
+          remainingAmount: nextPayableRemainingAmount,
+          status: nextPayableRemainingAmount <= 0 ? "settled" : "partially_settled"
+        });
+      }
+      appendAuditLog(state, {
+        actorId: savedSettlement.createdBy,
+        action: "ar_settlement.create",
+        objectType: "ar_settlement",
         objectId: savedSettlement.id
       });
       return jsonResponse(201, savedSettlement);

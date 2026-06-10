@@ -118,6 +118,7 @@ export const permissionText: Record<string, string> = {
   'collection_plan.view': '查看回款计划',
   'credit_exposure.view': '查看信用占用',
   'ap_settlement.manage': '管理应付核销',
+  'ar_settlement.manage': '管理应收核销',
   'auxiliary.manage': '管理辅助核算',
   'opening_balance.manage': '管理期初余额',
   'opening_balance.view': '查看期初余额',
