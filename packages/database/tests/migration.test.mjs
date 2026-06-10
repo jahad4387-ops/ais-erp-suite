@@ -30,6 +30,10 @@ const phase2PaymentMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610140000_phase2_payment_workflow/migration.sql", import.meta.url)
 );
 const phase2PaymentMigrationText = phase2PaymentMigrationSql.toString("utf8");
+const phase2ReceiptMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610150000_phase2_receipt_workflow/migration.sql", import.meta.url)
+);
+const phase2ReceiptMigrationText = phase2ReceiptMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -168,4 +172,17 @@ test("Phase 2 payment migration creates request, approval, payment, and freeze c
   assert.match(phase2PaymentMigrationText, /"bankAccountCode" TEXT NOT NULL/, "Payments must capture the cash or bank account.");
   assert.match(phase2PaymentMigrationText, /CREATE INDEX "PaymentRequest_accountSetId_status_idx"/);
   assert.match(phase2PaymentMigrationText, /CREATE INDEX "SupplierPayment_accountSetId_status_idx"/);
+});
+
+test("Phase 2 receipt migration creates customer receipts and collection plans", () => {
+  for (const table of ["CustomerReceipt", "CollectionPlan"]) {
+    assert.match(phase2ReceiptMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase2ReceiptMigrationText, /"counterpartyLedgerEntryId" TEXT/, "Receipts and plans must optionally point to AR entries.");
+  assert.match(phase2ReceiptMigrationText, /"receiptType" TEXT NOT NULL DEFAULT 'receipt'/, "Receipts must distinguish normal receipts and prepayments.");
+  assert.match(phase2ReceiptMigrationText, /"bankAccountCode" TEXT NOT NULL/, "Receipts must capture the cash or bank account.");
+  assert.match(phase2ReceiptMigrationText, /"plannedReceiptDate" DATETIME NOT NULL/, "Collection plans must retain planned receipt dates.");
+  assert.match(phase2ReceiptMigrationText, /"plannedAmount" REAL NOT NULL DEFAULT 0/, "Collection plans must retain planned amounts.");
+  assert.match(phase2ReceiptMigrationText, /CREATE INDEX "CustomerReceipt_accountSetId_status_idx"/);
+  assert.match(phase2ReceiptMigrationText, /CREATE INDEX "CollectionPlan_accountSetId_status_idx"/);
 });

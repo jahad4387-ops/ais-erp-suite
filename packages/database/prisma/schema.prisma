@@ -46,6 +46,8 @@ model AccountSet {
   counterpartyLedgerEntries CounterpartyLedgerEntry[]
   paymentRequests    PaymentRequest[]
   supplierPayments   SupplierPayment[]
+  customerReceipts   CustomerReceipt[]
+  collectionPlans    CollectionPlan[]
 }
 
 model User {
@@ -484,6 +486,8 @@ model Partner {
   counterpartyLedgerEntries CounterpartyLedgerEntry[]
   paymentRequests   PaymentRequest[]  @relation("PaymentRequestSupplier")
   supplierPayments  SupplierPayment[] @relation("SupplierPaymentSupplier")
+  customerReceipts  CustomerReceipt[] @relation("CustomerReceiptCustomer")
+  collectionPlans   CollectionPlan[]  @relation("CollectionPlanCustomer")
 
   @@unique([accountSetId, code])
   @@index([accountSetId, partnerType])
@@ -795,6 +799,8 @@ model CounterpartyLedgerEntry {
   partner    Partner    @relation(fields: [partnerId], references: [id])
   paymentRequests  PaymentRequest[]
   supplierPayments SupplierPayment[]
+  customerReceipts CustomerReceipt[]
+  collectionPlan   CollectionPlan?
 
   @@unique([sourceType, sourceId])
   @@index([accountSetId, direction, status])
@@ -860,4 +866,55 @@ model SupplierPayment {
   @@index([accountSetId, status])
   @@index([paymentRequestId])
   @@index([supplierId])
+}
+
+model CustomerReceipt {
+  id                        String   @id @default(uuid())
+  accountSetId              String
+  counterpartyLedgerEntryId String?
+  customerId                String
+  receiptNo                 String
+  receiptDate               DateTime
+  receiptType               String   @default("receipt")
+  receivedAmount            Float    @default(0)
+  status                    String   @default("received")
+  receivedBy                String
+  receiptMethod             String?
+  bankAccountCode           String
+  glVoucherId               String?
+  evidenceRefsJson          String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  accountSet              AccountSet               @relation(fields: [accountSetId], references: [id])
+  counterpartyLedgerEntry CounterpartyLedgerEntry? @relation(fields: [counterpartyLedgerEntryId], references: [id])
+  customer                Partner                  @relation("CustomerReceiptCustomer", fields: [customerId], references: [id])
+
+  @@unique([accountSetId, receiptNo])
+  @@index([accountSetId, status])
+  @@index([customerId])
+  @@index([counterpartyLedgerEntryId])
+}
+
+model CollectionPlan {
+  id                        String   @id @default(uuid())
+  accountSetId              String
+  counterpartyLedgerEntryId String?
+  customerId                String
+  sourceNo                  String
+  plannedReceiptDate        DateTime
+  plannedAmount             Float    @default(0)
+  status                    String   @default("planned")
+  createdBy                 String
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  accountSet              AccountSet               @relation(fields: [accountSetId], references: [id])
+  counterpartyLedgerEntry CounterpartyLedgerEntry? @relation(fields: [counterpartyLedgerEntryId], references: [id])
+  customer                Partner                  @relation("CollectionPlanCustomer", fields: [customerId], references: [id])
+
+  @@unique([counterpartyLedgerEntryId])
+  @@index([accountSetId, status])
+  @@index([customerId])
+  @@index([plannedReceiptDate])
 }

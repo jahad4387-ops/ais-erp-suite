@@ -2142,6 +2142,116 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /customer-receipts:
+    get:
+      summary: List Phase 2 customer receipts and prepayments.
+      x-permission: customer_receipt.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [received, voided]
+        - name: customerId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Customer receipt list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CustomerReceipt"
+    post:
+      summary: Create a customer receipt or prepayment.
+      x-permission: customer_receipt.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerReceiptCreateRequest"
+      responses:
+        "201":
+          description: Customer receipt created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerReceipt"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /collection-plans:
+    get:
+      summary: List Phase 2 customer collection plans generated from AR entries.
+      x-permission: collection_plan.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [planned, overdue, collected]
+        - name: customerId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Collection plan list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CollectionPlan"
+
+  /credit-exposures:
+    get:
+      summary: List Phase 2 customer credit exposure from open AR entries.
+      x-permission: credit_exposure.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Credit exposure list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CreditExposure"
+
   /attachments/upload:
     post:
       summary: Upload an attachment and return its central status.
@@ -3867,6 +3977,126 @@ components:
           type: array
           items:
             type: string
+
+    CustomerReceiptCreateRequest:
+      type: object
+      required: [accountSetId, receiptDate, receiptType, receivedAmount, receivedBy, bankAccountCode]
+      properties:
+        accountSetId:
+          type: string
+        counterpartyLedgerEntryId:
+          type: string
+        customerId:
+          type: string
+        receiptNo:
+          type: string
+        receiptDate:
+          type: string
+          format: date
+        receiptType:
+          type: string
+          enum: [receipt, prepayment]
+        receivedAmount:
+          type: number
+        receivedBy:
+          type: string
+        receiptMethod:
+          type: string
+        bankAccountCode:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+
+    CustomerReceipt:
+      type: object
+      required: [id, accountSetId, customerId, receiptNo, receiptDate, receiptType, receivedAmount, status, receivedBy, bankAccountCode, evidenceRefs]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        counterpartyLedgerEntryId:
+          type: string
+        customerId:
+          type: string
+        customerName:
+          type: string
+        sourceNo:
+          type: string
+        receiptNo:
+          type: string
+        receiptDate:
+          type: string
+          format: date
+        receiptType:
+          type: string
+          enum: [receipt, prepayment]
+        receivedAmount:
+          type: number
+        status:
+          type: string
+          enum: [received, voided]
+        receivedBy:
+          type: string
+        receiptMethod:
+          type: string
+        bankAccountCode:
+          type: string
+        glVoucherId:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+
+    CollectionPlan:
+      type: object
+      required: [id, accountSetId, customerId, sourceNo, plannedReceiptDate, plannedAmount, status, createdBy]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        counterpartyLedgerEntryId:
+          type: string
+        customerId:
+          type: string
+        customerName:
+          type: string
+        sourceNo:
+          type: string
+        plannedReceiptDate:
+          type: string
+          format: date
+        plannedAmount:
+          type: number
+        status:
+          type: string
+          enum: [planned, overdue, collected]
+        createdBy:
+          type: string
+
+    CreditExposure:
+      type: object
+      required: [accountSetId, customerId, customerName, creditLimit, occupiedAmount, availableCredit, status]
+      properties:
+        accountSetId:
+          type: string
+        customerId:
+          type: string
+        customerName:
+          type: string
+        creditLimit:
+          type: number
+        occupiedAmount:
+          type: number
+        availableCredit:
+          type: number
+        status:
+          type: string
+          enum: [within_limit, over_limit]
 
     AccountingPeriod:
       type: object

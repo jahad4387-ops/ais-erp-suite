@@ -1182,7 +1182,10 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
         "counterparty_ledger.view",
         "payment_request.manage",
         "supplier_payment.manage",
-        "payment_block.manage"
+        "payment_block.manage",
+        "customer_receipt.manage",
+        "collection_plan.view",
+        "credit_exposure.view"
       ]
     },
     "phase2-invoice-role"
@@ -1216,7 +1219,7 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
     method: "POST",
     path: "/partners",
     headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-invoice-customer" },
-    body: { accountSetId: accountSet.body.id, partnerType: "customer", code: "CUS-INV", name: "Invoice Customer" }
+    body: { accountSetId: accountSet.body.id, partnerType: "customer", code: "CUS-INV", name: "Invoice Customer", creditLimit: 3000 }
   });
   const purchaseOrder = await api.handle({
     method: "POST",
@@ -1362,6 +1365,64 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
     path: `/counterparty-ledger?accountSetId=${accountSet.body.id}&direction=ar`,
     headers: { "Actor-Id": actor.body.id }
   });
+  const collectionPlans = await api.handle({
+    method: "GET",
+    path: `/collection-plans?accountSetId=${accountSet.body.id}&customerId=${customer.body.id}`,
+    headers: { "Actor-Id": actor.body.id }
+  });
+  const creditExposures = await api.handle({
+    method: "GET",
+    path: `/credit-exposures?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": actor.body.id }
+  });
+  const customerReceipt = await api.handle({
+    method: "POST",
+    path: "/customer-receipts",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-customer-receipt" },
+    body: {
+      accountSetId: accountSet.body.id,
+      counterpartyLedgerEntryId: receivableLedger.body[0].id,
+      receiptDate: "2026-04-22",
+      receiptType: "receipt",
+      receivedAmount: 1200,
+      receivedBy: actor.body.id,
+      receiptMethod: "bank_transfer",
+      bankAccountCode: "1002",
+      evidenceRefs: ["attachment:receipt-bank-slip"]
+    }
+  });
+  const prepaymentReceipt = await api.handle({
+    method: "POST",
+    path: "/customer-receipts",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-customer-prepayment" },
+    body: {
+      accountSetId: accountSet.body.id,
+      customerId: customer.body.id,
+      receiptDate: "2026-04-23",
+      receiptType: "prepayment",
+      receivedAmount: 300,
+      receivedBy: actor.body.id,
+      receiptMethod: "bank_transfer",
+      bankAccountCode: "1002"
+    }
+  });
+  const customerReceipts = await api.handle({
+    method: "GET",
+    path: `/customer-receipts?accountSetId=${accountSet.body.id}&customerId=${customer.body.id}`,
+    headers: { "Actor-Id": actor.body.id }
+  });
+  const creditBlockedSalesOrder = await api.handle({
+    method: "POST",
+    path: "/sales-orders",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-credit-blocked-sales-order" },
+    body: {
+      accountSetId: accountSet.body.id,
+      customerId: customer.body.id,
+      orderDate: "2026-04-24",
+      createdBy: actor.body.id,
+      lines: [{ itemCode: "SKU-CREDIT", itemName: "Credit Blocked SKU", quantity: 1, unitPrice: 1000, taxRate: 0 }]
+    }
+  });
   const paymentRequest = await api.handle({
     method: "POST",
     path: "/payment-requests",
@@ -1465,6 +1526,28 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
   assert.equal(receivableLedger.body[0].glAccountCode, "1122");
   assert.equal(receivableLedger.body[0].auxiliaryType, "customer");
   assert.equal(receivableLedger.body[0].auxiliaryPartnerId, customer.body.id);
+  assert.equal(collectionPlans.status, 200);
+  assert.deepEqual(collectionPlans.body.map((plan) => plan.sourceNo), [salesInvoice.body.invoiceNo]);
+  assert.equal(collectionPlans.body[0].plannedReceiptDate, "2026-04-21");
+  assert.equal(collectionPlans.body[0].plannedAmount, 2120);
+  assert.equal(creditExposures.status, 200);
+  assert.equal(creditExposures.body[0].customerId, customer.body.id);
+  assert.equal(creditExposures.body[0].creditLimit, 3000);
+  assert.equal(creditExposures.body[0].occupiedAmount, 2120);
+  assert.equal(creditExposures.body[0].availableCredit, 880);
+  assert.equal(customerReceipt.status, 201);
+  assert.equal(customerReceipt.body.receiptType, "receipt");
+  assert.equal(customerReceipt.body.sourceNo, salesInvoice.body.invoiceNo);
+  assert.equal(customerReceipt.body.receivedAmount, 1200);
+  assert.equal(prepaymentReceipt.status, 201);
+  assert.equal(prepaymentReceipt.body.receiptType, "prepayment");
+  assert.equal(prepaymentReceipt.body.counterpartyLedgerEntryId, null);
+  assert.deepEqual(customerReceipts.body.map((receipt) => receipt.receiptNo), [
+    customerReceipt.body.receiptNo,
+    prepaymentReceipt.body.receiptNo
+  ]);
+  assert.equal(creditBlockedSalesOrder.status, 409);
+  assert.equal(creditBlockedSalesOrder.body.code, "CREDIT_LIMIT_EXCEEDED");
   assert.equal(paymentRequest.status, 201);
   assert.equal(paymentRequest.body.status, "pending_approval");
   assert.equal(paymentRequest.body.supplierId, supplier.body.id);
@@ -1488,6 +1571,7 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
   assert.ok(api.state.auditLogs.some((log) => log.action === "sales_invoice.confirm" && log.objectId === salesInvoice.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "payment_request.approve" && log.objectId === paymentRequest.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "supplier_payment.create" && log.objectId === supplierPayment.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "customer_receipt.create" && log.objectId === customerReceipt.body.id));
 });
 
 test("API can persist account sets and scoped grants through platform store", async () => {

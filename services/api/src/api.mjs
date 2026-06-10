@@ -81,7 +81,10 @@ const DEFAULT_PERMISSION_CODES = [
   "counterparty_ledger.view",
   "payment_request.manage",
   "supplier_payment.manage",
-  "payment_block.manage"
+  "payment_block.manage",
+  "customer_receipt.manage",
+  "collection_plan.view",
+  "credit_exposure.view"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -585,6 +588,15 @@ function permissionFor(request) {
   if (segments[0] === "supplier-payments") {
     return "supplier_payment.manage";
   }
+  if (segments[0] === "customer-receipts") {
+    return "customer_receipt.manage";
+  }
+  if (segments[0] === "collection-plans") {
+    return "collection_plan.view";
+  }
+  if (segments[0] === "credit-exposures") {
+    return "credit_exposure.view";
+  }
   if (request.method === "POST" && request.path === "/attachments/upload") return "attachment.upload";
   if (request.method === "POST" && request.path === "/attachment-links") return "attachment.upload";
   if (request.method === "DELETE" && segments.length === 2 && segments[0] === "attachments") return "attachment.delete";
@@ -672,6 +684,8 @@ function createState(options = {}) {
     counterpartyLedgerEntries: new Map(),
     paymentRequests: new Map(),
     supplierPayments: new Map(),
+    customerReceipts: new Map(),
+    collectionPlans: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1330,6 +1344,90 @@ async function createSupplierPayment(state, payment) {
     : payment;
   state.supplierPayments.set(savedPayment.id, savedPayment);
   return savedPayment;
+}
+
+async function listCustomerReceipts(state, accountSetId, filters = {}) {
+  const persistedReceipts = state.config.platformStore?.listCustomerReceipts
+    ? await state.config.platformStore.listCustomerReceipts(accountSetId, filters)
+    : [];
+  const receiptsById = new Map(persistedReceipts.map((receipt) => [receipt.id, receipt]));
+  for (const receipt of state.customerReceipts.values()) {
+    if (accountSetId && receipt.accountSetId !== accountSetId) continue;
+    if (filters.status && receipt.status !== filters.status) continue;
+    if (filters.customerId && receipt.customerId !== filters.customerId) continue;
+    receiptsById.set(receipt.id, receipt);
+  }
+  return [...receiptsById.values()].sort((left, right) => left.receiptNo.localeCompare(right.receiptNo));
+}
+
+async function createCustomerReceipt(state, receipt) {
+  const savedReceipt = state.config.platformStore?.createCustomerReceipt
+    ? await state.config.platformStore.createCustomerReceipt(receipt)
+    : receipt;
+  state.customerReceipts.set(savedReceipt.id, savedReceipt);
+  return savedReceipt;
+}
+
+async function listCollectionPlans(state, accountSetId, filters = {}) {
+  const persistedPlans = state.config.platformStore?.listCollectionPlans
+    ? await state.config.platformStore.listCollectionPlans(accountSetId, filters)
+    : [];
+  const plansById = new Map(persistedPlans.map((plan) => [plan.id, plan]));
+  for (const plan of state.collectionPlans.values()) {
+    if (accountSetId && plan.accountSetId !== accountSetId) continue;
+    if (filters.status && plan.status !== filters.status) continue;
+    if (filters.customerId && plan.customerId !== filters.customerId) continue;
+    plansById.set(plan.id, plan);
+  }
+  return [...plansById.values()].sort(
+    (left, right) => String(left.plannedReceiptDate).localeCompare(String(right.plannedReceiptDate)) || left.sourceNo.localeCompare(right.sourceNo)
+  );
+}
+
+async function createCollectionPlan(state, plan) {
+  const savedPlan = state.config.platformStore?.createCollectionPlan
+    ? await state.config.platformStore.createCollectionPlan(plan)
+    : plan;
+  state.collectionPlans.set(savedPlan.id, savedPlan);
+  return savedPlan;
+}
+
+function collectionPlanFromReceivableLedgerEntry(entry) {
+  return {
+    id: `collection-plan:${entry.id}`,
+    accountSetId: entry.accountSetId,
+    counterpartyLedgerEntryId: entry.id,
+    customerId: entry.partnerId,
+    customerName: entry.partnerName ?? null,
+    sourceNo: entry.sourceNo,
+    plannedReceiptDate: entry.dueDate ?? entry.documentDate,
+    plannedAmount: Number(entry.remainingAmount ?? entry.originalAmount ?? 0),
+    status: "planned",
+    createdBy: entry.createdBy
+  };
+}
+
+async function listCreditExposures(state, accountSetId) {
+  const partners = await listPartners(state, accountSetId, "customer");
+  const arEntries = await listCounterpartyLedgerEntries(state, accountSetId, { direction: "ar", status: "open" });
+  return partners.map((partner) => {
+    const occupiedAmount = Number(
+      arEntries
+        .filter((entry) => entry.partnerId === partner.id)
+        .reduce((sum, entry) => sum + Number(entry.remainingAmount ?? 0), 0)
+        .toFixed(2)
+    );
+    const creditLimit = Number(partner.creditLimit ?? 0);
+    return {
+      accountSetId,
+      customerId: partner.id,
+      customerName: partner.name,
+      creditLimit,
+      occupiedAmount,
+      availableCredit: Number((creditLimit - occupiedAmount).toFixed(2)),
+      status: creditLimit > 0 && occupiedAmount > creditLimit ? "over_limit" : "within_limit"
+    };
+  });
 }
 
 function normalizeFulfillmentLines(order, lines = [], { sourceLineIdField, executedQuantityField }) {
@@ -2257,6 +2355,13 @@ async function route(request, state) {
       const lines = normalizeOrderLines(body.lines);
       const existingOrders = await listSalesOrders(state, body.accountSetId);
       const orderId = body.id ?? `sales-order:${randomUUID()}`;
+      const totalAmount = Number(lines.reduce((sum, line) => sum + line.totalAmount, 0).toFixed(2));
+      if (Number(customer.creditLimit ?? 0) > 0) {
+        const exposure = (await listCreditExposures(state, body.accountSetId)).find((item) => item.customerId === customer.id);
+        if (exposure && exposure.occupiedAmount + totalAmount > exposure.creditLimit) {
+          return errorResponse(409, "CREDIT_LIMIT_EXCEEDED", "Sales order exceeds customer available credit.");
+        }
+      }
       const order = {
         id: orderId,
         accountSetId: body.accountSetId,
@@ -2264,7 +2369,7 @@ async function route(request, state) {
         customerName: customer.name,
         orderNo: body.orderNo ?? nextBusinessOrderNo("SO", body.accountSetId, body.orderDate, existingOrders),
         orderDate: body.orderDate,
-        totalAmount: Number(lines.reduce((sum, line) => sum + line.totalAmount, 0).toFixed(2)),
+        totalAmount,
         status: "draft",
         currency: body.currency ?? "CNY",
         exchangeRate: body.exchangeRate ?? 1,
@@ -2598,7 +2703,8 @@ async function route(request, state) {
       };
       const savedInvoice = platformStore?.createSalesInvoice ? await platformStore.createSalesInvoice(invoice) : invoice;
       state.salesInvoices.set(savedInvoice.id, savedInvoice);
-      await createCounterpartyLedgerEntry(state, receivableLedgerEntryFromInvoice(savedInvoice));
+      const receivableEntry = await createCounterpartyLedgerEntry(state, receivableLedgerEntryFromInvoice(savedInvoice));
+      await createCollectionPlan(state, collectionPlanFromReceivableLedgerEntry(receivableEntry));
       const updatedOrder = applyOrderInvoicing(order, lines);
       const savedOrder = platformStore?.updateSalesOrderStatus ? await platformStore.updateSalesOrderStatus(updatedOrder) : updatedOrder;
       state.salesOrders.set(savedOrder.id, savedOrder);
@@ -2826,6 +2932,121 @@ async function route(request, state) {
       });
       return jsonResponse(201, savedPayment);
     }
+  }
+
+  if (segments.length === 1 && segments[0] === "customer-receipts") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(
+        200,
+        await listCustomerReceipts(state, accountSetId, {
+          status: query.get("status") ?? null,
+          customerId: query.get("customerId") ?? null
+        })
+      );
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const receiptType = body.receiptType ?? "receipt";
+      let entry = null;
+      let customer = null;
+      if (receiptType === "receipt") {
+        entry = await findCounterpartyLedgerEntryById(state, body.counterpartyLedgerEntryId);
+        if (!entry || entry.accountSetId !== body.accountSetId) {
+          return errorResponse(404, "COUNTERPARTY_LEDGER_ENTRY_NOT_FOUND", "Counterparty ledger entry was not found.");
+        }
+        if (entry.direction !== "ar") {
+          return errorResponse(409, "BUSINESS_RULE_FAILED", "Customer receipts can only be created from receivable entries.");
+        }
+        customer = await findPartnerByIdentifier(state, entry.partnerId);
+      } else if (receiptType === "prepayment") {
+        customer = await findPartnerByIdentifier(state, body.customerId);
+        if (!customer || customer.accountSetId !== body.accountSetId || !["customer", "both"].includes(customer.partnerType)) {
+          return errorResponse(404, "CUSTOMER_NOT_FOUND", "Customer was not found.");
+        }
+      } else {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", "receiptType must be receipt or prepayment.");
+      }
+      const receivedAmount = Number(body.receivedAmount);
+      if (!Number.isFinite(receivedAmount) || receivedAmount <= 0) {
+        return errorResponse(400, "BUSINESS_RULE_FAILED", "receivedAmount must be greater than 0.");
+      }
+      if (entry && receivedAmount > Number(entry.remainingAmount ?? 0)) {
+        return errorResponse(409, "BUSINESS_RULE_FAILED", "receivedAmount exceeds remaining receivable amount.");
+      }
+      const existingReceipts = await listCustomerReceipts(state, body.accountSetId);
+      const receiptDate = body.receiptDate ?? new Date().toISOString().slice(0, 10);
+      const receipt = {
+        id: body.id ?? `customer-receipt:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        counterpartyLedgerEntryId: entry?.id ?? null,
+        customerId: entry?.partnerId ?? customer.id,
+        customerName: entry?.partnerName ?? customer.name,
+        sourceNo: entry?.sourceNo ?? null,
+        receiptNo: body.receiptNo ?? nextFulfillmentNo("REC", body.accountSetId, receiptDate, existingReceipts, "receiptNo"),
+        receiptDate,
+        receiptType,
+        receivedAmount,
+        status: "received",
+        receivedBy: body.receivedBy ?? actorId,
+        receiptMethod: body.receiptMethod ?? "bank_transfer",
+        bankAccountCode: body.bankAccountCode ?? "1002",
+        glVoucherId: null,
+        evidenceRefs: Array.isArray(body.evidenceRefs) ? body.evidenceRefs : []
+      };
+      const savedReceipt = await createCustomerReceipt(state, receipt);
+      appendAuditLog(state, {
+        actorId: savedReceipt.receivedBy,
+        action: "customer_receipt.create",
+        objectType: "customer_receipt",
+        objectId: savedReceipt.id
+      });
+      return jsonResponse(201, savedReceipt);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "collection-plans" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    if (!accountSetId) {
+      throw new Error("accountSetId is required.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    return jsonResponse(
+      200,
+      await listCollectionPlans(state, accountSetId, {
+        status: query.get("status") ?? null,
+        customerId: query.get("customerId") ?? null
+      })
+    );
+  }
+
+  if (segments.length === 1 && segments[0] === "credit-exposures" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    if (!accountSetId) {
+      throw new Error("accountSetId is required.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    return jsonResponse(200, await listCreditExposures(state, accountSetId));
   }
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "periods" && segments[2] === "open") {

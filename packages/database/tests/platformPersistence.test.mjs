@@ -22,6 +22,8 @@ function createFakePrisma() {
   const counterpartyLedgerEntries = new Map();
   const paymentRequests = new Map();
   const supplierPayments = new Map();
+  const customerReceipts = new Map();
+  const collectionPlans = new Map();
   const periods = new Map();
   const chartOfAccounts = new Map();
   const auxiliaryTypes = new Map();
@@ -401,6 +403,46 @@ function createFakePrisma() {
         if (where?.status) rows = rows.filter((payment) => payment.status === where.status);
         if (where?.supplierId) rows = rows.filter((payment) => payment.supplierId === where.supplierId);
         return rows.map((payment) => (include?.supplier ? payment : { ...payment, supplier: undefined }));
+      }
+    },
+    customerReceipt: {
+      create: async ({ data, include }) => {
+        const receipt = {
+          ...data,
+          customer: partners.get(data.customerId),
+          counterpartyLedgerEntry: data.counterpartyLedgerEntryId
+            ? counterpartyLedgerEntries.get(data.counterpartyLedgerEntryId)
+            : null
+        };
+        customerReceipts.set(receipt.id, receipt);
+        return include?.customer ? receipt : { ...receipt, customer: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        let rows = [...customerReceipts.values()];
+        if (where?.accountSetId) rows = rows.filter((receipt) => receipt.accountSetId === where.accountSetId);
+        if (where?.status) rows = rows.filter((receipt) => receipt.status === where.status);
+        if (where?.customerId) rows = rows.filter((receipt) => receipt.customerId === where.customerId);
+        return rows.map((receipt) => (include?.customer ? receipt : { ...receipt, customer: undefined }));
+      }
+    },
+    collectionPlan: {
+      create: async ({ data, include }) => {
+        const plan = {
+          ...data,
+          customer: partners.get(data.customerId),
+          counterpartyLedgerEntry: data.counterpartyLedgerEntryId
+            ? counterpartyLedgerEntries.get(data.counterpartyLedgerEntryId)
+            : null
+        };
+        collectionPlans.set(plan.id, plan);
+        return include?.customer ? plan : { ...plan, customer: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        let rows = [...collectionPlans.values()];
+        if (where?.accountSetId) rows = rows.filter((plan) => plan.accountSetId === where.accountSetId);
+        if (where?.status) rows = rows.filter((plan) => plan.status === where.status);
+        if (where?.customerId) rows = rows.filter((plan) => plan.customerId === where.customerId);
+        return rows.map((plan) => (include?.customer ? plan : { ...plan, customer: undefined }));
       }
     },
     accountingPeriod: {
@@ -1248,8 +1290,53 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
     glVoucherId: null,
     evidenceRefs: ["attachment:bank-slip"]
   });
+  const collectionPlan = await store.createCollectionPlan({
+    id: "collection-plan:1",
+    accountSetId: accountSet.id,
+    counterpartyLedgerEntryId: receivableLedger[0].id,
+    customerId: customer.id,
+    sourceNo: receivableLedger[0].sourceNo,
+    plannedReceiptDate: "2026-03-21",
+    plannedAmount: 2120,
+    status: "planned",
+    createdBy: "ar"
+  });
+  const customerReceipt = await store.createCustomerReceipt({
+    id: "customer-receipt:1",
+    accountSetId: accountSet.id,
+    counterpartyLedgerEntryId: receivableLedger[0].id,
+    customerId: customer.id,
+    receiptNo: "REC-202603-001",
+    receiptDate: "2026-03-22",
+    receiptType: "receipt",
+    receivedAmount: 1200,
+    status: "received",
+    receivedBy: "cashier",
+    receiptMethod: "bank_transfer",
+    bankAccountCode: "1002",
+    glVoucherId: null,
+    evidenceRefs: ["attachment:receipt-slip"]
+  });
+  const prepaymentReceipt = await store.createCustomerReceipt({
+    id: "customer-receipt:prepayment",
+    accountSetId: accountSet.id,
+    counterpartyLedgerEntryId: null,
+    customerId: customer.id,
+    receiptNo: "REC-202603-002",
+    receiptDate: "2026-03-23",
+    receiptType: "prepayment",
+    receivedAmount: 300,
+    status: "received",
+    receivedBy: "cashier",
+    receiptMethod: "bank_transfer",
+    bankAccountCode: "1002",
+    glVoucherId: null,
+    evidenceRefs: []
+  });
   const paymentRequests = await store.listPaymentRequests(accountSet.id, { status: "approved" });
   const supplierPayments = await store.listSupplierPayments(accountSet.id, { supplierId: supplier.id });
+  const collectionPlans = await store.listCollectionPlans(accountSet.id, { customerId: customer.id });
+  const customerReceipts = await store.listCustomerReceipts(accountSet.id, { customerId: customer.id });
 
   assert.equal(purchaseInvoice.purchaseReceiptNo, "PR-202603-001");
   assert.equal(purchaseInvoice.payableAmount, 1160);
@@ -1280,6 +1367,16 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
   assert.equal(supplierPayment.paymentNo, "PAY-202603-001");
   assert.equal(supplierPayment.paidAmount, 600);
   assert.deepEqual(supplierPayments.map((row) => row.paymentNo), ["PAY-202603-001"]);
+  assert.equal(collectionPlan.sourceNo, "SI-202603-001");
+  assert.equal(collectionPlan.plannedAmount, 2120);
+  assert.equal(collectionPlan.plannedReceiptDate, "2026-03-21");
+  assert.equal(customerReceipt.sourceNo, "SI-202603-001");
+  assert.equal(customerReceipt.receiptType, "receipt");
+  assert.equal(customerReceipt.receivedAmount, 1200);
+  assert.equal(prepaymentReceipt.counterpartyLedgerEntryId, null);
+  assert.equal(prepaymentReceipt.receiptType, "prepayment");
+  assert.deepEqual(collectionPlans.map((row) => row.sourceNo), ["SI-202603-001"]);
+  assert.deepEqual(customerReceipts.map((row) => row.receiptNo), ["REC-202603-001", "REC-202603-002"]);
 });
 
 test("Prisma platform persistence stores accounting periods and lifecycle status", async () => {

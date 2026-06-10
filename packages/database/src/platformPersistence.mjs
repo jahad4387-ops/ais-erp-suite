@@ -334,6 +334,42 @@ function supplierPaymentToDto(payment) {
   };
 }
 
+function customerReceiptToDto(receipt) {
+  return {
+    id: receipt.id,
+    accountSetId: receipt.accountSetId,
+    counterpartyLedgerEntryId: receipt.counterpartyLedgerEntryId ?? null,
+    customerId: receipt.customerId,
+    customerName: receipt.customer?.name ?? null,
+    sourceNo: receipt.counterpartyLedgerEntry?.sourceNo ?? null,
+    receiptNo: receipt.receiptNo,
+    receiptDate: dateOnly(receipt.receiptDate),
+    receiptType: receipt.receiptType,
+    receivedAmount: receipt.receivedAmount,
+    status: receipt.status,
+    receivedBy: receipt.receivedBy,
+    receiptMethod: receipt.receiptMethod ?? null,
+    bankAccountCode: receipt.bankAccountCode,
+    glVoucherId: receipt.glVoucherId ?? null,
+    evidenceRefs: evidenceRefsFromJson(receipt.evidenceRefsJson)
+  };
+}
+
+function collectionPlanToDto(plan) {
+  return {
+    id: plan.id,
+    accountSetId: plan.accountSetId,
+    counterpartyLedgerEntryId: plan.counterpartyLedgerEntryId ?? null,
+    customerId: plan.customerId,
+    customerName: plan.customer?.name ?? null,
+    sourceNo: plan.sourceNo,
+    plannedReceiptDate: dateOnly(plan.plannedReceiptDate),
+    plannedAmount: plan.plannedAmount,
+    status: plan.status,
+    createdBy: plan.createdBy
+  };
+}
+
 function counterpartyLedgerWhere(accountSetId, filters = {}) {
   return {
     ...(accountSetId ? { accountSetId } : {}),
@@ -348,6 +384,14 @@ function paymentWorkflowWhere(accountSetId, filters = {}) {
     ...(accountSetId ? { accountSetId } : {}),
     ...(filters.status ? { status: filters.status } : {}),
     ...(filters.supplierId ? { supplierId: filters.supplierId } : {})
+  };
+}
+
+function receiptWorkflowWhere(accountSetId, filters = {}) {
+  return {
+    ...(accountSetId ? { accountSetId } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.customerId ? { customerId: filters.customerId } : {})
   };
 }
 
@@ -1325,6 +1369,65 @@ export function createPlatformPersistence(prisma) {
         include: { supplier: true, paymentRequest: true, counterpartyLedgerEntry: true }
       });
       return payments.map(supplierPaymentToDto).sort((left, right) => left.paymentNo.localeCompare(right.paymentNo));
+    },
+
+    async createCustomerReceipt(receipt) {
+      const saved = await prisma.customerReceipt.create({
+        data: {
+          id: receipt.id,
+          accountSetId: receipt.accountSetId,
+          counterpartyLedgerEntryId: receipt.counterpartyLedgerEntryId ?? null,
+          customerId: receipt.customerId,
+          receiptNo: receipt.receiptNo,
+          receiptDate: dateTime(receipt.receiptDate),
+          receiptType: receipt.receiptType ?? "receipt",
+          receivedAmount: receipt.receivedAmount,
+          status: receipt.status ?? "received",
+          receivedBy: receipt.receivedBy,
+          receiptMethod: receipt.receiptMethod ?? null,
+          bankAccountCode: receipt.bankAccountCode,
+          glVoucherId: receipt.glVoucherId ?? null,
+          evidenceRefsJson: JSON.stringify(receipt.evidenceRefs ?? [])
+        },
+        include: { customer: true, counterpartyLedgerEntry: true }
+      });
+      return customerReceiptToDto(saved);
+    },
+
+    async listCustomerReceipts(accountSetId, filters = {}) {
+      const receipts = await prisma.customerReceipt.findMany({
+        where: receiptWorkflowWhere(accountSetId, filters),
+        include: { customer: true, counterpartyLedgerEntry: true }
+      });
+      return receipts.map(customerReceiptToDto).sort((left, right) => left.receiptNo.localeCompare(right.receiptNo));
+    },
+
+    async createCollectionPlan(plan) {
+      const saved = await prisma.collectionPlan.create({
+        data: {
+          id: plan.id,
+          accountSetId: plan.accountSetId,
+          counterpartyLedgerEntryId: plan.counterpartyLedgerEntryId ?? null,
+          customerId: plan.customerId,
+          sourceNo: plan.sourceNo,
+          plannedReceiptDate: dateTime(plan.plannedReceiptDate),
+          plannedAmount: plan.plannedAmount,
+          status: plan.status ?? "planned",
+          createdBy: plan.createdBy
+        },
+        include: { customer: true, counterpartyLedgerEntry: true }
+      });
+      return collectionPlanToDto(saved);
+    },
+
+    async listCollectionPlans(accountSetId, filters = {}) {
+      const plans = await prisma.collectionPlan.findMany({
+        where: receiptWorkflowWhere(accountSetId, filters),
+        include: { customer: true, counterpartyLedgerEntry: true }
+      });
+      return plans
+        .map(collectionPlanToDto)
+        .sort((left, right) => left.plannedReceiptDate.localeCompare(right.plannedReceiptDate) || left.sourceNo.localeCompare(right.sourceNo));
     },
 
     async createAccount(account) {

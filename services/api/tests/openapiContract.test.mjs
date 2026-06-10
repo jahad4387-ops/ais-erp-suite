@@ -44,6 +44,7 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/payment-requests/{paymentRequestId}/approve:",
     "/supplier-payments:",
     "/counterparty-ledger/{counterpartyLedgerEntryId}/block-payment:",
+    "/customer-receipts:",
     "/accounts:",
     "/accounts/{accountId}:",
     "/accounts/import:",
@@ -103,6 +104,9 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "CounterpartyLedgerEntry:",
     "PaymentRequest:",
     "SupplierPayment:",
+    "CustomerReceipt:",
+    "CollectionPlan:",
+    "CreditExposure:",
     "AccountingPeriod:",
     "Account:",
     "AccountCodeRule:",
@@ -155,6 +159,21 @@ test("Phase 2 payment workflow endpoints are documented with freeze control", ()
   assert.match(paymentsBlock, /SupplierPayment/);
   assert.match(blockPaymentBlock, /x-permission: payment_block\.manage/);
   assert.match(blockPaymentBlock, /paymentBlockReason/);
+});
+
+test("Phase 2 receipt workflow endpoints are documented with collection and credit views", () => {
+  const receiptsBlock = blockAfter("  /customer-receipts:");
+  const plansBlock = blockAfter("  /collection-plans:");
+  const creditBlock = blockAfter("  /credit-exposures:");
+
+  assert.match(receiptsBlock, /x-permission: customer_receipt\.manage/);
+  assert.match(receiptsBlock, /CustomerReceipt/);
+  assert.match(contract, /receiptType:/);
+  assert.match(plansBlock, /x-permission: collection_plan\.view/);
+  assert.match(plansBlock, /CollectionPlan/);
+  assert.match(creditBlock, /x-permission: credit_exposure\.view/);
+  assert.match(creditBlock, /CreditExposure/);
+  assert.match(contract, /availableCredit:/, "Credit exposure schema must expose remaining credit.");
 });
 
 test("deployment configuration check endpoint is documented", () => {
