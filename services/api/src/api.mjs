@@ -71,7 +71,9 @@ const DEFAULT_PERMISSION_CODES = [
   "account_set_user.manage",
   "user.manage",
   "role.manage",
-  "partner.manage"
+  "partner.manage",
+  "purchase_order.manage",
+  "sales_order.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -547,6 +549,12 @@ function permissionFor(request) {
   if (segments[0] === "partners") {
     return "partner.manage";
   }
+  if (segments[0] === "purchase-orders") {
+    return "purchase_order.manage";
+  }
+  if (segments[0] === "sales-orders") {
+    return "sales_order.manage";
+  }
   if (request.method === "POST" && request.path === "/attachments/upload") return "attachment.upload";
   if (request.method === "POST" && request.path === "/attachment-links") return "attachment.upload";
   if (request.method === "DELETE" && segments.length === 2 && segments[0] === "attachments") return "attachment.delete";
@@ -625,6 +633,8 @@ function createState(options = {}) {
     bankStatements: new Map(),
     bankReconciliations: new Map(),
     partners: new Map(),
+    purchaseOrders: new Map(),
+    salesOrders: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -966,6 +976,109 @@ async function findPartnerByIdentifier(state, identifier) {
     return localPartner;
   }
   return state.config.platformStore?.findPartner ? state.config.platformStore.findPartner(identifier) : null;
+}
+
+function normalizeOrderLines(lines = []) {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    throw new Error("Order lines are required.");
+  }
+  return lines.map((line, index) => {
+    const quantity = Number(line.quantity);
+    const unitPrice = Number(line.unitPrice);
+    const taxRate = Number(line.taxRate ?? 0);
+    if (!line.itemCode || !line.itemName) {
+      throw new Error("Order line itemCode and itemName are required.");
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error("Order line quantity must be greater than 0.");
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      throw new Error("Order line unitPrice must be non-negative.");
+    }
+    if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) {
+      throw new Error("Order line taxRate must be a number from 0 to 1.");
+    }
+    const netAmount = quantity * unitPrice;
+    const taxAmount = Number(line.taxAmount ?? Number((netAmount * taxRate).toFixed(2)));
+    const totalAmount = Number(line.totalAmount ?? Number((netAmount + taxAmount).toFixed(2)));
+    return {
+      lineNo: line.lineNo ?? index + 1,
+      itemCode: String(line.itemCode),
+      itemName: String(line.itemName),
+      quantity,
+      unitPrice,
+      taxRate,
+      taxAmount,
+      totalAmount,
+      receivedQuantity: Number(line.receivedQuantity ?? 0),
+      shippedQuantity: Number(line.shippedQuantity ?? 0),
+      invoicedQuantity: Number(line.invoicedQuantity ?? 0)
+    };
+  });
+}
+
+function nextBusinessOrderNo(prefix, accountSetId, orderDate, existingOrders) {
+  const periodKey = String(orderDate ?? "").slice(0, 7).replace("-", "");
+  const base = `${prefix}-${periodKey || "000000"}-`;
+  const used = existingOrders
+    .filter((order) => order.accountSetId === accountSetId && typeof order.orderNo === "string" && order.orderNo.startsWith(base))
+    .map((order) => Number(order.orderNo.slice(base.length)))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  const next = used.length === 0 ? 1 : Math.max(...used) + 1;
+  return `${base}${String(next).padStart(3, "0")}`;
+}
+
+async function listPurchaseOrders(state, accountSetId, status = null) {
+  const persistedOrders = state.config.platformStore?.listPurchaseOrders
+    ? await state.config.platformStore.listPurchaseOrders(accountSetId, status)
+    : [];
+  const ordersById = new Map(persistedOrders.map((order) => [order.id, order]));
+  for (const order of state.purchaseOrders.values()) {
+    if (accountSetId && order.accountSetId !== accountSetId) continue;
+    if (status && order.status !== status) continue;
+    ordersById.set(order.id, order);
+  }
+  return [...ordersById.values()].sort((left, right) => left.orderNo.localeCompare(right.orderNo));
+}
+
+async function listSalesOrders(state, accountSetId, status = null) {
+  const persistedOrders = state.config.platformStore?.listSalesOrders
+    ? await state.config.platformStore.listSalesOrders(accountSetId, status)
+    : [];
+  const ordersById = new Map(persistedOrders.map((order) => [order.id, order]));
+  for (const order of state.salesOrders.values()) {
+    if (accountSetId && order.accountSetId !== accountSetId) continue;
+    if (status && order.status !== status) continue;
+    ordersById.set(order.id, order);
+  }
+  return [...ordersById.values()].sort((left, right) => left.orderNo.localeCompare(right.orderNo));
+}
+
+async function findPurchaseOrderByIdentifier(state, identifier) {
+  return (
+    [...state.purchaseOrders.values()].find((order) => order.id === identifier || order.orderNo === identifier) ??
+    (state.config.platformStore?.findPurchaseOrder ? await state.config.platformStore.findPurchaseOrder(identifier) : null)
+  );
+}
+
+async function findSalesOrderByIdentifier(state, identifier) {
+  return (
+    [...state.salesOrders.values()].find((order) => order.id === identifier || order.orderNo === identifier) ??
+    (state.config.platformStore?.findSalesOrder ? await state.config.platformStore.findSalesOrder(identifier) : null)
+  );
+}
+
+function nextOrderStatus(order, action, actorId) {
+  if (action === "submit" && order.status === "draft") {
+    return { ...order, status: "submitted", submittedBy: actorId };
+  }
+  if (action === "approve" && order.status === "submitted") {
+    return { ...order, status: "approved", approvedBy: actorId };
+  }
+  if (action === "close" && ["approved", "partially_executed", "executed"].includes(order.status)) {
+    return { ...order, status: "closed", closedBy: actorId };
+  }
+  throw new Error(`Cannot ${action} order in status ${order.status}.`);
 }
 
 async function enabledAccountSetLockError(state, accountSetId) {
@@ -1657,6 +1770,176 @@ async function route(request, state) {
         objectId: savedPartner.id
       });
       return jsonResponse(200, savedPartner);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "purchase-orders") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      const status = query.get("status");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, await listPurchaseOrders(state, accountSetId, status));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const supplier = await findPartnerByIdentifier(state, body.supplierId);
+      if (!supplier || supplier.accountSetId !== body.accountSetId || !["supplier", "both"].includes(supplier.partnerType)) {
+        throw new Error("Purchase order supplier must be an enabled supplier partner in the same account set.");
+      }
+      if (supplier.isEnabled === false) {
+        throw new Error("Purchase order supplier must be enabled.");
+      }
+      const lines = normalizeOrderLines(body.lines);
+      const existingOrders = await listPurchaseOrders(state, body.accountSetId);
+      const order = {
+        id: body.id ?? `purchase-order:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        orderNo: body.orderNo ?? nextBusinessOrderNo("PO", body.accountSetId, body.orderDate, existingOrders),
+        orderDate: body.orderDate,
+        totalAmount: Number(lines.reduce((sum, line) => sum + line.totalAmount, 0).toFixed(2)),
+        status: "draft",
+        currency: body.currency ?? "CNY",
+        exchangeRate: body.exchangeRate ?? 1,
+        createdBy: body.createdBy ?? actorId,
+        lines
+      };
+      const savedOrder = platformStore?.createPurchaseOrder ? await platformStore.createPurchaseOrder(order) : order;
+      state.purchaseOrders.set(savedOrder.id, savedOrder);
+      appendAuditLog(state, {
+        actorId: order.createdBy,
+        action: "purchase_order.create",
+        objectType: "purchase_order",
+        objectId: savedOrder.id
+      });
+      return jsonResponse(201, savedOrder);
+    }
+  }
+
+  if (segments.length >= 2 && segments[0] === "purchase-orders") {
+    const order = await findPurchaseOrderByIdentifier(state, segments[1]);
+    if (!order) {
+      return errorResponse(404, "PURCHASE_ORDER_NOT_FOUND", "Purchase order was not found.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, order.accountSetId))) {
+      return accountSetAccessError(state, actorId, order.accountSetId);
+    }
+    if (request.method === "GET" && segments.length === 2) {
+      return jsonResponse(200, order);
+    }
+    if (request.method === "POST" && segments.length === 3 && ["submit", "approve", "close"].includes(segments[2])) {
+      const action = segments[2];
+      const workflowActorId =
+        action === "submit" ? body.submittedBy ?? actorId : action === "approve" ? body.approvedBy ?? actorId : body.closedBy ?? actorId;
+      const nextOrder = nextOrderStatus(order, action, workflowActorId);
+      const savedOrder = platformStore?.updatePurchaseOrderStatus
+        ? await platformStore.updatePurchaseOrderStatus(nextOrder)
+        : nextOrder;
+      state.purchaseOrders.set(savedOrder.id, savedOrder);
+      appendAuditLog(state, {
+        actorId: workflowActorId,
+        action: `purchase_order.${action}`,
+        objectType: "purchase_order",
+        objectId: savedOrder.id
+      });
+      return jsonResponse(200, savedOrder);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "sales-orders") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      const status = query.get("status");
+      if (!accountSetId) {
+        throw new Error("accountSetId is required.");
+      }
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, await listSalesOrders(state, accountSetId, status));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const customer = await findPartnerByIdentifier(state, body.customerId);
+      if (!customer || customer.accountSetId !== body.accountSetId || !["customer", "both"].includes(customer.partnerType)) {
+        throw new Error("Sales order customer must be an enabled customer partner in the same account set.");
+      }
+      if (customer.isEnabled === false) {
+        throw new Error("Sales order customer must be enabled.");
+      }
+      const lines = normalizeOrderLines(body.lines);
+      const existingOrders = await listSalesOrders(state, body.accountSetId);
+      const order = {
+        id: body.id ?? `sales-order:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        customerId: customer.id,
+        customerName: customer.name,
+        orderNo: body.orderNo ?? nextBusinessOrderNo("SO", body.accountSetId, body.orderDate, existingOrders),
+        orderDate: body.orderDate,
+        totalAmount: Number(lines.reduce((sum, line) => sum + line.totalAmount, 0).toFixed(2)),
+        status: "draft",
+        currency: body.currency ?? "CNY",
+        exchangeRate: body.exchangeRate ?? 1,
+        createdBy: body.createdBy ?? actorId,
+        lines
+      };
+      const savedOrder = platformStore?.createSalesOrder ? await platformStore.createSalesOrder(order) : order;
+      state.salesOrders.set(savedOrder.id, savedOrder);
+      appendAuditLog(state, {
+        actorId: order.createdBy,
+        action: "sales_order.create",
+        objectType: "sales_order",
+        objectId: savedOrder.id
+      });
+      return jsonResponse(201, savedOrder);
+    }
+  }
+
+  if (segments.length >= 2 && segments[0] === "sales-orders") {
+    const order = await findSalesOrderByIdentifier(state, segments[1]);
+    if (!order) {
+      return errorResponse(404, "SALES_ORDER_NOT_FOUND", "Sales order was not found.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, order.accountSetId))) {
+      return accountSetAccessError(state, actorId, order.accountSetId);
+    }
+    if (request.method === "GET" && segments.length === 2) {
+      return jsonResponse(200, order);
+    }
+    if (request.method === "POST" && segments.length === 3 && ["submit", "approve", "close"].includes(segments[2])) {
+      const action = segments[2];
+      const workflowActorId =
+        action === "submit" ? body.submittedBy ?? actorId : action === "approve" ? body.approvedBy ?? actorId : body.closedBy ?? actorId;
+      const nextOrder = nextOrderStatus(order, action, workflowActorId);
+      const savedOrder = platformStore?.updateSalesOrderStatus ? await platformStore.updateSalesOrderStatus(nextOrder) : nextOrder;
+      state.salesOrders.set(savedOrder.id, savedOrder);
+      appendAuditLog(state, {
+        actorId: workflowActorId,
+        action: `sales_order.${action}`,
+        objectType: "sales_order",
+        objectId: savedOrder.id
+      });
+      return jsonResponse(200, savedOrder);
     }
   }
 

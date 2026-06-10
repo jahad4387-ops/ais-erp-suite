@@ -10,6 +10,10 @@ const phase2PartnerMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610090000_phase2_partner_master_data/migration.sql", import.meta.url)
 );
 const phase2PartnerMigrationText = phase2PartnerMigrationSql.toString("utf8");
+const phase2OrderMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610100000_phase2_order_workflow/migration.sql", import.meta.url)
+);
+const phase2OrderMigrationText = phase2OrderMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -63,5 +67,23 @@ test("Phase 2 partner migration creates account-set scoped partner master data",
     phase2PartnerMigrationText,
     /CREATE UNIQUE INDEX "Partner_accountSetId_code_key"/,
     "Partner code must be unique inside an account set."
+  );
+});
+
+test("Phase 2 order migration creates purchase and sales order workflows", () => {
+  for (const table of ["PurchaseOrder", "PurchaseOrderLine", "SalesOrder", "SalesOrderLine"]) {
+    assert.match(phase2OrderMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase2OrderMigrationText, /"status" TEXT NOT NULL DEFAULT 'draft'/, "Orders must persist status.");
+  assert.match(phase2OrderMigrationText, /"totalAmount" REAL NOT NULL DEFAULT 0/, "Orders must persist totals.");
+  assert.match(
+    phase2OrderMigrationText,
+    /CREATE UNIQUE INDEX "PurchaseOrder_accountSetId_orderNo_key"/,
+    "Purchase order number must be unique inside an account set."
+  );
+  assert.match(
+    phase2OrderMigrationText,
+    /CREATE UNIQUE INDEX "SalesOrder_accountSetId_orderNo_key"/,
+    "Sales order number must be unique inside an account set."
   );
 });

@@ -91,6 +91,9 @@ export const permissionText: Record<string, string> = {
   'bank_reconciliation.match': '银行对账匹配',
   'ai.generate_draft': '生成智能草稿',
   'audit_log.view': '查看操作日志',
+  'partner.manage': '管理往来单位',
+  'purchase_order.manage': '管理采购订单',
+  'sales_order.manage': '管理销售订单',
   'auxiliary.manage': '管理辅助核算',
   'opening_balance.manage': '管理期初余额',
   'opening_balance.view': '查看期初余额',
@@ -117,6 +120,14 @@ export const actionText: Record<string, string> = {
   'ai.convert_to_voucher': '智能草稿转正式草稿',
   'bank_statement.import': '导入银行流水',
   'posting_batch.post': '批量记账',
+  'partner.create': '创建往来单位',
+  'partner.update': '更新往来单位',
+  'purchase_order.create': '创建采购订单',
+  'purchase_order.submit': '提交采购订单',
+  'purchase_order.approve': '审核采购订单',
+  'sales_order.create': '创建销售订单',
+  'sales_order.submit': '提交销售订单',
+  'sales_order.approve': '审核销售订单',
 };
 
 export const objectTypeText: Record<string, string> = {
@@ -133,6 +144,9 @@ export const objectTypeText: Record<string, string> = {
   opening_balance: '期初余额',
   auxiliary_type: '辅助类型',
   auxiliary_item: '辅助项目',
+  partner: '往来单位',
+  purchase_order: '采购订单',
+  sales_order: '销售订单',
 };
 
 export const actorText: Record<string, string> = {

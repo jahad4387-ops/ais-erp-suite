@@ -74,6 +74,62 @@ function partnerToDto(partner) {
   };
 }
 
+function orderLineToDto(line) {
+  return {
+    lineNo: line.lineNo,
+    itemCode: line.itemCode,
+    itemName: line.itemName,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    taxRate: line.taxRate,
+    taxAmount: line.taxAmount,
+    totalAmount: line.totalAmount,
+    receivedQuantity: line.receivedQuantity ?? undefined,
+    shippedQuantity: line.shippedQuantity ?? undefined,
+    invoicedQuantity: line.invoicedQuantity
+  };
+}
+
+function purchaseOrderToDto(order) {
+  return {
+    id: order.id,
+    accountSetId: order.accountSetId,
+    supplierId: order.supplierId,
+    supplierName: order.supplier?.name ?? null,
+    orderNo: order.orderNo,
+    orderDate: dateOnly(order.orderDate),
+    totalAmount: order.totalAmount,
+    status: order.status,
+    currency: order.currency,
+    exchangeRate: order.exchangeRate,
+    createdBy: order.createdBy,
+    submittedBy: order.submittedBy ?? null,
+    approvedBy: order.approvedBy ?? null,
+    closedBy: order.closedBy ?? null,
+    lines: (order.lines ?? []).map(orderLineToDto).sort((left, right) => left.lineNo - right.lineNo)
+  };
+}
+
+function salesOrderToDto(order) {
+  return {
+    id: order.id,
+    accountSetId: order.accountSetId,
+    customerId: order.customerId,
+    customerName: order.customer?.name ?? null,
+    orderNo: order.orderNo,
+    orderDate: dateOnly(order.orderDate),
+    totalAmount: order.totalAmount,
+    status: order.status,
+    currency: order.currency,
+    exchangeRate: order.exchangeRate,
+    createdBy: order.createdBy,
+    submittedBy: order.submittedBy ?? null,
+    approvedBy: order.approvedBy ?? null,
+    closedBy: order.closedBy ?? null,
+    lines: (order.lines ?? []).map(orderLineToDto).sort((left, right) => left.lineNo - right.lineNo)
+  };
+}
+
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
@@ -595,6 +651,140 @@ export function createPlatformPersistence(prisma) {
         }
       });
       return partnerToDto(saved);
+    },
+
+    async createPurchaseOrder(order) {
+      const saved = await prisma.purchaseOrder.create({
+        data: {
+          id: order.id,
+          accountSetId: order.accountSetId,
+          supplierId: order.supplierId,
+          orderNo: order.orderNo,
+          orderDate: dateTime(order.orderDate),
+          totalAmount: order.totalAmount,
+          status: order.status,
+          currency: order.currency ?? "CNY",
+          exchangeRate: order.exchangeRate ?? 1,
+          createdBy: order.createdBy,
+          lines: {
+            create: order.lines.map((line) => ({
+              id: `purchase-order-line:${order.id}:${line.lineNo}`,
+              lineNo: line.lineNo,
+              itemCode: line.itemCode,
+              itemName: line.itemName,
+              quantity: line.quantity,
+              unitPrice: line.unitPrice,
+              taxRate: line.taxRate,
+              taxAmount: line.taxAmount,
+              totalAmount: line.totalAmount,
+              receivedQuantity: line.receivedQuantity ?? 0,
+              invoicedQuantity: line.invoicedQuantity ?? 0
+            }))
+          }
+        },
+        include: { supplier: true, lines: true }
+      });
+      return purchaseOrderToDto(saved);
+    },
+
+    async listPurchaseOrders(accountSetId, status = null) {
+      const orders = await prisma.purchaseOrder.findMany({
+        where: accountSetId ? { accountSetId } : undefined,
+        include: { supplier: true, lines: true }
+      });
+      return orders
+        .map(purchaseOrderToDto)
+        .filter((order) => !status || order.status === status)
+        .sort((left, right) => left.orderNo.localeCompare(right.orderNo));
+    },
+
+    async findPurchaseOrder(identifier) {
+      const order = await prisma.purchaseOrder.findFirst({
+        where: { OR: [{ id: identifier }, { orderNo: identifier }] },
+        include: { supplier: true, lines: true }
+      });
+      return order ? purchaseOrderToDto(order) : null;
+    },
+
+    async updatePurchaseOrderStatus(order) {
+      const saved = await prisma.purchaseOrder.update({
+        where: { id: order.id },
+        data: {
+          status: order.status,
+          submittedBy: order.submittedBy ?? null,
+          approvedBy: order.approvedBy ?? null,
+          closedBy: order.closedBy ?? null
+        },
+        include: { supplier: true, lines: true }
+      });
+      return purchaseOrderToDto(saved);
+    },
+
+    async createSalesOrder(order) {
+      const saved = await prisma.salesOrder.create({
+        data: {
+          id: order.id,
+          accountSetId: order.accountSetId,
+          customerId: order.customerId,
+          orderNo: order.orderNo,
+          orderDate: dateTime(order.orderDate),
+          totalAmount: order.totalAmount,
+          status: order.status,
+          currency: order.currency ?? "CNY",
+          exchangeRate: order.exchangeRate ?? 1,
+          createdBy: order.createdBy,
+          lines: {
+            create: order.lines.map((line) => ({
+              id: `sales-order-line:${order.id}:${line.lineNo}`,
+              lineNo: line.lineNo,
+              itemCode: line.itemCode,
+              itemName: line.itemName,
+              quantity: line.quantity,
+              unitPrice: line.unitPrice,
+              taxRate: line.taxRate,
+              taxAmount: line.taxAmount,
+              totalAmount: line.totalAmount,
+              shippedQuantity: line.shippedQuantity ?? 0,
+              invoicedQuantity: line.invoicedQuantity ?? 0
+            }))
+          }
+        },
+        include: { customer: true, lines: true }
+      });
+      return salesOrderToDto(saved);
+    },
+
+    async listSalesOrders(accountSetId, status = null) {
+      const orders = await prisma.salesOrder.findMany({
+        where: accountSetId ? { accountSetId } : undefined,
+        include: { customer: true, lines: true }
+      });
+      return orders
+        .map(salesOrderToDto)
+        .filter((order) => !status || order.status === status)
+        .sort((left, right) => left.orderNo.localeCompare(right.orderNo));
+    },
+
+    async findSalesOrder(identifier) {
+      const order = await prisma.salesOrder.findFirst({
+        where: { OR: [{ id: identifier }, { orderNo: identifier }] },
+        include: { customer: true, lines: true }
+      });
+      return order ? salesOrderToDto(order) : null;
+    },
+
+    async updateSalesOrderStatus(order) {
+      const saved = await prisma.salesOrder.update({
+        where: { id: order.id },
+        data: {
+          status: order.status,
+          submittedBy: order.submittedBy ?? null,
+          approvedBy: order.approvedBy ?? null,
+          closedBy: order.closedBy ?? null
+        },
+        include: { customer: true, lines: true }
+      });
+      return salesOrderToDto(saved);
     },
 
     async createAccount(account) {

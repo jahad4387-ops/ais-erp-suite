@@ -37,6 +37,8 @@ model AccountSet {
   bankRules          BankReconciliationRule[]
   reconciliations    BankReconciliation[]
   partners           Partner[]
+  purchaseOrders     PurchaseOrder[]
+  salesOrders        SalesOrder[]
 }
 
 model User {
@@ -466,7 +468,99 @@ model Partner {
   updatedAt        DateTime @updatedAt
 
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  purchaseOrders PurchaseOrder[] @relation("PurchaseOrderSupplier")
+  salesOrders    SalesOrder[]    @relation("SalesOrderCustomer")
 
   @@unique([accountSetId, code])
   @@index([accountSetId, partnerType])
+}
+
+model PurchaseOrder {
+  id           String   @id @default(uuid())
+  accountSetId String
+  supplierId   String
+  orderNo      String
+  orderDate    DateTime
+  totalAmount  Float    @default(0)
+  status       String   @default("draft")
+  currency     String   @default("CNY")
+  exchangeRate Float    @default(1)
+  createdBy    String
+  submittedBy  String?
+  approvedBy   String?
+  closedBy     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  supplier   Partner    @relation("PurchaseOrderSupplier", fields: [supplierId], references: [id])
+  lines      PurchaseOrderLine[]
+
+  @@unique([accountSetId, orderNo])
+  @@index([accountSetId, status])
+  @@index([supplierId])
+}
+
+model PurchaseOrderLine {
+  id                String @id @default(uuid())
+  purchaseOrderId   String
+  lineNo            Int
+  itemCode          String
+  itemName          String
+  quantity          Float
+  unitPrice         Float
+  taxRate           Float  @default(0)
+  taxAmount         Float  @default(0)
+  totalAmount       Float  @default(0)
+  receivedQuantity  Float  @default(0)
+  invoicedQuantity  Float  @default(0)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+
+  @@unique([purchaseOrderId, lineNo])
+}
+
+model SalesOrder {
+  id           String   @id @default(uuid())
+  accountSetId String
+  customerId   String
+  orderNo      String
+  orderDate    DateTime
+  totalAmount  Float    @default(0)
+  status       String   @default("draft")
+  currency     String   @default("CNY")
+  exchangeRate Float    @default(1)
+  createdBy    String
+  submittedBy  String?
+  approvedBy   String?
+  closedBy     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  customer   Partner    @relation("SalesOrderCustomer", fields: [customerId], references: [id])
+  lines      SalesOrderLine[]
+
+  @@unique([accountSetId, orderNo])
+  @@index([accountSetId, status])
+  @@index([customerId])
+}
+
+model SalesOrderLine {
+  id               String @id @default(uuid())
+  salesOrderId     String
+  lineNo           Int
+  itemCode         String
+  itemName         String
+  quantity         Float
+  unitPrice        Float
+  taxRate          Float  @default(0)
+  taxAmount        Float  @default(0)
+  totalAmount      Float  @default(0)
+  shippedQuantity  Float  @default(0)
+  invoicedQuantity Float  @default(0)
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id])
+
+  @@unique([salesOrderId, lineNo])
 }

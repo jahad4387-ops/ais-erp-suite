@@ -752,6 +752,183 @@ test("Phase 2 partners create, filter, update, and enforce account-set isolation
   );
 });
 
+test("Phase 2 purchase and sales orders use partner master data and status workflow", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P2-ORD",
+      name: "Phase 2 Order Set",
+      companyName: "Phase 2 Order Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase2-order-account-set"
+  );
+  const role = await request(
+    api,
+    "POST",
+    "/roles",
+    {
+      name: "订单维护员",
+      permissionCodes: ["account_set.view", "partner.manage", "purchase_order.manage", "sales_order.manage"]
+    },
+    "phase2-order-role"
+  );
+  const actor = await request(
+    api,
+    "POST",
+    "/users",
+    {
+      username: "order-actor",
+      password: "order-password",
+      name: "Order Actor",
+      roleId: role.body.id
+    },
+    "phase2-order-actor"
+  );
+  await request(
+    api,
+    "POST",
+    `/account-sets/${accountSet.body.id}/users`,
+    { actorId: actor.body.id, grantedBy: "system" },
+    "phase2-order-grant"
+  );
+  const supplier = await api.handle({
+    method: "POST",
+    path: "/partners",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-order-supplier" },
+    body: {
+      accountSetId: accountSet.body.id,
+      partnerType: "supplier",
+      code: "SUP-001",
+      name: "Order Supplier",
+      paymentTerms: "NET30",
+      settlementMethod: "bank_transfer"
+    }
+  });
+  const customer = await api.handle({
+    method: "POST",
+    path: "/partners",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-order-customer" },
+    body: {
+      accountSetId: accountSet.body.id,
+      partnerType: "customer",
+      code: "CUS-001",
+      name: "Order Customer",
+      paymentTerms: "NET15",
+      settlementMethod: "bank_transfer"
+    }
+  });
+
+  const purchaseOrder = await api.handle({
+    method: "POST",
+    path: "/purchase-orders",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-purchase-order" },
+    body: {
+      accountSetId: accountSet.body.id,
+      supplierId: supplier.body.id,
+      orderDate: "2026-01-12",
+      currency: "CNY",
+      exchangeRate: 1,
+      createdBy: actor.body.id,
+      lines: [
+        {
+          itemCode: "MAT-001",
+          itemName: "办公耗材",
+          quantity: 10,
+          unitPrice: 100,
+          taxRate: 0.13
+        }
+      ]
+    }
+  });
+  const invalidPurchaseOrder = await api.handle({
+    method: "POST",
+    path: "/purchase-orders",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-purchase-order-invalid" },
+    body: {
+      accountSetId: accountSet.body.id,
+      supplierId: customer.body.id,
+      orderDate: "2026-01-12",
+      lines: [{ itemCode: "MAT-002", itemName: "错误供应商", quantity: 1, unitPrice: 1 }]
+    }
+  });
+  const submittedPurchase = await api.handle({
+    method: "POST",
+    path: `/purchase-orders/${purchaseOrder.body.id}/submit`,
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-purchase-submit" },
+    body: { submittedBy: actor.body.id }
+  });
+  const approvedPurchase = await api.handle({
+    method: "POST",
+    path: `/purchase-orders/${purchaseOrder.body.id}/approve`,
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-purchase-approve" },
+    body: { approvedBy: actor.body.id }
+  });
+  const purchaseOrders = await api.handle({
+    method: "GET",
+    path: `/purchase-orders?accountSetId=${accountSet.body.id}&status=approved`,
+    headers: { "Actor-Id": actor.body.id }
+  });
+
+  const salesOrder = await api.handle({
+    method: "POST",
+    path: "/sales-orders",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-sales-order" },
+    body: {
+      accountSetId: accountSet.body.id,
+      customerId: customer.body.id,
+      orderDate: "2026-01-13",
+      currency: "CNY",
+      exchangeRate: 1,
+      createdBy: actor.body.id,
+      lines: [
+        {
+          itemCode: "SKU-001",
+          itemName: "软件服务",
+          quantity: 2,
+          unitPrice: 3000,
+          taxRate: 0.06
+        }
+      ]
+    }
+  });
+  const invalidSalesOrder = await api.handle({
+    method: "POST",
+    path: "/sales-orders",
+    headers: { "Actor-Id": actor.body.id, "Idempotency-Key": "phase2-sales-order-invalid" },
+    body: {
+      accountSetId: accountSet.body.id,
+      customerId: supplier.body.id,
+      orderDate: "2026-01-13",
+      lines: [{ itemCode: "SKU-002", itemName: "错误客户", quantity: 1, unitPrice: 1 }]
+    }
+  });
+
+  assert.equal(purchaseOrder.status, 201);
+  assert.equal(purchaseOrder.body.status, "draft");
+  assert.equal(purchaseOrder.body.totalAmount, 1130);
+  assert.equal(invalidPurchaseOrder.status, 400);
+  assert.equal(invalidPurchaseOrder.body.code, "BUSINESS_RULE_FAILED");
+  assert.equal(submittedPurchase.body.status, "submitted");
+  assert.equal(approvedPurchase.body.status, "approved");
+  assert.deepEqual(purchaseOrders.body.map((order) => order.orderNo), [purchaseOrder.body.orderNo]);
+  assert.equal(salesOrder.status, 201);
+  assert.equal(salesOrder.body.status, "draft");
+  assert.equal(salesOrder.body.totalAmount, 6360);
+  assert.equal(invalidSalesOrder.status, 400);
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "purchase_order.approve" && log.objectId === purchaseOrder.body.id
+    )
+  );
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

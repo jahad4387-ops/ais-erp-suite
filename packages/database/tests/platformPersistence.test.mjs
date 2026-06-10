@@ -13,6 +13,8 @@ function createFakePrisma() {
   const accountSets = new Map();
   const accountSetUsers = new Map();
   const partners = new Map();
+  const purchaseOrders = new Map();
+  const salesOrders = new Map();
   const periods = new Map();
   const chartOfAccounts = new Map();
   const auxiliaryTypes = new Map();
@@ -184,6 +186,60 @@ function createFakePrisma() {
         const partner = { ...partners.get(where.id), ...data };
         partners.set(where.id, partner);
         return partner;
+      }
+    },
+    purchaseOrder: {
+      create: async ({ data, include }) => {
+        const order = {
+          ...data,
+          supplier: partners.get(data.supplierId),
+          lines: data.lines.create.map((line) => ({ ...line }))
+        };
+        purchaseOrders.set(order.id, order);
+        return include?.lines ? order : { ...order, lines: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        const rows = [...purchaseOrders.values()].filter((order) => !where?.accountSetId || order.accountSetId === where.accountSetId);
+        return rows.map((order) => (include?.lines ? order : { ...order, lines: undefined }));
+      },
+      findFirst: async ({ where, include }) => {
+        const order = [...purchaseOrders.values()].find((item) =>
+          where.OR.some((condition) => item.id === condition.id || item.orderNo === condition.orderNo)
+        );
+        if (!order) return null;
+        return include?.lines ? order : { ...order, lines: undefined };
+      },
+      update: async ({ where, data, include }) => {
+        const order = { ...purchaseOrders.get(where.id), ...data };
+        purchaseOrders.set(where.id, order);
+        return include?.lines ? order : { ...order, lines: undefined };
+      }
+    },
+    salesOrder: {
+      create: async ({ data, include }) => {
+        const order = {
+          ...data,
+          customer: partners.get(data.customerId),
+          lines: data.lines.create.map((line) => ({ ...line }))
+        };
+        salesOrders.set(order.id, order);
+        return include?.lines ? order : { ...order, lines: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        const rows = [...salesOrders.values()].filter((order) => !where?.accountSetId || order.accountSetId === where.accountSetId);
+        return rows.map((order) => (include?.lines ? order : { ...order, lines: undefined }));
+      },
+      findFirst: async ({ where, include }) => {
+        const order = [...salesOrders.values()].find((item) =>
+          where.OR.some((condition) => item.id === condition.id || item.orderNo === condition.orderNo)
+        );
+        if (!order) return null;
+        return include?.lines ? order : { ...order, lines: undefined };
+      },
+      update: async ({ where, data, include }) => {
+        const order = { ...salesOrders.get(where.id), ...data };
+        salesOrders.set(where.id, order);
+        return include?.lines ? order : { ...order, lines: undefined };
       }
     },
     accountingPeriod: {
@@ -664,6 +720,74 @@ test("Prisma platform persistence stores Phase 2 partners by account set", async
   assert.equal(updated.paymentTerms, "NET45");
   assert.equal(updated.isEnabled, false);
   assert.deepEqual(suppliers.map((partner) => partner.code), ["S001"]);
+});
+
+test("Prisma platform persistence stores Phase 2 purchase and sales orders", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  const accountSet = await store.createAccountSet({
+    id: "account-set:phase2-orders",
+    code: "P2O",
+    name: "Phase 2 Orders",
+    companyName: "Phase 2 Order Co.",
+    baseCurrency: "CNY",
+    accountingStandard: "Small Business Accounting Standards",
+    startYear: 2026,
+    startPeriod: 1,
+    status: "draft",
+    createdBy: "system"
+  });
+  const supplier = await store.createPartner({
+    id: "partner:supplier-order",
+    accountSetId: accountSet.id,
+    partnerType: "supplier",
+    code: "SUP-ORD",
+    name: "Order Supplier",
+    isEnabled: true
+  });
+  const customer = await store.createPartner({
+    id: "partner:customer-order",
+    accountSetId: accountSet.id,
+    partnerType: "customer",
+    code: "CUS-ORD",
+    name: "Order Customer",
+    isEnabled: true
+  });
+
+  const purchaseOrder = await store.createPurchaseOrder({
+    id: "purchase-order:1",
+    accountSetId: accountSet.id,
+    supplierId: supplier.id,
+    orderNo: "PO-202601-001",
+    orderDate: "2026-01-12",
+    totalAmount: 1130,
+    status: "draft",
+    currency: "CNY",
+    exchangeRate: 1,
+    createdBy: "system",
+    lines: [{ lineNo: 1, itemCode: "MAT-001", itemName: "Material", quantity: 10, unitPrice: 100, taxRate: 0.13, taxAmount: 130, totalAmount: 1130 }]
+  });
+  const salesOrder = await store.createSalesOrder({
+    id: "sales-order:1",
+    accountSetId: accountSet.id,
+    customerId: customer.id,
+    orderNo: "SO-202601-001",
+    orderDate: "2026-01-13",
+    totalAmount: 6360,
+    status: "draft",
+    currency: "CNY",
+    exchangeRate: 1,
+    createdBy: "system",
+    lines: [{ lineNo: 1, itemCode: "SKU-001", itemName: "Service", quantity: 2, unitPrice: 3000, taxRate: 0.06, taxAmount: 360, totalAmount: 6360 }]
+  });
+  const approvedPurchase = await store.updatePurchaseOrderStatus({ ...purchaseOrder, status: "approved", approvedBy: "manager" });
+  const submittedSales = await store.updateSalesOrderStatus({ ...salesOrder, status: "submitted", submittedBy: "seller" });
+  const purchaseOrders = await store.listPurchaseOrders(accountSet.id, "approved");
+  const salesOrders = await store.listSalesOrders(accountSet.id, "submitted");
+
+  assert.equal(approvedPurchase.status, "approved");
+  assert.equal(submittedSales.status, "submitted");
+  assert.deepEqual(purchaseOrders.map((order) => order.orderNo), ["PO-202601-001"]);
+  assert.deepEqual(salesOrders.map((order) => order.orderNo), ["SO-202601-001"]);
 });
 
 test("Prisma platform persistence stores accounting periods and lifecycle status", async () => {

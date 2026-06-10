@@ -1466,6 +1466,288 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /purchase-orders:
+    get:
+      summary: List Phase 2 purchase orders by account set and status.
+      x-permission: purchase_order.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [draft, submitted, approved, closed]
+      responses:
+        "200":
+          description: Purchase order list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PurchaseOrder"
+    post:
+      summary: Create a Phase 2 purchase order for an enabled supplier partner.
+      x-permission: purchase_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurchaseOrderCreateRequest"
+      responses:
+        "201":
+          description: Purchase order created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseOrder"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /purchase-orders/{purchaseOrderId}:
+    get:
+      summary: Get one Phase 2 purchase order.
+      x-permission: purchase_order.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/PurchaseOrderId"
+      responses:
+        "200":
+          description: Purchase order detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseOrder"
+
+  /purchase-orders/{purchaseOrderId}/submit:
+    post:
+      summary: Submit a draft purchase order.
+      x-permission: purchase_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/PurchaseOrderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderWorkflowRequest"
+      responses:
+        "200":
+          description: Purchase order submitted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseOrder"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /purchase-orders/{purchaseOrderId}/approve:
+    post:
+      summary: Approve a submitted purchase order.
+      x-permission: purchase_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/PurchaseOrderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderWorkflowRequest"
+      responses:
+        "200":
+          description: Purchase order approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseOrder"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /purchase-orders/{purchaseOrderId}/close:
+    post:
+      summary: Close an approved purchase order.
+      x-permission: purchase_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/PurchaseOrderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderWorkflowRequest"
+      responses:
+        "200":
+          description: Purchase order closed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurchaseOrder"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /sales-orders:
+    get:
+      summary: List Phase 2 sales orders by account set and status.
+      x-permission: sales_order.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [draft, submitted, approved, closed]
+      responses:
+        "200":
+          description: Sales order list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SalesOrder"
+    post:
+      summary: Create a Phase 2 sales order for an enabled customer partner.
+      x-permission: sales_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SalesOrderCreateRequest"
+      responses:
+        "201":
+          description: Sales order created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalesOrder"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /sales-orders/{salesOrderId}:
+    get:
+      summary: Get one Phase 2 sales order.
+      x-permission: sales_order.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/SalesOrderId"
+      responses:
+        "200":
+          description: Sales order detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalesOrder"
+
+  /sales-orders/{salesOrderId}/submit:
+    post:
+      summary: Submit a draft sales order.
+      x-permission: sales_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/SalesOrderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderWorkflowRequest"
+      responses:
+        "200":
+          description: Sales order submitted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalesOrder"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /sales-orders/{salesOrderId}/approve:
+    post:
+      summary: Approve a submitted sales order.
+      x-permission: sales_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/SalesOrderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderWorkflowRequest"
+      responses:
+        "200":
+          description: Sales order approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalesOrder"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /sales-orders/{salesOrderId}/close:
+    post:
+      summary: Close an approved sales order.
+      x-permission: sales_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/SalesOrderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderWorkflowRequest"
+      responses:
+        "200":
+          description: Sales order closed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SalesOrder"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /attachments/upload:
     post:
       summary: Upload an attachment and return its central status.
@@ -2033,6 +2315,18 @@ components:
       required: true
       schema:
         type: string
+    PurchaseOrderId:
+      name: purchaseOrderId
+      in: path
+      required: true
+      schema:
+        type: string
+    SalesOrderId:
+      name: salesOrderId
+      in: path
+      required: true
+      schema:
+        type: string
     AttachmentId:
       name: attachmentId
       in: path
@@ -2423,6 +2717,190 @@ components:
           type: string
         isEnabled:
           type: boolean
+
+    OrderLineRequest:
+      type: object
+      required: [itemCode, itemName, quantity, unitPrice]
+      properties:
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        unitPrice:
+          type: number
+          minimum: 0
+        taxRate:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    OrderLine:
+      type: object
+      required: [lineNo, itemCode, itemName, quantity, unitPrice, taxRate, taxAmount, totalAmount]
+      properties:
+        lineNo:
+          type: integer
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+        unitPrice:
+          type: number
+        taxRate:
+          type: number
+        taxAmount:
+          type: number
+        totalAmount:
+          type: number
+        receivedQuantity:
+          type: number
+        shippedQuantity:
+          type: number
+        invoicedQuantity:
+          type: number
+
+    OrderWorkflowRequest:
+      type: object
+      properties:
+        submittedBy:
+          type: string
+        approvedBy:
+          type: string
+        closedBy:
+          type: string
+
+    PurchaseOrderCreateRequest:
+      type: object
+      required: [accountSetId, supplierId, orderDate, lines]
+      properties:
+        accountSetId:
+          type: string
+        supplierId:
+          type: string
+        orderNo:
+          type: string
+        orderDate:
+          type: string
+          format: date
+        createdBy:
+          type: string
+        currency:
+          type: string
+        exchangeRate:
+          type: number
+        lines:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OrderLineRequest"
+
+    SalesOrderCreateRequest:
+      type: object
+      required: [accountSetId, customerId, orderDate, lines]
+      properties:
+        accountSetId:
+          type: string
+        customerId:
+          type: string
+        orderNo:
+          type: string
+        orderDate:
+          type: string
+          format: date
+        createdBy:
+          type: string
+        currency:
+          type: string
+        exchangeRate:
+          type: number
+        lines:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OrderLineRequest"
+
+    PurchaseOrder:
+      type: object
+      required: [id, accountSetId, supplierId, orderNo, orderDate, status, totalAmount, currency, exchangeRate, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        orderNo:
+          type: string
+        orderDate:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [draft, submitted, approved, closed]
+        totalAmount:
+          type: number
+        currency:
+          type: string
+        exchangeRate:
+          type: number
+        createdBy:
+          type: string
+        submittedBy:
+          type: string
+        approvedBy:
+          type: string
+        closedBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderLine"
+
+    SalesOrder:
+      type: object
+      required: [id, accountSetId, customerId, orderNo, orderDate, status, totalAmount, currency, exchangeRate, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        customerId:
+          type: string
+        customerName:
+          type: string
+        orderNo:
+          type: string
+        orderDate:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [draft, submitted, approved, closed]
+        totalAmount:
+          type: number
+        currency:
+          type: string
+        exchangeRate:
+          type: number
+        createdBy:
+          type: string
+        submittedBy:
+          type: string
+        approvedBy:
+          type: string
+        closedBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderLine"
 
     AccountingPeriod:
       type: object
