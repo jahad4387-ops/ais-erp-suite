@@ -86,7 +86,11 @@ const DEFAULT_PERMISSION_CODES = [
   "collection_plan.view",
   "credit_exposure.view",
   "ap_settlement.manage",
-  "ar_settlement.manage"
+  "ar_settlement.manage",
+  "inventory_item.manage",
+  "bom.manage",
+  "warehouse.manage",
+  "inventory_balance.manage"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -587,6 +591,18 @@ function permissionFor(request) {
   if (segments[0] === "counterparty-ledger-summary" || segments[0] === "counterparty-aging") {
     return "counterparty_ledger.view";
   }
+  if (segments[0] === "inventory-items") {
+    return "inventory_item.manage";
+  }
+  if (segments[0] === "boms") {
+    return "bom.manage";
+  }
+  if (segments[0] === "warehouses") {
+    return "warehouse.manage";
+  }
+  if (segments[0] === "inventory-opening-balances") {
+    return "inventory_balance.manage";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -705,6 +721,10 @@ function createState(options = {}) {
     collectionPlans: new Map(),
     apSettlements: new Map(),
     arSettlements: new Map(),
+    inventoryItems: new Map(),
+    boms: new Map(),
+    warehouses: new Map(),
+    inventoryOpeningBalances: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1046,6 +1066,83 @@ async function findPartnerByIdentifier(state, identifier) {
     return localPartner;
   }
   return state.config.platformStore?.findPartner ? state.config.platformStore.findPartner(identifier) : null;
+}
+
+const INVENTORY_COST_METHODS = new Set(["moving_average", "fifo", "specific_identification", "monthly_weighted_average"]);
+
+function normalizeInventoryItemInput(body) {
+  if (!body.accountSetId) throw new Error("accountSetId is required.");
+  if (!body.code || !body.name) throw new Error("Inventory item code and name are required.");
+  if (!body.unit) throw new Error("Inventory item unit is required.");
+  const costMethod = body.costMethod ?? "moving_average";
+  if (!INVENTORY_COST_METHODS.has(costMethod)) {
+    throw new Error("costMethod is not supported.");
+  }
+  return {
+    code: String(body.code).trim(),
+    name: String(body.name).trim(),
+    category: body.category ?? null,
+    itemType: body.itemType ?? "raw_material",
+    unit: String(body.unit).trim(),
+    costMethod,
+    isBatchManaged: Boolean(body.isBatchManaged),
+    isSerialManaged: Boolean(body.isSerialManaged),
+    isManufactured: Boolean(body.isManufactured),
+    shelfLifeDays: body.shelfLifeDays == null ? null : Number(body.shelfLifeDays),
+    isEnabled: body.isEnabled ?? true,
+    createdBy: body.createdBy ?? "system"
+  };
+}
+
+function listInventoryItems(state, accountSetId) {
+  return [...state.inventoryItems.values()]
+    .filter((item) => item.accountSetId === accountSetId)
+    .sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function findInventoryItemByIdentifier(state, identifier) {
+  return [...state.inventoryItems.values()].find((item) => item.id === identifier || item.code === identifier) ?? null;
+}
+
+function listBoms(state, accountSetId) {
+  return [...state.boms.values()]
+    .filter((bom) => bom.accountSetId === accountSetId)
+    .sort((left, right) => `${left.productItemCode}:${left.version}`.localeCompare(`${right.productItemCode}:${right.version}`));
+}
+
+function listWarehouses(state, accountSetId) {
+  return [...state.warehouses.values()]
+    .filter((warehouse) => warehouse.accountSetId === accountSetId)
+    .sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function findWarehouseByIdentifier(state, identifier) {
+  return [...state.warehouses.values()].find((warehouse) => warehouse.id === identifier || warehouse.code === identifier) ?? null;
+}
+
+function listInventoryOpeningBalances(state, accountSetId, { fiscalYear = null, periodNo = null } = {}) {
+  return [...state.inventoryOpeningBalances.values()]
+    .filter((balance) => {
+      if (balance.accountSetId !== accountSetId) return false;
+      if (fiscalYear && balance.fiscalYear !== Number(fiscalYear)) return false;
+      if (periodNo && balance.periodNo !== Number(periodNo)) return false;
+      return true;
+    })
+    .sort((left, right) => `${left.itemCode}:${left.warehouseCode}:${left.batchNo ?? ""}`.localeCompare(`${right.itemCode}:${right.warehouseCode}:${right.batchNo ?? ""}`));
+}
+
+function buildInventoryOpeningTrialBalance(state, accountSetId, filters = {}) {
+  const rows = listInventoryOpeningBalances(state, accountSetId, filters);
+  const totalQuantity = Number(rows.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0).toFixed(6));
+  const totalAmount = Number(rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0).toFixed(2));
+  return {
+    accountSetId,
+    fiscalYear: filters.fiscalYear ? Number(filters.fiscalYear) : null,
+    periodNo: filters.periodNo ? Number(filters.periodNo) : null,
+    totalQuantity,
+    totalAmount,
+    rows
+  };
 }
 
 function normalizeOrderLines(lines = []) {
@@ -2456,6 +2553,261 @@ async function route(request, state) {
       objectId: accountSet.id
     });
     return jsonResponse(201, periods);
+  }
+
+  if (segments.length === 1 && segments[0] === "inventory-items") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, listInventoryItems(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const itemInput = normalizeInventoryItemInput(body);
+      if (itemInput.isBatchManaged && itemInput.costMethod === "moving_average") {
+        return errorResponse(409, "BATCH_COST_METHOD_CONFLICT", "Batch-managed inventory items must use FIFO or specific identification costing.");
+      }
+      const duplicate = listInventoryItems(state, body.accountSetId).find((item) => item.code === itemInput.code);
+      if (duplicate) {
+        return errorResponse(409, "INVENTORY_ITEM_CODE_EXISTS", "Inventory item code already exists in this account set.");
+      }
+      const item = {
+        id: body.id ?? `inventory-item:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        ...itemInput,
+        createdAt: "now",
+        updatedAt: "now"
+      };
+      state.inventoryItems.set(item.id, item);
+      appendAuditLog(state, {
+        actorId: item.createdBy,
+        action: "inventory_item.create",
+        objectType: "inventory_item",
+        objectId: item.id
+      });
+      return jsonResponse(201, item);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "warehouses") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, listWarehouses(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      if (!body.code || !body.name) throw new Error("Warehouse code and name are required.");
+      const duplicate = listWarehouses(state, body.accountSetId).find((warehouse) => warehouse.code === body.code);
+      if (duplicate) {
+        return errorResponse(409, "WAREHOUSE_CODE_EXISTS", "Warehouse code already exists in this account set.");
+      }
+      const warehouse = {
+        id: body.id ?? `warehouse:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        code: String(body.code).trim(),
+        name: String(body.name).trim(),
+        manager: body.manager ?? null,
+        isEnabled: body.isEnabled ?? true,
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now",
+        updatedAt: "now",
+        locations: (Array.isArray(body.locations) ? body.locations : []).map((location, index) => ({
+          id: location.id ?? `warehouse-location:${randomUUID()}`,
+          warehouseId: null,
+          code: String(location.code ?? `LOC-${index + 1}`).trim(),
+          name: String(location.name ?? location.code ?? `Location ${index + 1}`).trim(),
+          capacity: location.capacity == null ? null : Number(location.capacity),
+          isEnabled: location.isEnabled ?? true
+        }))
+      };
+      warehouse.locations = warehouse.locations.map((location) => ({ ...location, warehouseId: warehouse.id }));
+      state.warehouses.set(warehouse.id, warehouse);
+      appendAuditLog(state, {
+        actorId: warehouse.createdBy,
+        action: "warehouse.create",
+        objectType: "warehouse",
+        objectId: warehouse.id
+      });
+      return jsonResponse(201, warehouse);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "boms") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, listBoms(state, accountSetId));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const productItem = findInventoryItemByIdentifier(state, body.productItemId);
+      if (!productItem || productItem.accountSetId !== body.accountSetId || !productItem.isManufactured) {
+        return errorResponse(404, "PRODUCT_ITEM_NOT_FOUND", "Manufactured product item was not found.");
+      }
+      if (!Array.isArray(body.lines) || body.lines.length === 0) {
+        throw new Error("BOM lines are required.");
+      }
+      const duplicate = listBoms(state, body.accountSetId).find(
+        (bom) => bom.productItemId === productItem.id && bom.version === (body.version ?? "V1")
+      );
+      if (duplicate) {
+        return errorResponse(409, "BOM_VERSION_EXISTS", "BOM version already exists for this product.");
+      }
+      const bomId = body.id ?? `bom:${randomUUID()}`;
+      const lines = body.lines.map((line, index) => {
+        const componentItem = findInventoryItemByIdentifier(state, line.componentItemId);
+        if (!componentItem || componentItem.accountSetId !== body.accountSetId) {
+          throw new Error("BOM component item was not found.");
+        }
+        const quantity = Number(line.quantity);
+        const scrapRate = Number(line.scrapRate ?? 0);
+        if (!Number.isFinite(quantity) || quantity <= 0) {
+          throw new Error("BOM line quantity must be greater than 0.");
+        }
+        if (!Number.isFinite(scrapRate) || scrapRate < 0 || scrapRate >= 1) {
+          throw new Error("BOM line scrapRate must be between 0 and 1.");
+        }
+        return {
+          id: line.id ?? `bom-line:${randomUUID()}`,
+          bomId,
+          componentItemId: componentItem.id,
+          componentItemCode: componentItem.code,
+          componentItemName: componentItem.name,
+          lineNo: line.lineNo ?? index + 1,
+          quantity,
+          scrapRate
+        };
+      });
+      const bom = {
+        id: bomId,
+        accountSetId: body.accountSetId,
+        productItemId: productItem.id,
+        productItemCode: productItem.code,
+        productItemName: productItem.name,
+        version: body.version ?? "V1",
+        status: body.status ?? "draft",
+        yieldQuantity: Number(body.yieldQuantity ?? 1),
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now",
+        updatedAt: "now",
+        lines
+      };
+      state.boms.set(bom.id, bom);
+      appendAuditLog(state, {
+        actorId: bom.createdBy,
+        action: "bom.create",
+        objectType: "bom",
+        objectId: bom.id
+      });
+      return jsonResponse(201, bom);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "inventory-opening-balances") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, listInventoryOpeningBalances(state, accountSetId, { fiscalYear: query.get("fiscalYear"), periodNo: query.get("periodNo") }));
+    }
+
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      const item = findInventoryItemByIdentifier(state, body.itemId);
+      if (!item || item.accountSetId !== body.accountSetId) {
+        return errorResponse(404, "INVENTORY_ITEM_NOT_FOUND", "Inventory item was not found.");
+      }
+      const warehouse = findWarehouseByIdentifier(state, body.warehouseId);
+      if (!warehouse || warehouse.accountSetId !== body.accountSetId) {
+        return errorResponse(404, "WAREHOUSE_NOT_FOUND", "Warehouse was not found.");
+      }
+      const location = body.locationId ? warehouse.locations.find((candidate) => candidate.id === body.locationId || candidate.code === body.locationId) : null;
+      if (body.locationId && !location) {
+        return errorResponse(404, "WAREHOUSE_LOCATION_NOT_FOUND", "Warehouse location was not found.");
+      }
+      if (item.isBatchManaged && !body.batchNo) {
+        throw new Error("batchNo is required for batch-managed inventory items.");
+      }
+      const quantity = Number(body.quantity ?? 0);
+      const amount = Number(body.amount ?? 0);
+      if (!Number.isFinite(quantity) || quantity < 0) throw new Error("Opening quantity must be non-negative.");
+      if (!Number.isFinite(amount) || amount < 0) throw new Error("Opening amount must be non-negative.");
+      const opening = {
+        id: body.id ?? `inventory-opening:${randomUUID()}`,
+        accountSetId: body.accountSetId,
+        itemId: item.id,
+        itemCode: item.code,
+        itemName: item.name,
+        warehouseId: warehouse.id,
+        warehouseCode: warehouse.code,
+        warehouseName: warehouse.name,
+        locationId: location?.id ?? null,
+        locationCode: location?.code ?? null,
+        batchNo: body.batchNo ?? null,
+        fiscalYear: Number(body.fiscalYear),
+        periodNo: Number(body.periodNo),
+        quantity,
+        amount,
+        unitCost: quantity === 0 ? 0 : Number((amount / quantity).toFixed(6)),
+        createdBy: body.createdBy ?? actorId,
+        createdAt: "now",
+        updatedAt: "now"
+      };
+      state.inventoryOpeningBalances.set(opening.id, opening);
+      appendAuditLog(state, {
+        actorId: opening.createdBy,
+        action: "inventory_opening_balance.save",
+        objectType: "inventory_opening_balance",
+        objectId: opening.id
+      });
+      return jsonResponse(201, opening);
+    }
+  }
+
+  if (segments.length === 2 && segments[0] === "inventory-opening-balances" && segments[1] === "trial-balance" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    if (!accountSetId) throw new Error("accountSetId is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    return jsonResponse(200, buildInventoryOpeningTrialBalance(state, accountSetId, { fiscalYear: query.get("fiscalYear"), periodNo: query.get("periodNo") }));
   }
 
   if (request.method === "GET" && request.path === "/periods") {

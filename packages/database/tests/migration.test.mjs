@@ -42,6 +42,10 @@ const phase2ArSettlementMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610170000_phase2_ar_settlement_workflow/migration.sql", import.meta.url)
 );
 const phase2ArSettlementMigrationText = phase2ArSettlementMigrationSql.toString("utf8");
+const phase3InventoryFoundationMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610230000_phase3_inventory_foundation/migration.sql", import.meta.url)
+);
+const phase3InventoryFoundationMigrationText = phase3InventoryFoundationMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -227,4 +231,28 @@ test("Phase 2 AR settlement migration creates receivable settlement, netting, an
   assert.match(phase2ArSettlementMigrationText, /CREATE INDEX "ArSettlement_accountSetId_status_idx"/);
   assert.match(phase2ArSettlementMigrationText, /CREATE INDEX "ArSettlement_counterpartyLedgerEntryId_idx"/);
   assert.match(phase2ArSettlementMigrationText, /CREATE INDEX "ArSettlement_nettingCounterpartyLedgerEntryId_idx"/);
+});
+
+test("Phase 3 inventory foundation migration creates item, BOM, warehouse, and opening balance structures", () => {
+  for (const table of [
+    "InventoryItem",
+    "InventoryBatch",
+    "InventorySerial",
+    "Bom",
+    "BomLine",
+    "Warehouse",
+    "WarehouseLocation",
+    "InventoryOpeningBalance"
+  ]) {
+    assert.match(phase3InventoryFoundationMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(phase3InventoryFoundationMigrationText, /"costMethod" TEXT NOT NULL/, "Inventory items must persist cost method.");
+  assert.match(phase3InventoryFoundationMigrationText, /"isBatchManaged" BOOLEAN NOT NULL DEFAULT false/);
+  assert.match(phase3InventoryFoundationMigrationText, /"isManufactured" BOOLEAN NOT NULL DEFAULT false/);
+  assert.match(phase3InventoryFoundationMigrationText, /"scrapRate" REAL NOT NULL DEFAULT 0/, "BOM lines must persist scrap rate.");
+  assert.match(phase3InventoryFoundationMigrationText, /"locationId" TEXT/, "Opening balances must support warehouse locations.");
+  assert.match(phase3InventoryFoundationMigrationText, /"batchNo" TEXT/, "Opening balances must support batch dimensions.");
+  assert.match(phase3InventoryFoundationMigrationText, /CREATE UNIQUE INDEX "InventoryItem_accountSetId_code_key"/);
+  assert.match(phase3InventoryFoundationMigrationText, /CREATE UNIQUE INDEX "Warehouse_accountSetId_code_key"/);
+  assert.match(phase3InventoryFoundationMigrationText, /CREATE INDEX "InventoryOpeningBalance_accountSetId_itemId_idx"/);
 });

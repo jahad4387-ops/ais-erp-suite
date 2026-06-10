@@ -1848,6 +1848,159 @@ test("Phase 2 counterparty analytics summarize supplier/customer ledgers and agi
   assert.equal(apAging.body[0].bucketOver90, 200);
 });
 
+test("Phase 3 inventory foundation manages items, BOMs, warehouses, and opening balances", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P3-INV",
+      name: "Phase 3 Inventory Set",
+      companyName: "Phase 3 Manufacturing Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase3-inventory-account-set"
+  );
+  const actorId = "phase3-inventory-actor";
+  api.state.permissionsByActor.set(
+    actorId,
+    new Set(["inventory_item.manage", "bom.manage", "warehouse.manage", "inventory_balance.manage"])
+  );
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+
+  const invalidBatchItem = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-invalid-batch-item" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "RM-BAD",
+      name: "Invalid Batch Material",
+      itemType: "raw_material",
+      unit: "kg",
+      costMethod: "moving_average",
+      isBatchManaged: true,
+      isSerialManaged: false,
+      isManufactured: false,
+      createdBy: actorId
+    }
+  });
+  const material = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-material-item" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "RM-STEEL",
+      name: "Steel Coil",
+      category: "raw",
+      itemType: "raw_material",
+      unit: "kg",
+      costMethod: "fifo",
+      isBatchManaged: true,
+      shelfLifeDays: 180,
+      createdBy: actorId
+    }
+  });
+  const product = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-product-item" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "FG-PUMP",
+      name: "Finished Pump",
+      category: "finished",
+      itemType: "finished_good",
+      unit: "pcs",
+      costMethod: "monthly_weighted_average",
+      isManufactured: true,
+      createdBy: actorId
+    }
+  });
+  const warehouse = await api.handle({
+    method: "POST",
+    path: "/warehouses",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-warehouse" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "WH-MAIN",
+      name: "Main Warehouse",
+      manager: "Warehouse Lead",
+      locations: [{ code: "A-01", name: "Aisle A Bin 01", capacity: 5000 }],
+      createdBy: actorId
+    }
+  });
+  const bom = await api.handle({
+    method: "POST",
+    path: "/boms",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-bom" },
+    body: {
+      accountSetId: accountSet.body.id,
+      productItemId: product.body.id,
+      version: "V1",
+      status: "active",
+      yieldQuantity: 1,
+      createdBy: actorId,
+      lines: [{ componentItemId: material.body.id, quantity: 2.5, scrapRate: 0.03, lineNo: 1 }]
+    }
+  });
+  const opening = await api.handle({
+    method: "POST",
+    path: "/inventory-opening-balances",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase3-opening-balance" },
+    body: {
+      accountSetId: accountSet.body.id,
+      itemId: material.body.id,
+      warehouseId: warehouse.body.id,
+      locationId: warehouse.body.locations[0].id,
+      batchNo: "BATCH-2026-01",
+      fiscalYear: 2026,
+      periodNo: 1,
+      quantity: 100,
+      amount: 1200,
+      createdBy: actorId
+    }
+  });
+  const trial = await api.handle({
+    method: "GET",
+    path: `/inventory-opening-balances/trial-balance?accountSetId=${accountSet.body.id}&fiscalYear=2026&periodNo=1`,
+    headers: { "Actor-Id": actorId }
+  });
+  const items = await api.handle({
+    method: "GET",
+    path: `/inventory-items?accountSetId=${accountSet.body.id}`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(invalidBatchItem.status, 409);
+  assert.equal(invalidBatchItem.body.code, "BATCH_COST_METHOD_CONFLICT");
+  assert.equal(material.status, 201);
+  assert.equal(material.body.costMethod, "fifo");
+  assert.equal(material.body.isBatchManaged, true);
+  assert.equal(product.status, 201);
+  assert.equal(product.body.isManufactured, true);
+  assert.equal(warehouse.status, 201);
+  assert.equal(warehouse.body.locations[0].code, "A-01");
+  assert.equal(bom.status, 201);
+  assert.equal(bom.body.lines[0].componentItemId, material.body.id);
+  assert.equal(bom.body.lines[0].scrapRate, 0.03);
+  assert.equal(opening.status, 201);
+  assert.equal(opening.body.batchNo, "BATCH-2026-01");
+  assert.equal(opening.body.unitCost, 12);
+  assert.equal(trial.status, 200);
+  assert.equal(trial.body.totalQuantity, 100);
+  assert.equal(trial.body.totalAmount, 1200);
+  assert.equal(trial.body.rows[0].itemCode, "RM-STEEL");
+  assert.deepEqual(items.body.map((item) => item.code), ["FG-PUMP", "RM-STEEL"]);
+  assert.ok(api.state.auditLogs.some((log) => log.action === "inventory_item.create" && log.objectId === material.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "inventory_opening_balance.save" && log.objectId === opening.body.id));
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

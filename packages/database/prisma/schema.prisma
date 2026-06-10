@@ -50,6 +50,12 @@ model AccountSet {
   collectionPlans    CollectionPlan[]
   apSettlements      ApSettlement[]
   arSettlements      ArSettlement[]
+  inventoryItems     InventoryItem[]
+  inventoryBatches   InventoryBatch[]
+  inventorySerials   InventorySerial[]
+  boms               Bom[]
+  warehouses         Warehouse[]
+  inventoryOpeningBalances InventoryOpeningBalance[]
 }
 
 model User {
@@ -990,4 +996,150 @@ model CollectionPlan {
   @@index([accountSetId, status])
   @@index([customerId])
   @@index([plannedReceiptDate])
+}
+
+model InventoryItem {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  code             String
+  name             String
+  category         String?
+  itemType         String   @default("raw_material")
+  unit             String
+  costMethod       String
+  isBatchManaged   Boolean  @default(false)
+  isSerialManaged  Boolean  @default(false)
+  isManufactured   Boolean  @default(false)
+  shelfLifeDays    Int?
+  isEnabled        Boolean  @default(true)
+  createdBy        String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  accountSet       AccountSet @relation(fields: [accountSetId], references: [id])
+  batches          InventoryBatch[]
+  serials          InventorySerial[]
+  productBoms      Bom[] @relation("BomProduct")
+  bomLines         BomLine[] @relation("BomComponent")
+  openingBalances  InventoryOpeningBalance[]
+
+  @@unique([accountSetId, code])
+}
+
+model InventoryBatch {
+  id              String   @id @default(uuid())
+  accountSetId    String
+  itemId          String
+  batchNo         String
+  manufactureDate DateTime?
+  expiryDate      DateTime?
+  createdAt       DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  item       InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@unique([accountSetId, itemId, batchNo])
+}
+
+model InventorySerial {
+  id           String   @id @default(uuid())
+  accountSetId String
+  itemId       String
+  serialNo     String
+  status       String   @default("available")
+  createdAt    DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  item       InventoryItem @relation(fields: [itemId], references: [id])
+
+  @@unique([accountSetId, serialNo])
+}
+
+model Bom {
+  id            String   @id @default(uuid())
+  accountSetId  String
+  productItemId String
+  version       String
+  status        String   @default("draft")
+  yieldQuantity Float    @default(1)
+  createdBy     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accountSet  AccountSet @relation(fields: [accountSetId], references: [id])
+  productItem InventoryItem @relation("BomProduct", fields: [productItemId], references: [id])
+  lines       BomLine[]
+
+  @@unique([accountSetId, productItemId, version])
+}
+
+model BomLine {
+  id              String @id @default(uuid())
+  bomId           String
+  componentItemId String
+  lineNo          Int
+  quantity        Float
+  scrapRate       Float  @default(0)
+
+  bom           Bom @relation(fields: [bomId], references: [id])
+  componentItem InventoryItem @relation("BomComponent", fields: [componentItemId], references: [id])
+
+  @@unique([bomId, lineNo])
+}
+
+model Warehouse {
+  id           String   @id @default(uuid())
+  accountSetId String
+  code         String
+  name         String
+  manager      String?
+  isEnabled    Boolean  @default(true)
+  createdBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accountSet      AccountSet @relation(fields: [accountSetId], references: [id])
+  locations       WarehouseLocation[]
+  openingBalances InventoryOpeningBalance[]
+
+  @@unique([accountSetId, code])
+}
+
+model WarehouseLocation {
+  id          String  @id @default(uuid())
+  warehouseId String
+  code        String
+  name        String
+  capacity    Float?
+  isEnabled   Boolean @default(true)
+
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+  openingBalances InventoryOpeningBalance[]
+
+  @@unique([warehouseId, code])
+}
+
+model InventoryOpeningBalance {
+  id           String   @id @default(uuid())
+  accountSetId String
+  itemId       String
+  warehouseId  String
+  locationId   String?
+  batchNo      String?
+  fiscalYear   Int
+  periodNo     Int
+  quantity     Float    @default(0)
+  amount       Float    @default(0)
+  unitCost     Float    @default(0)
+  createdBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  item       InventoryItem @relation(fields: [itemId], references: [id])
+  warehouse  Warehouse @relation(fields: [warehouseId], references: [id])
+  location   WarehouseLocation? @relation(fields: [locationId], references: [id])
+
+  @@unique([accountSetId, itemId, warehouseId, locationId, batchNo, fiscalYear, periodNo], name: "InventoryOpeningBalance_unique_dimension_key")
+  @@index([accountSetId, itemId])
 }

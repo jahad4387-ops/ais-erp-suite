@@ -40,6 +40,10 @@ import { CounterpartyAnalytics } from './pages/CounterpartyAnalytics';
 import { PaymentWorkbench } from './pages/PaymentWorkbench';
 import { ReceiptWorkbench } from './pages/ReceiptWorkbench';
 import { ApSettlementWorkbench } from './pages/ApSettlementWorkbench';
+import { InventoryItems } from './pages/InventoryItems';
+import { BomMaintenance } from './pages/BomMaintenance';
+import { Warehouses } from './pages/Warehouses';
+import { InventoryOpeningBalances } from './pages/InventoryOpeningBalances';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -209,6 +213,20 @@ const AppFrame: React.FC = () => {
                 ],
               },
               {
+                key: 'inventory-production',
+                icon: <FileOutlined />,
+                label: '存货生产',
+                children: [
+                  { key: 'inventory-items', label: <Link to="/inventory-items">存货档案</Link> },
+                  { key: 'boms', label: <Link to="/boms">BOM 维护</Link> },
+                  { key: 'warehouses', label: <Link to="/warehouses">仓库库位</Link> },
+                  {
+                    key: 'inventory-opening-balances',
+                    label: <Link to="/inventory-opening-balances">存货期初</Link>,
+                  },
+                ],
+              },
+              {
                 key: 'general-ledger',
                 icon: <BookOutlined />,
                 label: '总账',
@@ -318,6 +336,10 @@ const AppFrame: React.FC = () => {
                 <Route path="/payment-requests" element={<RequireAuth><PaymentWorkbench /></RequireAuth>} />
                 <Route path="/customer-receipts" element={<RequireAuth><ReceiptWorkbench /></RequireAuth>} />
                 <Route path="/ap-settlements" element={<RequireAuth><ApSettlementWorkbench /></RequireAuth>} />
+                <Route path="/inventory-items" element={<RequireAuth><InventoryItems /></RequireAuth>} />
+                <Route path="/boms" element={<RequireAuth><BomMaintenance /></RequireAuth>} />
+                <Route path="/warehouses" element={<RequireAuth><Warehouses /></RequireAuth>} />
+                <Route path="/inventory-opening-balances" element={<RequireAuth><InventoryOpeningBalances /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />
                 <Route path="/auxiliaries" element={<RequireAuth><Auxiliaries /></RequireAuth>} />

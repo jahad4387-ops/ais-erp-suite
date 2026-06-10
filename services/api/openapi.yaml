@@ -3029,6 +3029,196 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /inventory-items:
+    get:
+      summary: List Phase 3 inventory item master data.
+      x-permission: inventory_item.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Inventory item list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InventoryItem"
+    post:
+      summary: Create Phase 3 inventory item master data.
+      x-permission: inventory_item.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInventoryItemRequest"
+      responses:
+        "201":
+          description: Inventory item created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryItem"
+        "409":
+          description: BATCH_COST_METHOD_CONFLICT when batch-managed items use moving average.
+
+  /boms:
+    get:
+      summary: List Phase 3 BOM master data.
+      x-permission: bom.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: BOM list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Bom"
+    post:
+      summary: Create a Phase 3 BOM.
+      x-permission: bom.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBomRequest"
+      responses:
+        "201":
+          description: BOM created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bom"
+
+  /warehouses:
+    get:
+      summary: List Phase 3 warehouses and locations.
+      x-permission: warehouse.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Warehouse list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Warehouse"
+    post:
+      summary: Create a Phase 3 warehouse with optional locations.
+      x-permission: warehouse.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWarehouseRequest"
+      responses:
+        "201":
+          description: Warehouse created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Warehouse"
+
+  /inventory-opening-balances:
+    get:
+      summary: List Phase 3 inventory opening balances.
+      x-permission: inventory_balance.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Inventory opening balance list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InventoryOpeningBalance"
+    post:
+      summary: Save a Phase 3 inventory opening balance row.
+      x-permission: inventory_balance.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveInventoryOpeningBalanceRequest"
+      responses:
+        "201":
+          description: Inventory opening balance saved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryOpeningBalance"
+
+  /inventory-opening-balances/trial-balance:
+    get:
+      summary: Calculate Phase 3 inventory opening trial totals.
+      x-permission: inventory_balance.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Inventory opening trial balance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryOpeningTrialBalance"
+
 components:
   parameters:
     AccountSetId:
@@ -5812,6 +6002,268 @@ components:
           type: array
           items:
             type: string
+
+    CreateInventoryItemRequest:
+      type: object
+      required: [accountSetId, code, name, unit, costMethod]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        itemType:
+          type: string
+        unit:
+          type: string
+        costMethod:
+          type: string
+          enum: [moving_average, fifo, specific_identification, monthly_weighted_average]
+        isBatchManaged:
+          type: boolean
+        isSerialManaged:
+          type: boolean
+        isManufactured:
+          type: boolean
+        shelfLifeDays:
+          type: integer
+        createdBy:
+          type: string
+
+    InventoryItem:
+      type: object
+      required: [id, accountSetId, code, name, unit, costMethod, isBatchManaged, isSerialManaged, isManufactured]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        itemType:
+          type: string
+        unit:
+          type: string
+        costMethod:
+          type: string
+        isBatchManaged:
+          type: boolean
+        isSerialManaged:
+          type: boolean
+        isManufactured:
+          type: boolean
+        shelfLifeDays:
+          type: integer
+        isEnabled:
+          type: boolean
+
+    CreateBomRequest:
+      type: object
+      required: [accountSetId, productItemId, version, lines]
+      properties:
+        accountSetId:
+          type: string
+        productItemId:
+          type: string
+        version:
+          type: string
+        status:
+          type: string
+        yieldQuantity:
+          type: number
+        createdBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/BomLine"
+
+    Bom:
+      type: object
+      required: [id, accountSetId, productItemId, version, status, yieldQuantity, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        productItemId:
+          type: string
+        productItemCode:
+          type: string
+        productItemName:
+          type: string
+        version:
+          type: string
+        status:
+          type: string
+        yieldQuantity:
+          type: number
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/BomLine"
+
+    BomLine:
+      type: object
+      required: [componentItemId, quantity]
+      properties:
+        id:
+          type: string
+        componentItemId:
+          type: string
+        componentItemCode:
+          type: string
+        componentItemName:
+          type: string
+        lineNo:
+          type: integer
+        quantity:
+          type: number
+        scrapRate:
+          type: number
+
+    CreateWarehouseRequest:
+      type: object
+      required: [accountSetId, code, name]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        manager:
+          type: string
+        createdBy:
+          type: string
+        locations:
+          type: array
+          items:
+            $ref: "#/components/schemas/WarehouseLocation"
+
+    Warehouse:
+      type: object
+      required: [id, accountSetId, code, name, locations]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        manager:
+          type: string
+        isEnabled:
+          type: boolean
+        locations:
+          type: array
+          items:
+            $ref: "#/components/schemas/WarehouseLocation"
+
+    WarehouseLocation:
+      type: object
+      required: [code, name]
+      properties:
+        id:
+          type: string
+        warehouseId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        capacity:
+          type: number
+        isEnabled:
+          type: boolean
+
+    SaveInventoryOpeningBalanceRequest:
+      type: object
+      required: [accountSetId, itemId, warehouseId, fiscalYear, periodNo, quantity, amount]
+      properties:
+        accountSetId:
+          type: string
+        itemId:
+          type: string
+        warehouseId:
+          type: string
+        locationId:
+          type: string
+        batchNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        quantity:
+          type: number
+        amount:
+          type: number
+        createdBy:
+          type: string
+
+    InventoryOpeningBalance:
+      type: object
+      required: [id, accountSetId, itemId, warehouseId, fiscalYear, periodNo, quantity, amount, unitCost]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        itemId:
+          type: string
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        warehouseId:
+          type: string
+        warehouseCode:
+          type: string
+        locationId:
+          type: string
+        locationCode:
+          type: string
+        batchNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        quantity:
+          type: number
+        amount:
+          type: number
+        unitCost:
+          type: number
+
+    InventoryOpeningTrialBalance:
+      type: object
+      required: [accountSetId, totalQuantity, totalAmount, rows]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        totalQuantity:
+          type: number
+        totalAmount:
+          type: number
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryOpeningBalance"
 
     CreateAgentActionRequest:
       type: object

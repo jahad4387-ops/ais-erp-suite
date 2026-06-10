@@ -80,7 +80,11 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/ai/reconciliation-suggestions:",
     "/ai/collection-drafts:",
     "/ai/exception-checks:",
-    "/ai/voucher-drafts/{aiSuggestionId}/convert-to-voucher:"
+    "/ai/voucher-drafts/{aiSuggestionId}/convert-to-voucher:",
+    "/inventory-items:",
+    "/boms:",
+    "/warehouses:",
+    "/inventory-opening-balances:"
   ];
 
   for (const path of writePaths) {
@@ -138,6 +142,13 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "AiReconciliationSuggestion:",
     "AiCollectionDraft:",
     "AiExceptionCheck:",
+    "InventoryItem:",
+    "Bom:",
+    "BomLine:",
+    "Warehouse:",
+    "WarehouseLocation:",
+    "InventoryOpeningBalance:",
+    "InventoryOpeningTrialBalance:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -212,6 +223,28 @@ test("Phase 2 AR settlement workflow endpoint is documented with netting and vou
   assert.match(contract, /nettingCounterpartyLedgerEntryId:/);
   assert.match(contract, /customerReceiptId:/);
   assert.match(contract, /voucherDraft:/);
+});
+
+test("Phase 3 inventory foundation endpoints document BOM, warehouses, opening balances, and batch costing guardrails", () => {
+  const itemBlock = blockAfter("  /inventory-items:");
+  const bomBlock = blockAfter("  /boms:");
+  const warehouseBlock = blockAfter("  /warehouses:");
+  const openingBlock = blockAfter("  /inventory-opening-balances:");
+  const trialBlock = blockAfter("  /inventory-opening-balances/trial-balance:");
+
+  assert.match(itemBlock, /x-permission: inventory_item\.manage/);
+  assert.match(itemBlock, /InventoryItem/);
+  assert.match(bomBlock, /x-permission: bom\.manage/);
+  assert.match(bomBlock, /Bom/);
+  assert.match(warehouseBlock, /x-permission: warehouse\.manage/);
+  assert.match(warehouseBlock, /Warehouse/);
+  assert.match(openingBlock, /x-permission: inventory_balance\.manage/);
+  assert.match(openingBlock, /InventoryOpeningBalance/);
+  assert.match(trialBlock, /x-permission: inventory_balance\.manage/);
+  assert.match(trialBlock, /InventoryOpeningTrialBalance/);
+  assert.match(contract, /costMethod:/, "Inventory item schema must expose costMethod.");
+  assert.match(contract, /isBatchManaged:/, "Inventory item schema must expose batch management.");
+  assert.match(contract, /BATCH_COST_METHOD_CONFLICT/, "Contract must document batch and moving-average mutual exclusion.");
 });
 
 test("deployment configuration check endpoint is documented", () => {
