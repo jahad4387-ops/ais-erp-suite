@@ -4261,6 +4261,144 @@ paths:
               schema:
                 $ref: "#/components/schemas/AssetValueChange"
 
+  /depreciation-runs/dry-run:
+    post:
+      summary: Dry-run Phase 4 fixed asset depreciation with NEW_ASSET_NOT_STARTED and brakeApplied evidence.
+      x-permission: fixed_asset_depreciation.manage
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDepreciationRunRequest"
+      responses:
+        "201":
+          description: Depreciation dry-run created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepreciationRun"
+
+  /depreciation-runs:
+    get:
+      summary: List Phase 4 depreciation runs.
+      x-permission: fixed_asset_depreciation.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Depreciation run list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DepreciationRun"
+    post:
+      summary: Create a formal Phase 4 depreciation run.
+      x-permission: fixed_asset_depreciation.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDepreciationRunRequest"
+      responses:
+        "201":
+          description: Depreciation run created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepreciationRun"
+
+  /depreciation-runs/{depreciationRunId}/approve:
+    post:
+      summary: Approve a formal depreciation run.
+      x-permission: fixed_asset_depreciation.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: depreciationRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Depreciation run approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepreciationRun"
+
+  /depreciation-runs/{depreciationRunId}/lock:
+    post:
+      summary: Lock a depreciation run and produce fixed_asset_depreciation cost pools.
+      x-permission: fixed_asset_depreciation.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: depreciationRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Depreciation run locked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepreciationRun"
+
+  /asset-depreciation-cost-pools:
+    get:
+      summary: List locked fixed asset depreciation cost-pool outputs.
+      x-permission: fixed_asset_depreciation_pool.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: fiscalYear
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: periodNo
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Locked fixed asset depreciation cost pools.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssetDepreciationCostPoolOutput"
+
 components:
   parameters:
     AccountSetId:
@@ -8828,6 +8966,132 @@ components:
           type: string
         fixedAsset:
           $ref: "#/components/schemas/FixedAsset"
+
+    CreateDepreciationRunRequest:
+      type: object
+      required: [accountSetId, runNo, fiscalYear, periodNo]
+      properties:
+        accountSetId:
+          type: string
+        runNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        createdBy:
+          type: string
+
+    DepreciationRun:
+      type: object
+      required: [id, accountSetId, runNo, fiscalYear, periodNo, dryRun, status, totalDepreciationAmount, lineCount, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        runNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        dryRun:
+          type: boolean
+        status:
+          type: string
+          enum: [draft, calculated, approved, locked]
+        totalDepreciationAmount:
+          type: number
+        lineCount:
+          type: integer
+        warningCodes:
+          type: array
+          items:
+            type: string
+            enum: [NEW_ASSET_NOT_STARTED, FULLY_DEPRECIATED, DEPRECIATION_STOPPED, NET_VALUE_BRAKE_APPLIED]
+        approvedAt:
+          type: string
+        lockedAt:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/DepreciationRunLine"
+        costPools:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetDepreciationCostPoolOutput"
+
+    DepreciationRunLine:
+      type: object
+      required: [id, depreciationRunId, fixedAssetId, assetNo, departmentId, originalValue, salvageValue, accumulatedDepreciationBefore, depreciationAmount, accumulatedDepreciationAfter, netValueAfter, brakeApplied, depreciationTimelineRule, depreciationDepartmentRule]
+      properties:
+        id:
+          type: string
+        depreciationRunId:
+          type: string
+        fixedAssetId:
+          type: string
+        assetNo:
+          type: string
+        assetName:
+          type: string
+        departmentId:
+          type: string
+        departmentName:
+          type: string
+        originalValue:
+          type: number
+        salvageValue:
+          type: number
+        accumulatedDepreciationBefore:
+          type: number
+        depreciationAmount:
+          type: number
+        accumulatedDepreciationAfter:
+          type: number
+        netValueAfter:
+          type: number
+        brakeApplied:
+          type: boolean
+        skippedReason:
+          type: string
+          enum: [NEW_ASSET_NOT_STARTED, FULLY_DEPRECIATED, DEPRECIATION_STOPPED]
+        depreciationTimelineRule:
+          type: string
+          enum: [new_asset_next_month]
+        depreciationDepartmentRule:
+          type: string
+          enum: [month_end_department]
+
+    AssetDepreciationCostPoolOutput:
+      type: object
+      required: [id, accountSetId, sourceRunId, fixedAssetId, fiscalYear, periodNo, departmentId, costType, amount, lockedAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        sourceRunId:
+          type: string
+        fixedAssetId:
+          type: string
+        assetNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        departmentId:
+          type: string
+        costType:
+          type: string
+          enum: [fixed_asset_depreciation]
+        amount:
+          type: number
+        lockedAt:
+          type: string
 
     CreateAgentActionRequest:
       type: object

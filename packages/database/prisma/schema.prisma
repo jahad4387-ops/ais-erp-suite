@@ -83,6 +83,8 @@ model AccountSet {
   fixedAssets      FixedAsset[]
   assetTransfers   AssetTransfer[]
   assetValueChanges AssetValueChange[]
+  depreciationRuns DepreciationRun[]
+  assetDepreciationCostPoolOutputs AssetDepreciationCostPoolOutput[]
 }
 
 model User {
@@ -1899,6 +1901,8 @@ model FixedAsset {
   responsiblePerson          String?
   usageStatus                String   @default("in_use")
   lastTransferAt             DateTime?
+  isDepreciationStopped      Boolean  @default(false)
+  depreciationStoppedAt      DateTime?
   createdBy                  String
   createdAt                  DateTime @default(now())
 
@@ -1907,6 +1911,8 @@ model FixedAsset {
   depreciationMethod DepreciationMethod @relation(fields: [depreciationMethodId], references: [id])
   transfers          AssetTransfer[]
   valueChanges       AssetValueChange[]
+  depreciationLines  DepreciationRunLine[]
+  depreciationCostPools AssetDepreciationCostPoolOutput[]
 
   @@unique([accountSetId, assetNo])
 }
@@ -1949,4 +1955,73 @@ model AssetValueChange {
   fixedAsset FixedAsset @relation(fields: [fixedAssetId], references: [id])
 
   @@index([fixedAssetId, changeDate])
+}
+
+model DepreciationRun {
+  id                      String   @id @default(uuid())
+  accountSetId            String
+  runNo                   String
+  fiscalYear              Int
+  periodNo                Int
+  dryRun                  Boolean  @default(true)
+  status                  String   @default("draft")
+  totalDepreciationAmount Float    @default(0)
+  lineCount               Int      @default(0)
+  warningCodesJson        String?
+  createdBy               String
+  createdAt               DateTime @default(now())
+  approvedBy              String?
+  approvedAt              DateTime?
+  lockedBy                String?
+  lockedAt                DateTime?
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  lines      DepreciationRunLine[]
+  costPools  AssetDepreciationCostPoolOutput[]
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model DepreciationRunLine {
+  id                              String  @id @default(uuid())
+  depreciationRunId                String
+  fixedAssetId                     String
+  assetNo                          String
+  departmentId                     String
+  departmentName                   String?
+  originalValue                    Float
+  salvageValue                     Float   @default(0)
+  accumulatedDepreciationBefore    Float   @default(0)
+  depreciationAmount               Float   @default(0)
+  accumulatedDepreciationAfter     Float   @default(0)
+  netValueAfter                    Float   @default(0)
+  brakeApplied                     Boolean @default(false)
+  skippedReason                    String?
+  depreciationTimelineRule         String  @default("new_asset_next_month")
+  depreciationDepartmentRule       String  @default("month_end_department")
+
+  depreciationRun DepreciationRun @relation(fields: [depreciationRunId], references: [id])
+  fixedAsset      FixedAsset @relation(fields: [fixedAssetId], references: [id])
+
+  @@index([fixedAssetId])
+}
+
+model AssetDepreciationCostPoolOutput {
+  id           String   @id @default(uuid())
+  accountSetId String
+  sourceRunId  String
+  fixedAssetId String
+  fiscalYear   Int
+  periodNo     Int
+  departmentId String
+  costType     String   @default("fixed_asset_depreciation")
+  amount       Float    @default(0)
+  lockedAt     DateTime
+  createdAt    DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  sourceRun  DepreciationRun @relation(fields: [sourceRunId], references: [id])
+  fixedAsset FixedAsset @relation(fields: [fixedAssetId], references: [id])
+
+  @@index([accountSetId, fiscalYear, periodNo])
 }

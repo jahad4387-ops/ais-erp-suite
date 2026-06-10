@@ -108,7 +108,9 @@ const DEFAULT_PERMISSION_CODES = [
   "payroll_cost_pool.view",
   "fixed_asset_setup.manage",
   "fixed_asset_card.manage",
-  "fixed_asset_transfer.manage"
+  "fixed_asset_transfer.manage",
+  "fixed_asset_depreciation.manage",
+  "fixed_asset_depreciation_pool.view"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -678,6 +680,12 @@ function permissionFor(request) {
   if (segments[0] === "asset-transfers") {
     return "fixed_asset_transfer.manage";
   }
+  if (segments[0] === "depreciation-runs") {
+    return "fixed_asset_depreciation.manage";
+  }
+  if (segments[0] === "asset-depreciation-cost-pools") {
+    return "fixed_asset_depreciation_pool.view";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -827,6 +835,9 @@ function createState(options = {}) {
     fixedAssets: new Map(),
     assetTransfers: new Map(),
     assetValueChanges: new Map(),
+    depreciationRuns: new Map(),
+    depreciationRunLines: new Map(),
+    assetDepreciationCostPools: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -2197,6 +2208,100 @@ function createAssetSnapshot(asset) {
     ...asset,
     netValue: roundAmount(Number(asset.originalValue ?? 0) - Number(asset.accumulatedDepreciation ?? 0))
   };
+}
+
+function periodIndex(fiscalYear, periodNo) {
+  return Number(fiscalYear) * 12 + Number(periodNo);
+}
+
+function listDepreciationRuns(state, accountSetId) {
+  return [...state.depreciationRuns.values()].filter((row) => row.accountSetId === accountSetId).sort((left, right) => left.runNo.localeCompare(right.runNo));
+}
+
+function findDepreciationRunByIdentifier(state, identifier) {
+  return state.depreciationRuns.get(identifier) ?? [...state.depreciationRuns.values()].find((run) => run.runNo === identifier) ?? null;
+}
+
+function buildDepreciationRun(state, body, actorId, { dryRun }) {
+  const fiscalYear = Number(body.fiscalYear);
+  const periodNo = Number(body.periodNo);
+  const runId = `depreciation-run:${randomUUID()}`;
+  const currentPeriodIndex = periodIndex(fiscalYear, periodNo);
+  const lines = listFixedAssets(state, body.accountSetId).map((asset) => {
+    const accumulatedBefore = roundAmount(asset.accumulatedDepreciation ?? 0);
+    const depreciableAmount = roundAmount(Number(asset.originalValue ?? 0) - Number(asset.salvageValue ?? 0));
+    const remainingDepreciable = roundAmount(Math.max(0, depreciableAmount - accumulatedBefore));
+    const servicePeriodIndex = periodIndex(asset.serviceStartYear, asset.serviceStartPeriod);
+    let depreciationAmount = 0;
+    let skippedReason = null;
+    let brakeApplied = false;
+
+    if (asset.isDepreciationStopped) {
+      skippedReason = "DEPRECIATION_STOPPED";
+    } else if (currentPeriodIndex < servicePeriodIndex) {
+      skippedReason = "NEW_ASSET_NOT_STARTED";
+    } else if (remainingDepreciable <= 0) {
+      skippedReason = "FULLY_DEPRECIATED";
+      brakeApplied = true;
+    } else {
+      const monthlyAmount = roundAmount(depreciableAmount / Number(asset.usefulLifeMonths || 1));
+      depreciationAmount = Math.min(monthlyAmount, remainingDepreciable);
+      brakeApplied = depreciationAmount >= remainingDepreciable;
+    }
+
+    const accumulatedAfter = roundAmount(accumulatedBefore + depreciationAmount);
+    return {
+      id: `depreciation-run-line:${randomUUID()}`,
+      depreciationRunId: runId,
+      fixedAssetId: asset.id,
+      assetNo: asset.assetNo,
+      assetName: asset.name,
+      departmentId: asset.currentDepartmentId,
+      departmentName: asset.currentDepartmentName ?? null,
+      originalValue: roundAmount(asset.originalValue ?? 0),
+      salvageValue: roundAmount(asset.salvageValue ?? 0),
+      accumulatedDepreciationBefore: accumulatedBefore,
+      depreciationAmount: roundAmount(depreciationAmount),
+      accumulatedDepreciationAfter: accumulatedAfter,
+      netValueAfter: roundAmount(Number(asset.originalValue ?? 0) - accumulatedAfter),
+      brakeApplied,
+      skippedReason,
+      depreciationTimelineRule: "new_asset_next_month",
+      depreciationDepartmentRule: "month_end_department"
+    };
+  });
+  const totalDepreciationAmount = roundAmount(lines.reduce((sum, line) => sum + line.depreciationAmount, 0));
+  const warningCodes = [...new Set(lines.flatMap((line) => [line.skippedReason, line.brakeApplied ? "NET_VALUE_BRAKE_APPLIED" : null]).filter(Boolean))];
+  const run = {
+    id: runId,
+    accountSetId: body.accountSetId,
+    runNo: body.runNo,
+    fiscalYear,
+    periodNo,
+    dryRun,
+    status: dryRun ? "draft" : "calculated",
+    totalDepreciationAmount,
+    lineCount: lines.length,
+    warningCodes,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    lines
+  };
+
+  state.depreciationRuns.set(run.id, run);
+  for (const line of lines) {
+    state.depreciationRunLines.set(line.id, line);
+    if (!dryRun && line.depreciationAmount > 0) {
+      const asset = state.fixedAssets.get(line.fixedAssetId);
+      asset.accumulatedDepreciation = line.accumulatedDepreciationAfter;
+      asset.netValue = line.netValueAfter;
+      if (line.brakeApplied) {
+        asset.isDepreciationStopped = true;
+        asset.depreciationStoppedAt = "now";
+      }
+    }
+  }
+  return run;
 }
 
 function normalizeOrderLines(lines = []) {
@@ -4768,6 +4873,8 @@ async function route(request, state) {
         responsiblePerson: body.responsiblePerson ?? null,
         usageStatus: body.usageStatus ?? "in_use",
         lastTransferAt: null,
+        isDepreciationStopped: false,
+        depreciationStoppedAt: null,
         createdBy: body.createdBy ?? actorId,
         createdAt: "now"
       };
@@ -4833,6 +4940,91 @@ async function route(request, state) {
     state.assetValueChanges.set(change.id, change);
     appendAuditLog(state, { actorId: change.createdBy, action: "asset_value_change.create", objectType: "asset_value_change", objectId: change.id });
     return jsonResponse(201, { ...change, fixedAsset: createAssetSnapshot(asset) });
+  }
+
+  if (segments.length === 2 && segments[0] === "depreciation-runs" && segments[1] === "dry-run" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+    const run = buildDepreciationRun(state, body, actorId, { dryRun: true });
+    appendAuditLog(state, { actorId: run.createdBy, action: "depreciation_run.dry_run", objectType: "depreciation_run", objectId: run.id });
+    return jsonResponse(201, run);
+  }
+
+  if (segments.length === 1 && segments[0] === "depreciation-runs") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, listDepreciationRuns(state, accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const run = buildDepreciationRun(state, body, actorId, { dryRun: false });
+      appendAuditLog(state, { actorId: run.createdBy, action: "depreciation_run.create", objectType: "depreciation_run", objectId: run.id });
+      return jsonResponse(201, run);
+    }
+  }
+
+  if (segments.length === 3 && segments[0] === "depreciation-runs" && ["approve", "lock"].includes(segments[2]) && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    const run = findDepreciationRunByIdentifier(state, segments[1]);
+    if (!run) return errorResponse(404, "DEPRECIATION_RUN_NOT_FOUND", "Depreciation run was not found.");
+    if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) return accountSetAccessError(state, actorId, run.accountSetId);
+    if (run.dryRun) return errorResponse(409, "DEPRECIATION_RUN_DRY_RUN", "Dry-run depreciation results cannot be approved or locked.");
+    if (segments[2] === "approve") {
+      if (run.status !== "calculated") return errorResponse(409, "DEPRECIATION_RUN_STATUS_INVALID", "Only calculated depreciation runs can be approved.");
+      run.status = "approved";
+      run.approvedBy = body.approvedBy ?? actorId;
+      run.approvedAt = "now";
+      appendAuditLog(state, { actorId: run.approvedBy, action: "depreciation_run.approve", objectType: "depreciation_run", objectId: run.id });
+      return jsonResponse(200, { ...run, lines: [...(run.lines ?? [])] });
+    }
+    if (run.status !== "approved") return errorResponse(409, "DEPRECIATION_RUN_STATUS_INVALID", "Only approved depreciation runs can be locked.");
+    run.status = "locked";
+    run.lockedBy = body.lockedBy ?? actorId;
+    run.lockedAt = "now";
+    const costPools = (run.lines ?? [])
+      .filter((line) => line.depreciationAmount > 0)
+      .map((line) => ({
+        id: `asset-depreciation-cost-pool:${randomUUID()}`,
+        accountSetId: run.accountSetId,
+        sourceRunId: run.id,
+        fixedAssetId: line.fixedAssetId,
+        assetNo: line.assetNo,
+        fiscalYear: run.fiscalYear,
+        periodNo: run.periodNo,
+        departmentId: line.departmentId,
+        costType: "fixed_asset_depreciation",
+        amount: line.depreciationAmount,
+        lockedAt: run.lockedAt,
+        createdAt: "now"
+      }));
+    run.costPools = costPools;
+    for (const pool of costPools) {
+      state.assetDepreciationCostPools.set(pool.id, pool);
+    }
+    appendAuditLog(state, { actorId: run.lockedBy, action: "depreciation_run.lock", objectType: "depreciation_run", objectId: run.id });
+    return jsonResponse(200, { ...run, lines: [...(run.lines ?? [])], costPools: [...costPools] });
+  }
+
+  if (segments.length === 1 && segments[0] === "asset-depreciation-cost-pools" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const fiscalYear = query.get("fiscalYear");
+    const periodNo = query.get("periodNo");
+    if (!accountSetId) throw new Error("accountSetId is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+    return jsonResponse(
+      200,
+      [...state.assetDepreciationCostPools.values()]
+        .filter((pool) => pool.accountSetId === accountSetId)
+        .filter((pool) => !fiscalYear || pool.fiscalYear === Number(fiscalYear))
+        .filter((pool) => !periodNo || pool.periodNo === Number(periodNo))
+    );
   }
 
   if (request.method === "GET" && request.path === "/periods") {

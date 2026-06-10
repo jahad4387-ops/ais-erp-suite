@@ -397,3 +397,20 @@ test("Phase 4 fixed asset foundation migration creates categories, methods, card
   assert.match(migrationText, /CREATE UNIQUE INDEX "FixedAsset_accountSetId_assetNo_key"/);
   assert.match(migrationText, /CREATE INDEX "AssetTransfer_fixedAssetId_transferDate_idx"/);
 });
+
+test("Phase 4 depreciation engine migration creates runs, brake fields, and locked cost-pool outputs", () => {
+  const migrationText = readMigrationText("../prisma/migrations/20260611080000_phase4_depreciation_engine/migration.sql");
+
+  for (const table of ["DepreciationRun", "DepreciationRunLine", "AssetDepreciationCostPoolOutput"]) {
+    assert.match(migrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(migrationText, /ALTER TABLE "FixedAsset" ADD COLUMN "isDepreciationStopped" BOOLEAN NOT NULL DEFAULT false/);
+  assert.match(migrationText, /ALTER TABLE "FixedAsset" ADD COLUMN "depreciationStoppedAt" DATETIME/);
+  assert.match(migrationText, /"dryRun" BOOLEAN NOT NULL DEFAULT true/, "Depreciation runs must support dry-run review.");
+  assert.match(migrationText, /"brakeApplied" BOOLEAN NOT NULL DEFAULT false/, "Run lines must persist net-value brake evidence.");
+  assert.match(migrationText, /"skippedReason" TEXT/, "Run lines must persist time-line skip reasons.");
+  assert.match(migrationText, /"sourceRunId" TEXT NOT NULL/, "Cost-pool outputs must trace locked depreciation runs.");
+  assert.match(migrationText, /"lockedAt" DATETIME NOT NULL/, "Cost-pool outputs must be locked before Phase 3 can consume them.");
+  assert.match(migrationText, /CREATE INDEX "DepreciationRun_accountSetId_fiscalYear_periodNo_idx"/);
+  assert.match(migrationText, /CREATE INDEX "AssetDepreciationCostPoolOutput_accountSetId_fiscalYear_periodNo_idx"/);
+});

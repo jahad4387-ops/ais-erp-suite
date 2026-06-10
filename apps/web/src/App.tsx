@@ -59,6 +59,7 @@ import { PayrollSetup } from './pages/PayrollSetup';
 import { PayrollRuns } from './pages/PayrollRuns';
 import { FixedAssetSetup } from './pages/FixedAssetSetup';
 import { FixedAssets } from './pages/FixedAssets';
+import { DepreciationRuns } from './pages/DepreciationRuns';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -261,6 +262,7 @@ const AppFrame: React.FC = () => {
                   { key: 'payroll-runs', label: <Link to="/payroll-runs">工资批次</Link> },
                   { key: 'fixed-asset-setup', label: <Link to="/fixed-asset-setup">固资基础</Link> },
                   { key: 'fixed-assets', label: <Link to="/fixed-assets">资产卡片</Link> },
+                  { key: 'depreciation-runs', label: <Link to="/depreciation-runs">折旧计提</Link> },
                 ],
               },
               {
@@ -392,6 +394,7 @@ const AppFrame: React.FC = () => {
                 <Route path="/payroll-runs" element={<RequireAuth><PayrollRuns /></RequireAuth>} />
                 <Route path="/fixed-asset-setup" element={<RequireAuth><FixedAssetSetup /></RequireAuth>} />
                 <Route path="/fixed-assets" element={<RequireAuth><FixedAssets /></RequireAuth>} />
+                <Route path="/depreciation-runs" element={<RequireAuth><DepreciationRuns /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />
                 <Route path="/auxiliaries" element={<RequireAuth><Auxiliaries /></RequireAuth>} />

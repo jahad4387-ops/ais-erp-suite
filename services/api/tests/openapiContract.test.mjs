@@ -102,7 +102,11 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/depreciation-methods:",
     "/fixed-assets:",
     "/asset-transfers:",
-    "/asset-value-changes:"
+    "/asset-value-changes:",
+    "/depreciation-runs/dry-run:",
+    "/depreciation-runs:",
+    "/depreciation-runs/{depreciationRunId}/approve:",
+    "/depreciation-runs/{depreciationRunId}/lock:"
   ];
 
   for (const path of writePaths) {
@@ -198,6 +202,9 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "FixedAsset:",
     "AssetTransfer:",
     "AssetValueChange:",
+    "DepreciationRun:",
+    "DepreciationRunLine:",
+    "AssetDepreciationCostPoolOutput:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -425,6 +432,26 @@ test("Phase 4 fixed asset foundation endpoints document setup, cards, transfers,
   assert.match(contract, /serviceStartPeriod:/, "Fixed assets must expose the first depreciation period.");
   assert.match(contract, /new_asset_next_month/, "Fixed assets must document the new-asset depreciation timeline rule.");
   assert.match(contract, /month_end_department/, "Fixed asset transfers must document month-end department ownership.");
+});
+
+test("Phase 4 depreciation engine endpoints document dry-run, brake, locking, and cost-pool outputs", () => {
+  const dryRunBlock = blockAfter("  /depreciation-runs/dry-run:");
+  const runBlock = blockAfter("  /depreciation-runs:");
+  const approveBlock = blockAfter("  /depreciation-runs/{depreciationRunId}/approve:");
+  const lockBlock = blockAfter("  /depreciation-runs/{depreciationRunId}/lock:");
+  const costPoolBlock = blockAfter("  /asset-depreciation-cost-pools:");
+
+  assert.match(dryRunBlock, /x-permission: fixed_asset_depreciation\.manage/);
+  assert.match(dryRunBlock, /DepreciationRun/);
+  assert.match(runBlock, /x-permission: fixed_asset_depreciation\.manage/);
+  assert.match(runBlock, /DepreciationRun/);
+  assert.match(approveBlock, /x-permission: fixed_asset_depreciation\.manage/);
+  assert.match(lockBlock, /x-permission: fixed_asset_depreciation\.manage/);
+  assert.match(costPoolBlock, /x-permission: fixed_asset_depreciation_pool\.view/);
+  assert.match(costPoolBlock, /AssetDepreciationCostPoolOutput/);
+  assert.match(contract, /NEW_ASSET_NOT_STARTED/, "Depreciation dry-run must document new asset timeline skips.");
+  assert.match(contract, /brakeApplied:/, "Depreciation run lines must expose net-value brake evidence.");
+  assert.match(contract, /fixed_asset_depreciation/, "Cost pools must identify fixed asset depreciation source type.");
 });
 
 test("deployment configuration check endpoint is documented", () => {
