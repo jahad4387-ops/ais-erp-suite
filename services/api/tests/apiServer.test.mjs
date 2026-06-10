@@ -1178,7 +1178,8 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
         "purchase_receipt.manage",
         "sales_delivery.manage",
         "purchase_invoice.manage",
-        "sales_invoice.manage"
+        "sales_invoice.manage",
+        "counterparty_ledger.view"
       ]
     },
     "phase2-invoice-role"
@@ -1348,6 +1349,16 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
     path: `/sales-invoices?accountSetId=${accountSet.body.id}`,
     headers: { "Actor-Id": actor.body.id }
   });
+  const payableLedger = await api.handle({
+    method: "GET",
+    path: `/counterparty-ledger?accountSetId=${accountSet.body.id}&direction=ap`,
+    headers: { "Actor-Id": actor.body.id }
+  });
+  const receivableLedger = await api.handle({
+    method: "GET",
+    path: `/counterparty-ledger?accountSetId=${accountSet.body.id}&direction=ar`,
+    headers: { "Actor-Id": actor.body.id }
+  });
 
   assert.equal(purchaseInvoice.status, 201);
   assert.equal(purchaseInvoice.body.status, "confirmed");
@@ -1365,6 +1376,26 @@ test("Phase 2 invoices confirm AP and AR from fulfilled source documents", async
   assert.equal(updatedSalesOrder.body.lines[0].invoicedQuantity, 4);
   assert.deepEqual(purchaseInvoices.body.map((invoice) => invoice.invoiceNo), [purchaseInvoice.body.invoiceNo]);
   assert.deepEqual(salesInvoices.body.map((invoice) => invoice.invoiceNo), [salesInvoice.body.invoiceNo]);
+  assert.equal(payableLedger.status, 200);
+  assert.deepEqual(payableLedger.body.map((entry) => entry.sourceNo), [purchaseInvoice.body.invoiceNo]);
+  assert.equal(payableLedger.body[0].sourceType, "purchase_invoice");
+  assert.equal(payableLedger.body[0].sourceId, purchaseInvoice.body.id);
+  assert.equal(payableLedger.body[0].partnerId, supplier.body.id);
+  assert.equal(payableLedger.body[0].originalAmount, 1160);
+  assert.equal(payableLedger.body[0].remainingAmount, 1160);
+  assert.equal(payableLedger.body[0].glAccountCode, "2202");
+  assert.equal(payableLedger.body[0].auxiliaryType, "supplier");
+  assert.equal(payableLedger.body[0].auxiliaryPartnerId, supplier.body.id);
+  assert.equal(receivableLedger.status, 200);
+  assert.deepEqual(receivableLedger.body.map((entry) => entry.sourceNo), [salesInvoice.body.invoiceNo]);
+  assert.equal(receivableLedger.body[0].sourceType, "sales_invoice");
+  assert.equal(receivableLedger.body[0].sourceId, salesInvoice.body.id);
+  assert.equal(receivableLedger.body[0].partnerId, customer.body.id);
+  assert.equal(receivableLedger.body[0].originalAmount, 2120);
+  assert.equal(receivableLedger.body[0].remainingAmount, 2120);
+  assert.equal(receivableLedger.body[0].glAccountCode, "1122");
+  assert.equal(receivableLedger.body[0].auxiliaryType, "customer");
+  assert.equal(receivableLedger.body[0].auxiliaryPartnerId, customer.body.id);
   assert.ok(api.state.auditLogs.some((log) => log.action === "purchase_invoice.confirm" && log.objectId === purchaseInvoice.body.id));
   assert.ok(api.state.auditLogs.some((log) => log.action === "sales_invoice.confirm" && log.objectId === salesInvoice.body.id));
 });

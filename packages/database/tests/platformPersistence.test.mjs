@@ -19,6 +19,7 @@ function createFakePrisma() {
   const salesDeliveries = new Map();
   const purchaseInvoices = new Map();
   const salesInvoices = new Map();
+  const counterpartyLedgerEntries = new Map();
   const periods = new Map();
   const chartOfAccounts = new Map();
   const auxiliaryTypes = new Map();
@@ -334,6 +335,24 @@ function createFakePrisma() {
       findMany: async ({ where, include } = {}) => {
         const rows = [...salesInvoices.values()].filter((invoice) => !where?.accountSetId || invoice.accountSetId === where.accountSetId);
         return rows.map((invoice) => (include?.lines ? invoice : { ...invoice, lines: undefined }));
+      }
+    },
+    counterpartyLedgerEntry: {
+      create: async ({ data, include }) => {
+        const entry = {
+          ...data,
+          partner: partners.get(data.partnerId)
+        };
+        counterpartyLedgerEntries.set(entry.id, entry);
+        return include?.partner ? entry : { ...entry, partner: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        let rows = [...counterpartyLedgerEntries.values()];
+        if (where?.accountSetId) rows = rows.filter((entry) => entry.accountSetId === where.accountSetId);
+        if (where?.direction) rows = rows.filter((entry) => entry.direction === where.direction);
+        if (where?.partnerId) rows = rows.filter((entry) => entry.partnerId === where.partnerId);
+        if (where?.status) rows = rows.filter((entry) => entry.status === where.status);
+        return rows.map((entry) => (include?.partner ? entry : { ...entry, partner: undefined }));
       }
     },
     accountingPeriod: {
@@ -1098,8 +1117,48 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
     evidenceRefs: ["attachment:out-001"],
     lines: [{ lineNo: 1, salesOrderLineId: "sales-order-line:sales-order:invoice:1", itemCode: "SKU-INV", itemName: "Invoice SKU", quantity: 4, unitPrice: 500, taxRate: 0.06, taxAmount: 120, totalAmount: 2120 }]
   });
+  await store.createCounterpartyLedgerEntry({
+    id: "counterparty-ledger:ap:1",
+    accountSetId: accountSet.id,
+    partnerId: supplier.id,
+    direction: "ap",
+    sourceType: "purchase_invoice",
+    sourceId: purchaseInvoice.id,
+    sourceNo: purchaseInvoice.invoiceNo,
+    documentDate: purchaseInvoice.invoiceDate,
+    dueDate: purchaseInvoice.dueDate,
+    originalAmount: purchaseInvoice.payableAmount,
+    settledAmount: 0,
+    remainingAmount: purchaseInvoice.payableAmount,
+    status: "open",
+    glAccountCode: "2202",
+    auxiliaryType: "supplier",
+    auxiliaryPartnerId: supplier.id,
+    createdBy: "ap"
+  });
+  await store.createCounterpartyLedgerEntry({
+    id: "counterparty-ledger:ar:1",
+    accountSetId: accountSet.id,
+    partnerId: customer.id,
+    direction: "ar",
+    sourceType: "sales_invoice",
+    sourceId: salesInvoice.id,
+    sourceNo: salesInvoice.invoiceNo,
+    documentDate: salesInvoice.invoiceDate,
+    dueDate: salesInvoice.dueDate,
+    originalAmount: salesInvoice.receivableAmount,
+    settledAmount: 0,
+    remainingAmount: salesInvoice.receivableAmount,
+    status: "open",
+    glAccountCode: "1122",
+    auxiliaryType: "customer",
+    auxiliaryPartnerId: customer.id,
+    createdBy: "ar"
+  });
   const purchaseInvoices = await store.listPurchaseInvoices(accountSet.id);
   const salesInvoices = await store.listSalesInvoices(accountSet.id);
+  const payableLedger = await store.listCounterpartyLedgerEntries(accountSet.id, { direction: "ap" });
+  const receivableLedger = await store.listCounterpartyLedgerEntries(accountSet.id, { direction: "ar" });
 
   assert.equal(purchaseInvoice.purchaseReceiptNo, "PR-202603-001");
   assert.equal(purchaseInvoice.payableAmount, 1160);
@@ -1110,6 +1169,16 @@ test("Prisma platform persistence stores Phase 2 AP and AR invoice confirmations
   assert.deepEqual(salesInvoice.evidenceRefs, ["attachment:out-001"]);
   assert.deepEqual(purchaseInvoices.map((row) => row.invoiceNo), ["PI-202603-001"]);
   assert.deepEqual(salesInvoices.map((row) => row.invoiceNo), ["SI-202603-001"]);
+  assert.deepEqual(payableLedger.map((row) => row.sourceNo), ["PI-202603-001"]);
+  assert.equal(payableLedger[0].remainingAmount, 1160);
+  assert.equal(payableLedger[0].glAccountCode, "2202");
+  assert.equal(payableLedger[0].auxiliaryType, "supplier");
+  assert.equal(payableLedger[0].auxiliaryPartnerId, supplier.id);
+  assert.deepEqual(receivableLedger.map((row) => row.sourceNo), ["SI-202603-001"]);
+  assert.equal(receivableLedger[0].remainingAmount, 2120);
+  assert.equal(receivableLedger[0].glAccountCode, "1122");
+  assert.equal(receivableLedger[0].auxiliaryType, "customer");
+  assert.equal(receivableLedger[0].auxiliaryPartnerId, customer.id);
 });
 
 test("Prisma platform persistence stores accounting periods and lifecycle status", async () => {

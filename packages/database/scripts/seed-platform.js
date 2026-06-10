@@ -33,6 +33,7 @@ const permissions = [
   "sales_delivery.manage",
   "purchase_invoice.manage",
   "sales_invoice.manage",
+  "counterparty_ledger.view",
   "auxiliary.manage",
   "opening_balance.manage",
   "opening_balance.view",
@@ -60,6 +61,7 @@ const roleTemplates = {
     "sales_delivery.manage",
     "purchase_invoice.manage",
     "sales_invoice.manage",
+    "counterparty_ledger.view",
     "bank_reconciliation.create",
     "bank_reconciliation.match",
     "ledger.view",
@@ -68,7 +70,7 @@ const roleTemplates = {
   制单员: ["voucher.create", "voucher.update_own", "voucher.submit", "voucher.view", "attachment.upload"],
   审核员: ["voucher.approve", "voucher.reject", "voucher.view"],
   记账员: ["voucher.post", "voucher.view", "bank_reconciliation.create", "bank_reconciliation.match", "ledger.view", "report.view"],
-  查询用户: ["voucher.view", "ledger.view", "report.view"],
+  查询用户: ["voucher.view", "ledger.view", "counterparty_ledger.view", "report.view"],
   审计员: ["voucher.view", "ledger.view", "audit_log.view"]
 };
 

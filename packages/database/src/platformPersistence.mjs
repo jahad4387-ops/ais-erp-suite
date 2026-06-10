@@ -264,6 +264,38 @@ function salesInvoiceToDto(invoice) {
   };
 }
 
+function counterpartyLedgerEntryToDto(entry) {
+  return {
+    id: entry.id,
+    accountSetId: entry.accountSetId,
+    partnerId: entry.partnerId,
+    partnerName: entry.partner?.name ?? null,
+    direction: entry.direction,
+    sourceType: entry.sourceType,
+    sourceId: entry.sourceId,
+    sourceNo: entry.sourceNo,
+    documentDate: dateOnly(entry.documentDate),
+    dueDate: dateOnly(entry.dueDate),
+    originalAmount: entry.originalAmount,
+    settledAmount: entry.settledAmount,
+    remainingAmount: entry.remainingAmount,
+    status: entry.status,
+    glAccountCode: entry.glAccountCode,
+    auxiliaryType: entry.auxiliaryType,
+    auxiliaryPartnerId: entry.auxiliaryPartnerId,
+    createdBy: entry.createdBy
+  };
+}
+
+function counterpartyLedgerWhere(accountSetId, filters = {}) {
+  return {
+    ...(accountSetId ? { accountSetId } : {}),
+    ...(filters.direction ? { direction: filters.direction } : {}),
+    ...(filters.partnerId ? { partnerId: filters.partnerId } : {}),
+    ...(filters.status ? { status: filters.status } : {})
+  };
+}
+
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
@@ -1110,6 +1142,42 @@ export function createPlatformPersistence(prisma) {
         include: { customer: true, salesDelivery: true, lines: true }
       });
       return invoices.map(salesInvoiceToDto).sort((left, right) => left.invoiceNo.localeCompare(right.invoiceNo));
+    },
+
+    async createCounterpartyLedgerEntry(entry) {
+      const saved = await prisma.counterpartyLedgerEntry.create({
+        data: {
+          id: entry.id,
+          accountSetId: entry.accountSetId,
+          partnerId: entry.partnerId,
+          direction: entry.direction,
+          sourceType: entry.sourceType,
+          sourceId: entry.sourceId,
+          sourceNo: entry.sourceNo,
+          documentDate: dateTime(entry.documentDate),
+          dueDate: entry.dueDate ? dateTime(entry.dueDate) : null,
+          originalAmount: entry.originalAmount,
+          settledAmount: entry.settledAmount ?? 0,
+          remainingAmount: entry.remainingAmount,
+          status: entry.status ?? "open",
+          glAccountCode: entry.glAccountCode,
+          auxiliaryType: entry.auxiliaryType,
+          auxiliaryPartnerId: entry.auxiliaryPartnerId,
+          createdBy: entry.createdBy
+        },
+        include: { partner: true }
+      });
+      return counterpartyLedgerEntryToDto(saved);
+    },
+
+    async listCounterpartyLedgerEntries(accountSetId, filters = {}) {
+      const entries = await prisma.counterpartyLedgerEntry.findMany({
+        where: counterpartyLedgerWhere(accountSetId, filters),
+        include: { partner: true }
+      });
+      return entries
+        .map(counterpartyLedgerEntryToDto)
+        .sort((left, right) => left.documentDate.localeCompare(right.documentDate) || left.sourceNo.localeCompare(right.sourceNo));
     },
 
     async createAccount(account) {

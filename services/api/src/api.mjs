@@ -77,12 +77,13 @@ const DEFAULT_PERMISSION_CODES = [
   "purchase_receipt.manage",
   "sales_delivery.manage",
   "purchase_invoice.manage",
-  "sales_invoice.manage"
+  "sales_invoice.manage",
+  "counterparty_ledger.view"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
     "viewer",
-    new Set(["account_set.view", "period.view", "account.view", "voucher.view", "ledger.view", "audit_log.view"])
+    new Set(["account_set.view", "period.view", "account.view", "voucher.view", "ledger.view", "counterparty_ledger.view", "audit_log.view"])
   ]
 ]);
 const DEFAULT_USERS = new Map([
@@ -106,7 +107,7 @@ const DEFAULT_ROLES = [
   {
     id: "role:viewer",
     name: "查询用户",
-    permissionCodes: ["account_set.view", "period.view", "account.view", "voucher.view", "ledger.view", "report.view"]
+    permissionCodes: ["account_set.view", "period.view", "account.view", "voucher.view", "ledger.view", "counterparty_ledger.view", "report.view"]
   }
 ];
 
@@ -571,6 +572,9 @@ function permissionFor(request) {
   if (segments[0] === "sales-invoices") {
     return "sales_invoice.manage";
   }
+  if (segments[0] === "counterparty-ledger") {
+    return "counterparty_ledger.view";
+  }
   if (request.method === "POST" && request.path === "/attachments/upload") return "attachment.upload";
   if (request.method === "POST" && request.path === "/attachment-links") return "attachment.upload";
   if (request.method === "DELETE" && segments.length === 2 && segments[0] === "attachments") return "attachment.delete";
@@ -655,6 +659,7 @@ function createState(options = {}) {
     salesDeliveries: new Map(),
     purchaseInvoices: new Map(),
     salesInvoices: new Map(),
+    counterpartyLedgerEntries: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -1158,6 +1163,79 @@ async function listSalesInvoices(state, accountSetId) {
     invoicesById.set(invoice.id, invoice);
   }
   return [...invoicesById.values()].sort((left, right) => left.invoiceNo.localeCompare(right.invoiceNo));
+}
+
+async function listCounterpartyLedgerEntries(state, accountSetId, filters = {}) {
+  const persistedEntries = state.config.platformStore?.listCounterpartyLedgerEntries
+    ? await state.config.platformStore.listCounterpartyLedgerEntries(accountSetId, filters)
+    : [];
+  const entriesById = new Map(persistedEntries.map((entry) => [entry.id, entry]));
+  for (const entry of state.counterpartyLedgerEntries.values()) {
+    if (accountSetId && entry.accountSetId !== accountSetId) continue;
+    if (filters.direction && entry.direction !== filters.direction) continue;
+    if (filters.partnerId && entry.partnerId !== filters.partnerId) continue;
+    if (filters.status && entry.status !== filters.status) continue;
+    entriesById.set(entry.id, entry);
+  }
+  return [...entriesById.values()].sort(
+    (left, right) => String(left.documentDate).localeCompare(String(right.documentDate)) || left.sourceNo.localeCompare(right.sourceNo)
+  );
+}
+
+async function createCounterpartyLedgerEntry(state, entry) {
+  const savedEntry = state.config.platformStore?.createCounterpartyLedgerEntry
+    ? await state.config.platformStore.createCounterpartyLedgerEntry(entry)
+    : entry;
+  state.counterpartyLedgerEntries.set(savedEntry.id, savedEntry);
+  return savedEntry;
+}
+
+function payableLedgerEntryFromInvoice(invoice) {
+  const amount = Number(invoice.payableAmount ?? invoice.totalAmount ?? 0);
+  return {
+    id: `counterparty-ledger:ap:${invoice.id}`,
+    accountSetId: invoice.accountSetId,
+    partnerId: invoice.supplierId,
+    partnerName: invoice.supplierName ?? null,
+    direction: "ap",
+    sourceType: "purchase_invoice",
+    sourceId: invoice.id,
+    sourceNo: invoice.invoiceNo,
+    documentDate: invoice.invoiceDate,
+    dueDate: invoice.dueDate ?? null,
+    originalAmount: amount,
+    settledAmount: 0,
+    remainingAmount: amount,
+    status: "open",
+    glAccountCode: "2202",
+    auxiliaryType: "supplier",
+    auxiliaryPartnerId: invoice.supplierId,
+    createdBy: invoice.createdBy
+  };
+}
+
+function receivableLedgerEntryFromInvoice(invoice) {
+  const amount = Number(invoice.receivableAmount ?? invoice.totalAmount ?? 0);
+  return {
+    id: `counterparty-ledger:ar:${invoice.id}`,
+    accountSetId: invoice.accountSetId,
+    partnerId: invoice.customerId,
+    partnerName: invoice.customerName ?? null,
+    direction: "ar",
+    sourceType: "sales_invoice",
+    sourceId: invoice.id,
+    sourceNo: invoice.invoiceNo,
+    documentDate: invoice.invoiceDate,
+    dueDate: invoice.dueDate ?? null,
+    originalAmount: amount,
+    settledAmount: 0,
+    remainingAmount: amount,
+    status: "open",
+    glAccountCode: "1122",
+    auxiliaryType: "customer",
+    auxiliaryPartnerId: invoice.customerId,
+    createdBy: invoice.createdBy
+  };
 }
 
 function normalizeFulfillmentLines(order, lines = [], { sourceLineIdField, executedQuantityField }) {
@@ -2343,6 +2421,7 @@ async function route(request, state) {
       };
       const savedInvoice = platformStore?.createPurchaseInvoice ? await platformStore.createPurchaseInvoice(invoice) : invoice;
       state.purchaseInvoices.set(savedInvoice.id, savedInvoice);
+      await createCounterpartyLedgerEntry(state, payableLedgerEntryFromInvoice(savedInvoice));
       const updatedOrder = applyOrderInvoicing(order, lines);
       const savedOrder = platformStore?.updatePurchaseOrderStatus
         ? await platformStore.updatePurchaseOrderStatus(updatedOrder)
@@ -2425,6 +2504,7 @@ async function route(request, state) {
       };
       const savedInvoice = platformStore?.createSalesInvoice ? await platformStore.createSalesInvoice(invoice) : invoice;
       state.salesInvoices.set(savedInvoice.id, savedInvoice);
+      await createCounterpartyLedgerEntry(state, receivableLedgerEntryFromInvoice(savedInvoice));
       const updatedOrder = applyOrderInvoicing(order, lines);
       const savedOrder = platformStore?.updateSalesOrderStatus ? await platformStore.updateSalesOrderStatus(updatedOrder) : updatedOrder;
       state.salesOrders.set(savedOrder.id, savedOrder);
@@ -2436,6 +2516,24 @@ async function route(request, state) {
       });
       return jsonResponse(201, savedInvoice);
     }
+  }
+
+  if (segments.length === 1 && segments[0] === "counterparty-ledger" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    if (!accountSetId) {
+      throw new Error("accountSetId is required.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const filters = {
+      direction: query.get("direction") ?? null,
+      partnerId: query.get("partnerId") ?? null,
+      status: query.get("status") ?? null
+    };
+    return jsonResponse(200, await listCounterpartyLedgerEntries(state, accountSetId, filters));
   }
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "periods" && segments[2] === "open") {

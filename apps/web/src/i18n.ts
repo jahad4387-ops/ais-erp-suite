@@ -100,6 +100,7 @@ export const permissionText: Record<string, string> = {
   'sales_delivery.manage': '管理销售出库',
   'purchase_invoice.manage': '管理采购发票',
   'sales_invoice.manage': '管理销售发票',
+  'counterparty_ledger.view': '查看往来明细',
   'auxiliary.manage': '管理辅助核算',
   'opening_balance.manage': '管理期初余额',
   'opening_balance.view': '查看期初余额',

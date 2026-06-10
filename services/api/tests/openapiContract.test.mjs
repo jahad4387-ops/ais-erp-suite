@@ -96,6 +96,7 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "SalesDelivery:",
     "PurchaseInvoice:",
     "SalesInvoice:",
+    "CounterpartyLedgerEntry:",
     "AccountingPeriod:",
     "Account:",
     "AccountCodeRule:",
@@ -123,6 +124,16 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
   for (const schema of requiredSchemas) {
     assert.match(contract, new RegExp(`^    ${schema}`, "m"), `${schema} schema must exist.`);
   }
+});
+
+test("Phase 2 counterparty ledger endpoint is documented for AP and AR auxiliary mappings", () => {
+  const block = blockAfter("  /counterparty-ledger:");
+
+  assert.match(block, /x-permission: counterparty_ledger\.view/);
+  assert.match(block, /direction/);
+  assert.match(block, /CounterpartyLedgerEntry/);
+  assert.match(contract, /glAccountCode:/, "Counterparty ledger schema must expose the mapped GL account.");
+  assert.match(contract, /auxiliaryPartnerId:/, "Counterparty ledger schema must expose the mapped auxiliary partner.");
 });
 
 test("deployment configuration check endpoint is documented", () => {

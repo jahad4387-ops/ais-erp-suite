@@ -22,6 +22,10 @@ const phase2InvoiceMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260610120000_phase2_invoice_confirmation/migration.sql", import.meta.url)
 );
 const phase2InvoiceMigrationText = phase2InvoiceMigrationSql.toString("utf8");
+const phase2CounterpartyLedgerMigrationSql = readFileSync(
+  new URL("../prisma/migrations/20260610130000_phase2_counterparty_ledger/migration.sql", import.meta.url)
+);
+const phase2CounterpartyLedgerMigrationText = phase2CounterpartyLedgerMigrationSql.toString("utf8");
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 test("Phase 1 migration is UTF-8 SQL, not UTF-16 PowerShell output", () => {
@@ -125,4 +129,24 @@ test("Phase 2 invoice migration creates payable and receivable confirmation docu
   assert.match(phase2InvoiceMigrationText, /"receivableAmount" REAL NOT NULL DEFAULT 0/, "Sales invoices must confirm AR amount.");
   assert.match(phase2InvoiceMigrationText, /CREATE UNIQUE INDEX "PurchaseInvoice_accountSetId_invoiceNo_key"/);
   assert.match(phase2InvoiceMigrationText, /CREATE UNIQUE INDEX "SalesInvoice_accountSetId_invoiceNo_key"/);
+});
+
+test("Phase 2 counterparty ledger migration maps AP and AR to GL auxiliary dimensions", () => {
+  assert.match(
+    phase2CounterpartyLedgerMigrationText,
+    /CREATE TABLE "CounterpartyLedgerEntry"/,
+    "Counterparty ledger entries must be persisted."
+  );
+  assert.match(phase2CounterpartyLedgerMigrationText, /"direction" TEXT NOT NULL/, "Entry direction must distinguish AP and AR.");
+  assert.match(
+    phase2CounterpartyLedgerMigrationText,
+    /"sourceType" TEXT NOT NULL/,
+    "Entries must retain purchase_invoice or sales_invoice source type."
+  );
+  assert.match(phase2CounterpartyLedgerMigrationText, /"remainingAmount" REAL NOT NULL DEFAULT 0/);
+  assert.match(phase2CounterpartyLedgerMigrationText, /"glAccountCode" TEXT NOT NULL/);
+  assert.match(phase2CounterpartyLedgerMigrationText, /"auxiliaryType" TEXT NOT NULL/);
+  assert.match(phase2CounterpartyLedgerMigrationText, /"auxiliaryPartnerId" TEXT NOT NULL/);
+  assert.match(phase2CounterpartyLedgerMigrationText, /CREATE INDEX "CounterpartyLedgerEntry_accountSetId_direction_status_idx"/);
+  assert.match(phase2CounterpartyLedgerMigrationText, /CREATE INDEX "CounterpartyLedgerEntry_partnerId_idx"/);
 });

@@ -1924,6 +1924,45 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /counterparty-ledger:
+    get:
+      summary: List Phase 2 AP and AR counterparty ledger entries with GL auxiliary mappings.
+      x-permission: counterparty_ledger.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: direction
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ap, ar]
+        - name: partnerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [open, partially_settled, settled]
+      responses:
+        "200":
+          description: Counterparty ledger entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CounterpartyLedgerEntry"
+
   /attachments/upload:
     post:
       summary: Upload an attachment and return its central status.
@@ -3453,6 +3492,53 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/InvoiceLine"
+
+    CounterpartyLedgerEntry:
+      type: object
+      required: [id, accountSetId, partnerId, direction, sourceType, sourceId, sourceNo, documentDate, originalAmount, settledAmount, remainingAmount, status, glAccountCode, auxiliaryType, auxiliaryPartnerId, createdBy]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        partnerId:
+          type: string
+        partnerName:
+          type: string
+        direction:
+          type: string
+          enum: [ap, ar]
+        sourceType:
+          type: string
+          enum: [purchase_invoice, sales_invoice]
+        sourceId:
+          type: string
+        sourceNo:
+          type: string
+        documentDate:
+          type: string
+          format: date
+        dueDate:
+          type: string
+          format: date
+        originalAmount:
+          type: number
+        settledAmount:
+          type: number
+        remainingAmount:
+          type: number
+        status:
+          type: string
+          enum: [open, partially_settled, settled]
+        glAccountCode:
+          type: string
+        auxiliaryType:
+          type: string
+          enum: [supplier, customer]
+        auxiliaryPartnerId:
+          type: string
+        createdBy:
+          type: string
 
     AccountingPeriod:
       type: object

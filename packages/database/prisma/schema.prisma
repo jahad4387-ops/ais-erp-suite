@@ -43,6 +43,7 @@ model AccountSet {
   salesDeliveries    SalesDelivery[]
   purchaseInvoices   PurchaseInvoice[]
   salesInvoices      SalesInvoice[]
+  counterpartyLedgerEntries CounterpartyLedgerEntry[]
 }
 
 model User {
@@ -478,6 +479,7 @@ model Partner {
   salesDeliveries  SalesDelivery[]   @relation("SalesDeliveryCustomer")
   purchaseInvoices PurchaseInvoice[] @relation("PurchaseInvoiceSupplier")
   salesInvoices    SalesInvoice[]    @relation("SalesInvoiceCustomer")
+  counterpartyLedgerEntries CounterpartyLedgerEntry[]
 
   @@unique([accountSetId, code])
   @@index([accountSetId, partnerType])
@@ -760,4 +762,34 @@ model SalesInvoiceLine {
   salesOrderLine SalesOrderLine @relation(fields: [salesOrderLineId], references: [id])
 
   @@unique([salesInvoiceId, lineNo])
+}
+
+model CounterpartyLedgerEntry {
+  id                 String   @id @default(uuid())
+  accountSetId       String
+  partnerId          String
+  direction          String
+  sourceType         String
+  sourceId           String
+  sourceNo           String
+  documentDate       DateTime
+  dueDate            DateTime?
+  originalAmount     Float    @default(0)
+  settledAmount      Float    @default(0)
+  remainingAmount    Float    @default(0)
+  status             String   @default("open")
+  glAccountCode      String
+  auxiliaryType      String
+  auxiliaryPartnerId String
+  createdBy          String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  partner    Partner    @relation(fields: [partnerId], references: [id])
+
+  @@unique([sourceType, sourceId])
+  @@index([accountSetId, direction, status])
+  @@index([partnerId])
+  @@index([dueDate])
 }
