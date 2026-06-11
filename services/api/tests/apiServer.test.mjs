@@ -8784,3 +8784,178 @@ test("Phase 5 report exports and AI interpretations are tied to snapshot evidenc
   assert.equal(exportList.body.length, 1);
   assert.equal(interpretations.body.length, 1);
 });
+
+test("Phase 5 management analysis aggregates cross-module metrics with drilldowns", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P5MA",
+      name: "Phase 5 Management Analysis",
+      companyName: "Phase 5 Management Analysis Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase5-management-analysis-account-set"
+  );
+  const accountSetId = accountSet.body.id;
+  api.state.purchaseOrders.set("purchase-order:p5ma", {
+    id: "purchase-order:p5ma",
+    accountSetId,
+    orderNo: "PO-202606-001",
+    orderDate: "2026-06-03",
+    totalAmount: 1200,
+    status: "approved",
+    supplierId: "supplier:p5ma",
+    supplierName: "North Supplier",
+    lines: []
+  });
+  api.state.salesInvoices.set("sales-invoice:p5ma", {
+    id: "sales-invoice:p5ma",
+    accountSetId,
+    invoiceNo: "SI-202606-001",
+    invoiceDate: "2026-06-10",
+    customerId: "customer:p5ma",
+    customerName: "Retail Customer",
+    totalAmount: 3000,
+    receivableAmount: 3000,
+    lines: []
+  });
+  api.state.inventoryMovements.set("inventory-movement:p5ma-cogs", {
+    id: "inventory-movement:p5ma-cogs",
+    accountSetId,
+    documentNo: "INV-COGS-001",
+    movementType: "outbound",
+    businessType: "sales_delivery",
+    fiscalYear: 2026,
+    periodNo: 6,
+    totalAmount: 700,
+    lines: [{ itemCode: "FG-A", itemName: "Finished Goods A", quantity: 10, amount: 700 }]
+  });
+  api.state.inventoryBalances.set("inventory-balance:p5ma", {
+    id: "inventory-balance:p5ma",
+    accountSetId,
+    itemId: "inventory-item:p5ma",
+    itemCode: "FG-A",
+    itemName: "Finished Goods A",
+    warehouseId: "warehouse:p5ma",
+    warehouseCode: "MAIN",
+    quantity: 25,
+    amount: 2500,
+    updatedAt: "2026-02-01"
+  });
+  api.state.counterpartyLedgerEntries.set("counterparty-ledger:ar:p5ma", {
+    id: "counterparty-ledger:ar:p5ma",
+    accountSetId,
+    direction: "ar",
+    partnerId: "customer:p5ma",
+    partnerName: "Retail Customer",
+    sourceType: "sales_invoice",
+    sourceId: "sales-invoice:p5ma",
+    sourceNo: "SI-202606-001",
+    documentDate: "2026-06-10",
+    dueDate: "2026-05-15",
+    originalAmount: 3000,
+    settledAmount: 2200,
+    remainingAmount: 800,
+    status: "open"
+  });
+  api.state.counterpartyLedgerEntries.set("counterparty-ledger:ap:p5ma", {
+    id: "counterparty-ledger:ap:p5ma",
+    accountSetId,
+    direction: "ap",
+    partnerId: "supplier:p5ma",
+    partnerName: "North Supplier",
+    sourceType: "purchase_invoice",
+    sourceId: "purchase-invoice:p5ma",
+    sourceNo: "PI-202606-001",
+    documentDate: "2026-06-08",
+    dueDate: "2026-06-30",
+    originalAmount: 500,
+    settledAmount: 0,
+    remainingAmount: 500,
+    status: "open"
+  });
+  api.state.journalEntries.push(
+    {
+      id: "journal-entry:p5ma-cash-in",
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      accountCode: "1002",
+      accountName: "Bank Deposits",
+      debit: 1000,
+      credit: 0,
+      voucherId: "voucher:p5ma-cash-in"
+    },
+    {
+      id: "journal-entry:p5ma-cash-out",
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      accountCode: "1002",
+      accountName: "Bank Deposits",
+      debit: 0,
+      credit: 200,
+      voucherId: "voucher:p5ma-cash-out"
+    }
+  );
+  api.state.payrollCostPools.set("payroll-cost-pool:p5ma", {
+    id: "payroll-cost-pool:p5ma",
+    accountSetId,
+    fiscalYear: 2026,
+    periodNo: 6,
+    departmentId: "D-SALES",
+    costType: "direct_labor",
+    amount: 900,
+    lockedAt: "now"
+  });
+  api.state.assetDepreciationCostPools.set("asset-depreciation-cost-pool:p5ma", {
+    id: "asset-depreciation-cost-pool:p5ma",
+    accountSetId,
+    fiscalYear: 2026,
+    periodNo: 6,
+    departmentId: "D-SALES",
+    costType: "fixed_asset_depreciation",
+    amount: 300,
+    lockedAt: "now"
+  });
+
+  const analysis = await request(
+    api,
+    "GET",
+    `/management-analysis?accountSetId=${accountSetId}&fiscalYear=2026&periodNo=6&asOfDate=2026-06-30`,
+    null,
+    null
+  );
+
+  assert.equal(analysis.status, 200);
+  assert.equal(analysis.body.accountSetId, accountSetId);
+  assert.deepEqual(
+    analysis.body.metrics.map((metric) => metric.key),
+    [
+      "purchaseTrend",
+      "salesGrossMargin",
+      "inventoryTurnover",
+      "counterpartyAging",
+      "cashFlow",
+      "laborCost",
+      "depreciationCost",
+      "operatingOverview"
+    ]
+  );
+  assert.equal(analysis.body.metrics.find((metric) => metric.key === "purchaseTrend").amount, 1200);
+  assert.equal(analysis.body.metrics.find((metric) => metric.key === "salesGrossMargin").amount, 2300);
+  assert.equal(analysis.body.metrics.find((metric) => metric.key === "cashFlow").amount, 800);
+  assert.equal(analysis.body.metrics.find((metric) => metric.key === "laborCost").amount, 900);
+  assert.equal(analysis.body.metrics.find((metric) => metric.key === "depreciationCost").amount, 300);
+  assert.ok(analysis.body.metrics.every((metric) => metric.drilldown?.path && metric.drilldown.sourceType));
+  assert.ok(analysis.body.warnings.some((warning) => warning.code === "OVERDUE_AR" && warning.evidenceRefs.includes("counterparty-ledger:ar:p5ma")));
+  assert.ok(analysis.body.warnings.some((warning) => warning.code === "INVENTORY_STAGNATION" && warning.drilldown.path.includes("/inventory-ledger")));
+  assert.ok(analysis.body.drilldowns.salesGrossMargin.rows.some((row) => row.sourceNo === "SI-202606-001"));
+  assert.ok(analysis.body.drilldowns.cashFlow.rows.some((row) => row.sourceId === "voucher:p5ma-cash-in"));
+});

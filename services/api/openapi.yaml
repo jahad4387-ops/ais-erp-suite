@@ -1842,6 +1842,41 @@ paths:
                 items:
                   $ref: "#/components/schemas/AiReportInterpretation"
 
+  /management-analysis:
+    get:
+      summary: Build Phase 5 management analysis metrics, warnings, and drilldown rows.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: fiscalYear
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: periodNo
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: asOfDate
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cross-module management analysis for purchaseTrend, salesGrossMargin, inventoryTurnover, counterpartyAging, cashFlow, laborCost, depreciationCost, and operatingOverview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagementAnalysis"
+
   /audit-logs:
     get:
       summary: Query audit logs.
@@ -10455,6 +10490,113 @@ components:
           type: string
         createdAt:
           type: string
+
+    ManagementAnalysis:
+      type: object
+      required: [accountSetId, fiscalYear, periodNo, asOfDate, metrics, warnings, drilldowns]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        asOfDate:
+          type: string
+        metrics:
+          type: array
+          items:
+            $ref: "#/components/schemas/ManagementAnalysisMetric"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ManagementAnalysisWarning"
+        drilldowns:
+          type: object
+          description: Drilldown row groups keyed by purchaseTrend, salesGrossMargin, inventoryTurnover, counterpartyAging, cashFlow, laborCost, depreciationCost, and operatingOverview.
+          additionalProperties:
+            type: object
+            properties:
+              rows:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ManagementAnalysisDrilldownRow"
+
+    ManagementAnalysisMetric:
+      type: object
+      required: [key, label, amount, count, drilldown]
+      properties:
+        key:
+          type: string
+          enum: [purchaseTrend, salesGrossMargin, inventoryTurnover, counterpartyAging, cashFlow, laborCost, depreciationCost, operatingOverview]
+        label:
+          type: string
+        amount:
+          type: number
+        count:
+          type: integer
+        denominatorAmount:
+          type: number
+        ratio:
+          type: number
+        overdueAmount:
+          type: number
+        drilldown:
+          $ref: "#/components/schemas/ManagementAnalysisDrilldown"
+
+    ManagementAnalysisWarning:
+      type: object
+      required: [code, severity, message, evidenceRefs, drilldown]
+      properties:
+        code:
+          type: string
+          enum: [OVERDUE_AR, INVENTORY_STAGNATION]
+        severity:
+          type: string
+          enum: [warning, blocking]
+        message:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        drilldown:
+          $ref: "#/components/schemas/ManagementAnalysisDrilldown"
+
+    ManagementAnalysisDrilldown:
+      type: object
+      required: [sourceType, path]
+      properties:
+        sourceType:
+          type: string
+        path:
+          type: string
+
+    ManagementAnalysisDrilldownRow:
+      type: object
+      properties:
+        sourceType:
+          type: string
+        sourceId:
+          type: string
+        sourceNo:
+          type: string
+        partnerName:
+          type: string
+        itemName:
+          type: string
+        amount:
+          type: number
+        remainingAmount:
+          type: number
+        quantity:
+          type: number
+        documentDate:
+          type: string
+        dueDate:
+          type: string
+        daysPastDue:
+          type: integer
 
     CreateAgentActionRequest:
       type: object

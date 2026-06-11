@@ -581,6 +581,9 @@ function permissionFor(request) {
   if (segments[0] === "report-approvals") {
     return request.method === "GET" ? "report.view" : "report_approval.manage";
   }
+  if (segments[0] === "management-analysis") {
+    return "report.view";
+  }
   if (segments[0] === "report-exports" || segments[0] === "ai-report-interpretations") {
     return "report.view";
   }
@@ -4112,6 +4115,206 @@ async function approveReportApproval(state, approvalId, body, actorId) {
 
 function publicAiReportInterpretation(interpretation) {
   return cloneReportPayload(interpretation);
+}
+
+function isInFiscalPeriod(row, fiscalYear, periodNo, dateField = null) {
+  if (Number(row.fiscalYear) === Number(fiscalYear) && Number(row.periodNo) === Number(periodNo)) {
+    return true;
+  }
+  if (!dateField || !row[dateField]) {
+    return false;
+  }
+  const periodKey = `${fiscalYear}-${String(periodNo).padStart(2, "0")}`;
+  return String(row[dateField]).startsWith(periodKey);
+}
+
+function cashLikeAccountCodes(state, accountSetId) {
+  const configuredCodes = listAccounts(state)
+    .filter((account) => account.accountSetId === accountSetId && (account.isCash || account.isBank))
+    .map((account) => account.code);
+  return new Set([...configuredCodes, "1001", "1002"]);
+}
+
+function metric(key, label, amount, count, sourceType, path, extra = {}) {
+  return {
+    key,
+    label,
+    amount: roundAmount(amount),
+    count,
+    drilldown: { sourceType, path },
+    ...extra
+  };
+}
+
+async function buildManagementAnalysis(state, { accountSetId, fiscalYear, periodNo, asOfDate }) {
+  const purchaseOrders = (await listPurchaseOrders(state, accountSetId)).filter((order) => isInFiscalPeriod(order, fiscalYear, periodNo, "orderDate"));
+  const salesInvoices = (await listSalesInvoices(state, accountSetId)).filter((invoice) => isInFiscalPeriod(invoice, fiscalYear, periodNo, "invoiceDate"));
+  const inventoryMovements = listInventoryMovements(state, accountSetId).filter((row) => isInFiscalPeriod(row, fiscalYear, periodNo, "movementDate"));
+  const counterpartyEntries = await listCounterpartyLedgerEntries(state, accountSetId);
+  const inventoryBalances = listInventoryBalances(state, accountSetId);
+  const payrollPools = [...state.payrollCostPools.values()].filter((pool) => pool.accountSetId === accountSetId && isInFiscalPeriod(pool, fiscalYear, periodNo));
+  const depreciationPools = [...state.assetDepreciationCostPools.values()].filter((pool) => pool.accountSetId === accountSetId && isInFiscalPeriod(pool, fiscalYear, periodNo));
+  const cashCodes = cashLikeAccountCodes(state, accountSetId);
+  const cashEntries = state.journalEntries.filter(
+    (entry) =>
+      entry.accountSetId === accountSetId &&
+      Number(entry.fiscalYear) === Number(fiscalYear) &&
+      Number(entry.periodNo) === Number(periodNo) &&
+      cashCodes.has(entry.accountCode ?? entry.accountId)
+  );
+
+  const purchaseAmount = purchaseOrders.reduce((sum, order) => sum + Number(order.totalAmount ?? 0), 0);
+  const salesAmount = salesInvoices.reduce((sum, invoice) => sum + Number(invoice.receivableAmount ?? invoice.totalAmount ?? 0), 0);
+  const outboundCost = inventoryMovements
+    .filter((row) => row.movementType === "outbound" || row.businessType === "sales_delivery")
+    .reduce((sum, row) => sum + Number(row.totalAmount ?? 0), 0);
+  const inventoryAmount = inventoryBalances.reduce((sum, balance) => sum + Number(balance.amount ?? 0), 0);
+  const arOpen = counterpartyEntries.filter((entry) => entry.direction === "ar" && Number(entry.remainingAmount ?? 0) > 0);
+  const apOpen = counterpartyEntries.filter((entry) => entry.direction === "ap" && Number(entry.remainingAmount ?? 0) > 0);
+  const arOverdue = arOpen.filter((entry) => daysPastDue(entry.dueDate, asOfDate) > 0);
+  const apOverdue = apOpen.filter((entry) => daysPastDue(entry.dueDate, asOfDate) > 0);
+  const cashNetFlow = cashEntries.reduce((sum, entry) => sum + Number(entry.debit ?? entry.debitAmount ?? 0) - Number(entry.credit ?? entry.creditAmount ?? 0), 0);
+  const laborCost = payrollPools.reduce((sum, pool) => sum + Number(pool.amount ?? 0), 0);
+  const depreciationCost = depreciationPools.reduce((sum, pool) => sum + Number(pool.amount ?? 0), 0);
+  const grossMargin = salesAmount - outboundCost;
+  const operatingContribution = grossMargin - laborCost - depreciationCost;
+  const basePath = `accountSetId=${accountSetId}&fiscalYear=${fiscalYear}&periodNo=${periodNo}`;
+
+  const drilldowns = {
+    purchaseTrend: {
+      rows: purchaseOrders.map((order) => ({
+        sourceType: "purchase_order",
+        sourceId: order.id,
+        sourceNo: order.orderNo,
+        partnerName: order.supplierName ?? null,
+        amount: Number(order.totalAmount ?? 0),
+        documentDate: order.orderDate,
+        status: order.status
+      }))
+    },
+    salesGrossMargin: {
+      rows: salesInvoices.map((invoice) => ({
+        sourceType: "sales_invoice",
+        sourceId: invoice.id,
+        sourceNo: invoice.invoiceNo,
+        partnerName: invoice.customerName ?? null,
+        amount: Number(invoice.receivableAmount ?? invoice.totalAmount ?? 0),
+        documentDate: invoice.invoiceDate
+      }))
+    },
+    inventoryTurnover: {
+      rows: inventoryBalances.map((balance) => ({
+        sourceType: "inventory_balance",
+        sourceId: balance.id,
+        sourceNo: balance.itemCode,
+        itemName: balance.itemName,
+        quantity: Number(balance.quantity ?? 0),
+        amount: Number(balance.amount ?? 0),
+        updatedAt: balance.updatedAt ?? null
+      }))
+    },
+    counterpartyAging: {
+      rows: counterpartyEntries
+        .filter((entry) => Number(entry.remainingAmount ?? 0) > 0)
+        .map((entry) => ({
+          sourceType: entry.sourceType,
+          sourceId: entry.sourceId,
+          sourceNo: entry.sourceNo,
+          direction: entry.direction,
+          partnerName: entry.partnerName ?? null,
+          remainingAmount: Number(entry.remainingAmount ?? 0),
+          dueDate: entry.dueDate ?? null,
+          daysPastDue: daysPastDue(entry.dueDate, asOfDate)
+        }))
+    },
+    cashFlow: {
+      rows: cashEntries.map((entry) => ({
+        sourceType: "journal_entry",
+        sourceId: entry.voucherId ?? entry.id,
+        sourceNo: entry.voucherNo ?? entry.voucherId ?? entry.id,
+        accountCode: entry.accountCode ?? entry.accountId,
+        debit: Number(entry.debit ?? entry.debitAmount ?? 0),
+        credit: Number(entry.credit ?? entry.creditAmount ?? 0),
+        amount: roundAmount(Number(entry.debit ?? entry.debitAmount ?? 0) - Number(entry.credit ?? entry.creditAmount ?? 0))
+      }))
+    },
+    laborCost: {
+      rows: payrollPools.map((pool) => ({
+        sourceType: "payroll_cost_pool",
+        sourceId: pool.id,
+        sourceNo: pool.sourceRunId ?? pool.id,
+        departmentId: pool.departmentId ?? null,
+        costType: pool.costType,
+        amount: Number(pool.amount ?? 0)
+      }))
+    },
+    depreciationCost: {
+      rows: depreciationPools.map((pool) => ({
+        sourceType: "asset_depreciation_cost_pool",
+        sourceId: pool.id,
+        sourceNo: pool.sourceRunId ?? pool.id,
+        departmentId: pool.departmentId ?? null,
+        costType: pool.costType,
+        amount: Number(pool.amount ?? 0)
+      }))
+    },
+    operatingOverview: {
+      rows: [
+        { sourceType: "management_metric", sourceNo: "salesGrossMargin", amount: roundAmount(grossMargin) },
+        { sourceType: "management_metric", sourceNo: "laborCost", amount: roundAmount(-laborCost) },
+        { sourceType: "management_metric", sourceNo: "depreciationCost", amount: roundAmount(-depreciationCost) }
+      ]
+    }
+  };
+
+  const warnings = [];
+  for (const entry of arOverdue) {
+    warnings.push({
+      code: "OVERDUE_AR",
+      severity: "warning",
+      message: `Receivable ${entry.sourceNo} is overdue by ${daysPastDue(entry.dueDate, asOfDate)} days.`,
+      evidenceRefs: [entry.id],
+      drilldown: { sourceType: "counterparty_ledger", path: `/counterparty-ledger?direction=ar&partnerId=${entry.partnerId}` }
+    });
+  }
+  for (const balance of inventoryBalances) {
+    if (Number(balance.quantity ?? 0) > 0 && daysPastDue(balance.updatedAt, asOfDate) > 90) {
+      warnings.push({
+        code: "INVENTORY_STAGNATION",
+        severity: "warning",
+        message: `Inventory item ${balance.itemCode} has no recent movement for more than 90 days.`,
+        evidenceRefs: [balance.id],
+        drilldown: { sourceType: "inventory_balance", path: `/inventory-ledger?itemCode=${balance.itemCode}` }
+      });
+    }
+  }
+
+  return {
+    accountSetId,
+    fiscalYear: Number(fiscalYear),
+    periodNo: Number(periodNo),
+    asOfDate,
+    metrics: [
+      metric("purchaseTrend", "采购趋势", purchaseAmount, purchaseOrders.length, "purchase_order", `/purchase-orders?${basePath}`),
+      metric("salesGrossMargin", "销售毛利", grossMargin, salesInvoices.length, "sales_invoice", `/sales-invoices?${basePath}`, {
+        denominatorAmount: roundAmount(salesAmount),
+        ratio: salesAmount === 0 ? 0 : roundAmount(grossMargin / salesAmount)
+      }),
+      metric("inventoryTurnover", "存货周转", outboundCost, inventoryMovements.length, "inventory_movement", `/inventory-ledger?${basePath}`, {
+        denominatorAmount: roundAmount(inventoryAmount),
+        ratio: inventoryAmount === 0 ? 0 : roundAmount(outboundCost / inventoryAmount)
+      }),
+      metric("counterpartyAging", "账龄风险", arOpen.reduce((sum, entry) => sum + Number(entry.remainingAmount ?? 0), 0), arOpen.length + apOpen.length, "counterparty_ledger", `/counterparty-analytics?${basePath}`, {
+        overdueAmount: roundAmount([...arOverdue, ...apOverdue].reduce((sum, entry) => sum + Number(entry.remainingAmount ?? 0), 0))
+      }),
+      metric("cashFlow", "现金流净额", cashNetFlow, cashEntries.length, "journal_entry", `/reports/detail-ledger?${basePath}`),
+      metric("laborCost", "人工成本", laborCost, payrollPools.length, "payroll_cost_pool", `/payroll-runs?${basePath}`),
+      metric("depreciationCost", "折旧成本", depreciationCost, depreciationPools.length, "asset_depreciation_cost_pool", `/depreciation-runs?${basePath}`),
+      metric("operatingOverview", "整体经营", operatingContribution, 3, "management_metric", `/management-analysis?${basePath}`)
+    ],
+    warnings,
+    drilldowns
+  };
 }
 
 async function createReportExport(state, runId, body, actorId) {
@@ -8490,6 +8693,29 @@ async function route(request, state) {
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "report-approvals" && segments[2] === "approve") {
     return approveReportApproval(state, segments[1], body, actorIdFor(request, state));
+  }
+
+  if (request.method === "GET" && request.path.split("?")[0] === "/management-analysis") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const fiscalYear = Number(query.get("fiscalYear"));
+    const periodNo = Number(query.get("periodNo"));
+    if (!accountSetId || !Number.isInteger(fiscalYear) || !Number.isInteger(periodNo)) {
+      throw new Error("accountSetId, fiscalYear, and periodNo are required.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    return jsonResponse(
+      200,
+      await buildManagementAnalysis(state, {
+        accountSetId,
+        fiscalYear,
+        periodNo,
+        asOfDate: query.get("asOfDate") ?? new Date().toISOString().slice(0, 10)
+      })
+    );
   }
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "report-runs" && segments[2] === "exports") {

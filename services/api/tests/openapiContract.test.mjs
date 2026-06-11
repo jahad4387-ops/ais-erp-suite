@@ -596,6 +596,26 @@ test("Phase 5 export and AI interpretation endpoints document audit history and 
   assert.match(contract, /sensitiveFieldNotice:/);
 });
 
+test("Phase 5 management analysis endpoint documents metrics, warnings, and drilldowns", () => {
+  const analysisBlock = blockAfter("  /management-analysis:");
+
+  assert.match(analysisBlock, /summary: Build Phase 5 management analysis metrics/);
+  assert.match(analysisBlock, /x-permission: report\.view/);
+  assert.match(analysisBlock, /ManagementAnalysis/);
+  assert.match(contract, /ManagementAnalysisMetric/);
+  assert.match(contract, /ManagementAnalysisWarning/);
+  assert.match(contract, /purchaseTrend/);
+  assert.match(contract, /salesGrossMargin/);
+  assert.match(contract, /inventoryTurnover/);
+  assert.match(contract, /counterpartyAging/);
+  assert.match(contract, /cashFlow/);
+  assert.match(contract, /laborCost/);
+  assert.match(contract, /depreciationCost/);
+  assert.match(contract, /operatingOverview/);
+  assert.match(contract, /OVERDUE_AR/);
+  assert.match(contract, /INVENTORY_STAGNATION/);
+});
+
 test("deployment configuration check endpoint is documented", () => {
   const block = blockAfter("  /deployment/config:");
 

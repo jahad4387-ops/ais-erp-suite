@@ -53,3 +53,4 @@ import "../apps/web/tests/reportTemplatePages.test.mjs";
 import "../apps/web/tests/reportRunPages.test.mjs";
 import "../apps/web/tests/reportApprovalPages.test.mjs";
 import "../apps/web/tests/reportExportAiPages.test.mjs";
+import "../apps/web/tests/managementAnalysisPage.test.mjs";
