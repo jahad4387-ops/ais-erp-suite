@@ -35,3 +35,21 @@ test("Phase 5 report template page wires UFO template CRUD and publish APIs", ()
   assert.match(source, /STAT-CF/);
   assert.match(source, /STAT-OE/);
 });
+
+test("Phase 5 UFO designer exposes Excel-like editing panels", () => {
+  const source = readFileSync(pagePath, "utf8");
+
+  assert.match(source, /data-testid="ufo-sheet-tabs"/);
+  assert.match(source, /data-testid="ufo-format-toolbar"/);
+  assert.match(source, /data-testid="ufo-formula-bar"/);
+  assert.match(source, /data-testid="ufo-grid"/);
+  assert.match(source, /data-testid="ufo-cell-properties"/);
+  assert.match(source, /data-testid="ufo-validation-panel"/);
+  assert.match(source, /sheetCode/);
+  assert.match(source, /sheetName/);
+  assert.match(source, /rowCount/);
+  assert.match(source, /columnCount/);
+  assert.match(source, /displayFormat/);
+  assert.match(source, /isEditable/);
+  assert.match(source, /dependenciesJson/);
+});

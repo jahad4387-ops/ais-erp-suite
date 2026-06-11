@@ -1,6 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Form, Input, Select, Space, Table, Tag, Typography, message } from 'antd';
-import { CloudUploadOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
+import { Button, Checkbox, Form, Input, Select, Space, Table, Tag, Typography, message } from 'antd';
+import {
+  BgColorsOutlined,
+  BorderOutlined,
+  CloudUploadOutlined,
+  FontSizeOutlined,
+  FunctionOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+  TableOutlined,
+} from '@ant-design/icons';
 import { api } from '../api';
 import { useAppContext } from '../context/AppContext';
 
@@ -33,6 +43,35 @@ type ReportTemplateVersion = {
 
 const { Text, Title } = Typography;
 const statutoryPresetCodes = ['STAT-BS', 'STAT-IS', 'STAT-CF', 'STAT-OE'];
+const designerSheets = [
+  { sheetCode: 'BS', sheetName: 'Balance Sheet' },
+  { sheetCode: 'IS', sheetName: 'Income Statement' },
+  { sheetCode: 'CF', sheetName: 'Cash Flow' },
+];
+const designerColumns = ['A', 'B', 'C', 'D'];
+const designerRows = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+function defaultDependencies(periodKey: string) {
+  return JSON.stringify(
+    [
+      {
+        sourceType: 'account_balance',
+        accountCode: '1001',
+        period: periodKey,
+      },
+    ],
+    null,
+    2,
+  );
+}
+
+function parseDependenciesJson(text: string) {
+  const parsed = JSON.parse(text || '[]');
+  if (!Array.isArray(parsed)) {
+    throw new Error('dependenciesJson must be an array.');
+  }
+  return parsed;
+}
 
 export const ReportTemplates: React.FC = () => {
   const [templateForm] = Form.useForm();
@@ -43,8 +82,21 @@ export const ReportTemplates: React.FC = () => {
   const [selectedVersionId, setSelectedVersionId] = useState<string>('');
   const [latestVersion, setLatestVersion] = useState<ReportTemplateVersion | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activeSheetCode, setActiveSheetCode] = useState('BS');
+  const [selectedCell, setSelectedCell] = useState('B10');
 
   const periodKey = `${currentYear}-${String(currentPeriod).padStart(2, '0')}`;
+  const formulaText = Form.useWatch('formulaText', versionForm) ?? 'BAL("1001", "2026-06", "debit")';
+  const displayFormat = Form.useWatch('displayFormat', versionForm) ?? 'currency';
+  const dependenciesJsonText = Form.useWatch('dependenciesJson', versionForm) ?? defaultDependencies(periodKey);
+  const activeSheet = designerSheets.find((sheet) => sheet.sheetCode === activeSheetCode) ?? designerSheets[0];
+  const parsedDependencies = useMemo(() => {
+    try {
+      return { value: parseDependenciesJson(dependenciesJsonText), error: '' };
+    } catch (error) {
+      return { value: [], error: error instanceof Error ? error.message : 'Invalid dependenciesJson.' };
+    }
+  }, [dependenciesJsonText]);
 
   const fetchTemplates = useCallback(async () => {
     if (!currentAccountSetId) return;
@@ -95,33 +147,45 @@ export const ReportTemplates: React.FC = () => {
 
   const createVersion = async () => {
     const values = await versionForm.validateFields();
+    let dependenciesJson: Array<Record<string, string>>;
+    try {
+      dependenciesJson = parseDependenciesJson(values.dependenciesJson ?? defaultDependencies(periodKey));
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'Invalid dependenciesJson.');
+      return;
+    }
     const version = await api.post(`/report-templates/${selectedTemplateId}/versions`, {
       versionName: values.versionName,
       effectiveFromPeriod: values.effectiveFromPeriod ?? periodKey,
-      layoutJson: { columnWidths: { A: 160, B: 140, C: 140 } },
+      layoutJson: {
+        columnWidths: { A: 160, B: 140, C: 140, D: 140 },
+        selectedCell: values.cellAddress ?? selectedCell,
+        styles: {
+          [values.cellAddress ?? selectedCell]: {
+            displayFormat: values.displayFormat ?? 'currency',
+            border: 'thin',
+            fontWeight: 'normal',
+            backgroundColor: '#f8fafc',
+          },
+        },
+      },
       sheets: [
         {
-          sheetCode: 'BS',
-          sheetName: 'Balance Sheet',
-          rowCount: 60,
-          columnCount: 8,
+          sheetCode: values.sheetCode ?? activeSheet.sheetCode,
+          sheetName: values.sheetName ?? activeSheet.sheetName,
+          rowCount: Number(values.rowCount ?? 60),
+          columnCount: Number(values.columnCount ?? 8),
           cells: [
             {
-              cellAddress: values.cellAddress ?? 'B10',
+              cellAddress: values.cellAddress ?? selectedCell,
               label: values.cellLabel ?? 'Cash',
               valueType: 'formula',
-              displayFormat: 'currency',
-              isEditable: false,
+              displayFormat: values.displayFormat ?? 'currency',
+              isEditable: Boolean(values.isEditable),
               formula: {
                 formulaText: values.formulaText ?? 'BAL("1001", "2026-06", "debit")',
                 astJson: { name: 'BAL', args: ['1001', periodKey, 'debit'] },
-                dependenciesJson: [
-                  {
-                    sourceType: 'account_balance',
-                    accountCode: '1001',
-                    period: periodKey,
-                  },
-                ],
+                dependenciesJson,
               },
             },
           ],
@@ -132,6 +196,11 @@ export const ReportTemplates: React.FC = () => {
     setLatestVersion(version);
     setSelectedVersionId(version.id);
     await fetchTemplates();
+  };
+
+  const selectDesignerCell = (cellAddress: string) => {
+    setSelectedCell(cellAddress);
+    versionForm.setFieldsValue({ cellAddress });
   };
 
   const publishVersion = async () => {
@@ -194,13 +263,20 @@ export const ReportTemplates: React.FC = () => {
           />
         </div>
 
-        <div style={{ minWidth: 360, flex: '1 1 420px' }}>
+        <div style={{ minWidth: 520, flex: '2 1 620px' }}>
           <Form form={versionForm} layout="vertical" initialValues={{
             versionName: 'Initial report version',
             effectiveFromPeriod: periodKey,
+            sheetCode: 'BS',
+            sheetName: 'Balance Sheet',
+            rowCount: 60,
+            columnCount: 8,
             cellAddress: 'B10',
             cellLabel: 'Cash',
+            displayFormat: 'currency',
+            isEditable: false,
             formulaText: 'BAL("1001", "2026-06", "debit")',
+            dependenciesJson: defaultDependencies(periodKey),
           }}>
             <Form.Item label="Template">
               <Select
@@ -209,23 +285,183 @@ export const ReportTemplates: React.FC = () => {
                 options={templates.map((template) => ({ value: template.id, label: `${template.templateCode} ${template.templateName}` }))}
               />
             </Form.Item>
-            <Form.Item name="versionName" label="Version name" rules={[{ required: true }]}>
-              <Input />
-            </Form.Item>
-            <Form.Item name="effectiveFromPeriod" label="Effective period">
-              <Input />
-            </Form.Item>
-            <Form.Item name="cellAddress" label="Cell address">
-              <Input />
-            </Form.Item>
-            <Form.Item name="cellLabel" label="Cell label">
-              <Input />
-            </Form.Item>
-            <Form.Item name="formulaText" label="Formula">
-              <Input />
-            </Form.Item>
-            <Space>
-              <Button type="primary" icon={<SaveOutlined />} onClick={createVersion} disabled={!selectedTemplateId}>
+
+            <div data-testid="ufo-sheet-tabs" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              {designerSheets.map((sheet) => (
+                <Button
+                  key={sheet.sheetCode}
+                  type={sheet.sheetCode === activeSheetCode ? 'primary' : 'default'}
+                  icon={<TableOutlined />}
+                  onClick={() => {
+                    setActiveSheetCode(sheet.sheetCode);
+                    versionForm.setFieldsValue({ sheetCode: sheet.sheetCode, sheetName: sheet.sheetName });
+                  }}
+                >
+                  {sheet.sheetCode}
+                </Button>
+              ))}
+            </div>
+
+            <div data-testid="ufo-format-toolbar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              <Button icon={<BorderOutlined />} title="Border">Border</Button>
+              <Button icon={<FontSizeOutlined />} title="Font">Font</Button>
+              <Button icon={<BgColorsOutlined />} title="Fill">Fill</Button>
+              <Button icon={<FunctionOutlined />} title="Formula">Formula</Button>
+              <Form.Item name="displayFormat" noStyle>
+                <Select
+                  style={{ width: 150 }}
+                  options={[
+                    { value: 'currency', label: 'Currency' },
+                    { value: 'number', label: 'Number' },
+                    { value: 'percent', label: 'Percent' },
+                    { value: 'text', label: 'Text' },
+                  ]}
+                />
+              </Form.Item>
+            </div>
+
+            <div data-testid="ufo-formula-bar" style={{ display: 'grid', gridTemplateColumns: '110px minmax(220px, 1fr)', gap: 8, marginBottom: 12 }}>
+              <Form.Item name="cellAddress" style={{ marginBottom: 0 }}>
+                <Input aria-label="Cell address" />
+              </Form.Item>
+              <Form.Item name="formulaText" style={{ marginBottom: 0 }}>
+                <Input aria-label="Formula" prefix={<FunctionOutlined />} />
+              </Form.Item>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1fr) 260px', gap: 16, alignItems: 'start' }}>
+              <div
+                data-testid="ufo-grid"
+                style={{
+                  border: '1px solid #d9d9d9',
+                  borderRadius: 6,
+                  overflow: 'auto',
+                  maxWidth: '100%',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: `44px repeat(${designerColumns.length}, minmax(96px, 1fr))`,
+                    minWidth: 440,
+                  }}
+                >
+                  <div style={{ height: 32, background: '#f8fafc', borderRight: '1px solid #d9d9d9', borderBottom: '1px solid #d9d9d9' }} />
+                  {designerColumns.map((column) => (
+                    <div
+                      key={column}
+                      style={{
+                        height: 32,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: '#f8fafc',
+                        borderRight: '1px solid #d9d9d9',
+                        borderBottom: '1px solid #d9d9d9',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {column}
+                    </div>
+                  ))}
+                  {designerRows.map((row) => (
+                    <React.Fragment key={row}>
+                      <div
+                        style={{
+                          minHeight: 38,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          background: '#f8fafc',
+                          borderRight: '1px solid #d9d9d9',
+                          borderBottom: '1px solid #d9d9d9',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {row}
+                      </div>
+                      {designerColumns.map((column) => {
+                        const cellAddress = `${column}${row}`;
+                        const isSelected = selectedCell === cellAddress;
+                        const isFormulaCell = cellAddress === (versionForm.getFieldValue('cellAddress') ?? selectedCell);
+                        return (
+                          <button
+                            key={cellAddress}
+                            type="button"
+                            onClick={() => selectDesignerCell(cellAddress)}
+                            style={{
+                              minHeight: 38,
+                              border: 0,
+                              borderRight: '1px solid #d9d9d9',
+                              borderBottom: '1px solid #d9d9d9',
+                              background: isSelected ? '#e6f4ff' : isFormulaCell ? '#f6ffed' : '#fff',
+                              color: '#1f2937',
+                              textAlign: 'left',
+                              padding: '6px 8px',
+                              cursor: 'pointer',
+                              outline: isSelected ? '2px solid #1677ff' : 'none',
+                              outlineOffset: -2,
+                            }}
+                          >
+                            {isFormulaCell ? formulaText : ''}
+                          </button>
+                        );
+                      })}
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gap: 12 }}>
+                <div data-testid="ufo-cell-properties" style={{ border: '1px solid #d9d9d9', borderRadius: 6, padding: 12 }}>
+                  <Text strong>Cell Properties</Text>
+                  <Form.Item name="sheetCode" label="sheetCode">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item name="sheetName" label="sheetName">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item name="rowCount" label="rowCount">
+                    <Input type="number" />
+                  </Form.Item>
+                  <Form.Item name="columnCount" label="columnCount">
+                    <Input type="number" />
+                  </Form.Item>
+                  <Form.Item name="cellLabel" label="Cell label">
+                    <Input />
+                  </Form.Item>
+                  <Form.Item name="isEditable" valuePropName="checked">
+                    <Checkbox>Editable</Checkbox>
+                  </Form.Item>
+                </div>
+
+                <div data-testid="ufo-validation-panel" style={{ border: '1px solid #d9d9d9', borderRadius: 6, padding: 12 }}>
+                  <Text strong>Validation</Text>
+                  <div style={{ marginTop: 8 }}>
+                    <Tag color={parsedDependencies.error ? 'red' : 'green'}>
+                      {parsedDependencies.error ? 'Invalid dependenciesJson' : 'Formula ready'}
+                    </Tag>
+                    <Tag color="blue">{displayFormat}</Tag>
+                  </div>
+                  {parsedDependencies.error && <div style={{ marginTop: 8, color: '#cf1322' }}>{parsedDependencies.error}</div>}
+                  <Form.Item name="dependenciesJson" label="dependenciesJson" style={{ marginTop: 12, marginBottom: 0 }}>
+                    <Input.TextArea rows={7} />
+                  </Form.Item>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px', gap: 12, marginTop: 16 }}>
+              <Form.Item name="versionName" label="Version name" rules={[{ required: true }]}>
+                <Input />
+              </Form.Item>
+              <Form.Item name="effectiveFromPeriod" label="Effective period">
+                <Input />
+              </Form.Item>
+            </div>
+
+            <Space wrap>
+              <Button type="primary" icon={<SaveOutlined />} onClick={createVersion} disabled={!selectedTemplateId || Boolean(parsedDependencies.error)}>
                 Save Version
               </Button>
               <Button icon={<CloudUploadOutlined />} onClick={publishVersion} disabled={!selectedVersionId}>
