@@ -741,6 +741,46 @@ function bankReconciliationToDto(reconciliation, extras = {}) {
 
 export function createPlatformPersistence(prisma) {
   return {
+    async ensureSystemAdministratorPermissions(permissionCodes, roleName = "系统管理员") {
+      const permissionRecords = [];
+      for (const code of permissionCodes) {
+        const permission = await prisma.permission.upsert({
+          where: { code },
+          update: { description: code },
+          create: { code, description: code }
+        });
+        permissionRecords.push(permission);
+      }
+
+      const role = await prisma.role.upsert({
+        where: { name: roleName },
+        update: { description: "Full system administrator role" },
+        create: { name: roleName, description: "Full system administrator role" }
+      });
+
+      for (const permission of permissionRecords) {
+        await prisma.rolePermission.upsert({
+          where: {
+            roleId_permissionId: {
+              roleId: role.id,
+              permissionId: permission.id
+            }
+          },
+          update: {},
+          create: {
+            roleId: role.id,
+            permissionId: permission.id
+          }
+        });
+      }
+
+      const updatedRole = await prisma.role.findUnique({
+        where: { id: role.id },
+        include: { rolePermissions: { include: { permission: true } } }
+      });
+      return roleToDto(updatedRole);
+    },
+
     async listPermissions() {
       return prisma.permission.findMany();
     },

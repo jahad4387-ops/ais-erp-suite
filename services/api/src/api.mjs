@@ -38,7 +38,7 @@ function uniqueVoucherStatusLogId() {
 }
 const DEFAULT_TOKEN_SECRET = "phase-1-local-secret";
 const DEFAULT_ATTACHMENT_STORAGE_ROOT = fileURLToPath(new URL("../.attachment-storage", import.meta.url));
-const DEFAULT_PERMISSION_CODES = [
+export const DEFAULT_PERMISSION_CODES = [
   "account_set.create",
   "account_set.manage",
   "account_set.view",

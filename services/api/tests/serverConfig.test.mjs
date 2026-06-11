@@ -18,6 +18,7 @@ const jwtRotationEnv = {
 
 test("runtime API can enable Prisma platform persistence from environment", async () => {
   const calls = [];
+  const syncedPermissionCodes = [];
   const prisma = {
     marker: "prisma-client",
     $queryRawUnsafe: async (sql) => {
@@ -29,13 +30,23 @@ test("runtime API can enable Prisma platform persistence from environment", asyn
     { AIS_PLATFORM_STORE: "prisma", DATABASE_URL: "file:./dev.db" },
     {
       prisma,
-      createPlatformPersistence: (client) => ({ kind: "platform-store", client })
+      createPlatformPersistence: (client) => ({
+        kind: "platform-store",
+        client,
+        ensureSystemAdministratorPermissions: async (permissionCodes) => {
+          syncedPermissionCodes.push(...permissionCodes);
+        }
+      })
     }
   );
 
   assert.equal(api.state.config.platformStore.kind, "platform-store");
   assert.equal(api.state.config.platformStore.client, prisma);
   assert.deepEqual(calls, ["PRAGMA journal_mode=WAL"]);
+  assert.ok(syncedPermissionCodes.includes("partner.manage"));
+  assert.ok(syncedPermissionCodes.includes("inventory_item.manage"));
+  assert.ok(syncedPermissionCodes.includes("payroll_setup.manage"));
+  assert.ok(syncedPermissionCodes.includes("fixed_asset_setup.manage"));
 });
 
 test("deployment config endpoint reports database and attachment storage status", async () => {

@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createApi } from "./api.mjs";
+import { createApi, DEFAULT_PERMISSION_CODES } from "./api.mjs";
 
 function parseDotEnvLine(line) {
   const trimmed = line.trim();
@@ -230,10 +230,14 @@ export async function createRuntimeApi(env = process.env, dependencies = {}) {
   const createPlatformPersistence =
     dependencies.createPlatformPersistence ??
     (await import("../../../packages/database/src/platformPersistence.mjs")).createPlatformPersistence;
+  const platformStore = createPlatformPersistence(prisma);
+  if (typeof platformStore.ensureSystemAdministratorPermissions === "function") {
+    await platformStore.ensureSystemAdministratorPermissions(DEFAULT_PERMISSION_CODES);
+  }
 
   return createApi({
     ...runtimeConfig,
-    platformStore: createPlatformPersistence(prisma)
+    platformStore
   });
 }
 
