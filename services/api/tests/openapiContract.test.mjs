@@ -484,6 +484,16 @@ test("Phase 4 fixed asset final endpoints document disposal, count, ledger, and 
   assert.match(contract, /DISPOSED_BEFORE_PERIOD/, "Depreciation must document post-disposal stopping.");
 });
 
+test("Phase 4 month-end integration documents formal cost-pool consumption by Phase 3 allocations", () => {
+  const dryRunBlock = blockAfter("  /cost-allocations/dry-run:");
+  const allocationBlock = blockAfter("  /cost-allocations:");
+
+  assert.match(dryRunBlock, /phase4CostPoolIds/);
+  assert.match(allocationBlock, /phase4CostPoolIds/);
+  assert.match(contract, /phase4_payroll_cost_pool/);
+  assert.match(contract, /phase4_depreciation_cost_pool/);
+});
+
 test("deployment configuration check endpoint is documented", () => {
   const block = blockAfter("  /deployment/config:");
 

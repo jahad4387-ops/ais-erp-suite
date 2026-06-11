@@ -3607,7 +3607,7 @@ paths:
 
   /cost-allocations/dry-run:
     post:
-      summary: Dry-run Phase 3 production cost allocation while Phase 4 formal sources are missing.
+      summary: Dry-run Phase 3 production cost allocation with mock/manual or Phase 4 formal cost pools.
       x-permission: cost_allocation.manage
       x-risk-level: medium
       x-agent-allowed: false
@@ -3615,6 +3615,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
+        description: Accepts `costInputIds` for Phase 3 self-test inputs or `phase4CostPoolIds` for locked payroll and fixed asset depreciation cost pools.
         content:
           application/json:
             schema:
@@ -3622,6 +3623,12 @@ paths:
       responses:
         "200":
           description: Cost allocation preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CostAllocation"
+        "201":
+          description: Cost allocation preview created from locked Phase 4 formal cost pools.
           content:
             application/json:
               schema:
@@ -3637,6 +3644,7 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
+        description: Accepts `costInputIds` for Phase 3 self-test inputs or `phase4CostPoolIds` for locked payroll and fixed asset depreciation cost pools.
         content:
           application/json:
             schema:
@@ -8121,7 +8129,7 @@ components:
 
     CreateCostAllocationRequest:
       type: object
-      required: [accountSetId, workOrderId, fiscalYear, periodNo, costInputIds]
+      required: [accountSetId, workOrderId, fiscalYear, periodNo]
       properties:
         accountSetId:
           type: string
@@ -8135,6 +8143,12 @@ components:
           type: array
           items:
             type: string
+          description: Phase 3 mock/manual cost input IDs retained for acceptance self-tests and fallback allocations.
+        phase4CostPoolIds:
+          type: array
+          items:
+            type: string
+          description: Locked Phase 4 payroll and fixed-asset depreciation cost pool IDs consumed by formal month-end allocation.
         createdBy:
           type: string
 
@@ -8171,12 +8185,15 @@ components:
 
     CostAllocationLine:
       type: object
-      required: [id, costInputId, costType, allocatedAmount]
+      required: [id, costInputId, sourceType, costType, allocatedAmount]
       properties:
         id:
           type: string
         costInputId:
           type: string
+        sourceType:
+          type: string
+          enum: [mock, manual, phase4_payroll_cost_pool, phase4_depreciation_cost_pool]
         costType:
           type: string
         allocatedAmount:

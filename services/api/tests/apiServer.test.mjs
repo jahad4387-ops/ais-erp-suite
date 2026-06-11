@@ -3501,6 +3501,110 @@ test("Phase 4 fixed asset final workflow disposes assets, counts variances, and 
   assert.ok(api.state.auditLogs.some((log) => log.action === "asset_count.create" && log.objectId === count.body.id));
 });
 
+test("Phase 4 month-end integration consumes locked payroll and depreciation cost pools without mock warnings", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P4-E2E",
+      name: "Phase 4 End To End Set",
+      companyName: "Phase 4 E2E Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase4-e2e-account-set"
+  );
+  const actorId = "phase4-e2e-actor";
+  api.state.permissionsByActor.set(actorId, new Set(["cost_allocation.manage", "cost_voucher.manage"]));
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+  api.state.workOrders.set("work-order:p4-e2e", {
+    id: "work-order:p4-e2e",
+    accountSetId: accountSet.body.id,
+    workOrderNo: "WO-P4-E2E",
+    status: "closed",
+    fiscalYear: 2026,
+    periodNo: 1,
+    directMaterialCost: 3000,
+    completedQuantity: 10
+  });
+  api.state.payrollCostPools.set("payroll-cost-pool:p4-e2e", {
+    id: "payroll-cost-pool:p4-e2e",
+    accountSetId: accountSet.body.id,
+    sourceRunId: "payroll-run:p4-e2e",
+    fiscalYear: 2026,
+    periodNo: 1,
+    departmentId: "D-MFG",
+    workOrderId: "work-order:p4-e2e",
+    costType: "direct_labor",
+    amount: 1400,
+    lockedAt: "now"
+  });
+  api.state.assetDepreciationCostPools.set("asset-depreciation-cost-pool:p4-e2e", {
+    id: "asset-depreciation-cost-pool:p4-e2e",
+    accountSetId: accountSet.body.id,
+    sourceRunId: "depreciation-run:p4-e2e",
+    fixedAssetId: "fixed-asset:p4-e2e",
+    fiscalYear: 2026,
+    periodNo: 1,
+    departmentId: "D-MFG",
+    costType: "fixed_asset_depreciation",
+    amount: 600,
+    lockedAt: "now"
+  });
+
+  const dryRun = await api.handle({
+    method: "POST",
+    path: "/cost-allocations/dry-run",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-e2e-allocation-preview" },
+    body: {
+      accountSetId: accountSet.body.id,
+      workOrderId: "work-order:p4-e2e",
+      fiscalYear: 2026,
+      periodNo: 1,
+      phase4CostPoolIds: ["payroll-cost-pool:p4-e2e", "asset-depreciation-cost-pool:p4-e2e"],
+      createdBy: actorId
+    }
+  });
+  const allocation = await api.handle({
+    method: "POST",
+    path: "/cost-allocations",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-e2e-allocation" },
+    body: {
+      accountSetId: accountSet.body.id,
+      workOrderId: "work-order:p4-e2e",
+      fiscalYear: 2026,
+      periodNo: 1,
+      phase4CostPoolIds: ["payroll-cost-pool:p4-e2e", "asset-depreciation-cost-pool:p4-e2e"],
+      createdBy: actorId
+    }
+  });
+  const draft = await api.handle({
+    method: "POST",
+    path: "/cost-voucher-drafts",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-e2e-draft" },
+    body: { accountSetId: accountSet.body.id, costAllocationId: allocation.body.id, fiscalYear: 2026, periodNo: 1, createdBy: actorId }
+  });
+
+  assert.equal(dryRun.status, 201);
+  assert.equal(dryRun.body.totalAllocatedAmount, 2000);
+  assert.deepEqual(dryRun.body.warningCodes, []);
+  assert.deepEqual(dryRun.body.lines.map((line) => ({ sourceType: line.sourceType, costType: line.costType, amount: line.allocatedAmount })), [
+    { sourceType: "phase4_payroll_cost_pool", costType: "direct_labor", amount: 1400 },
+    { sourceType: "phase4_depreciation_cost_pool", costType: "fixed_asset_depreciation", amount: 600 }
+  ]);
+  assert.equal(allocation.status, 201);
+  assert.equal(allocation.body.totalAllocatedAmount, 2000);
+  assert.deepEqual(allocation.body.warningCodes, []);
+  assert.equal(draft.status, 201);
+  assert.equal(draft.body.totalAmount, 5000);
+  assert.deepEqual(draft.body.warningCodes, []);
+  assert.notDeepEqual(draft.body.warningCodes, ["PHASE4_SOURCE_MISSING"]);
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

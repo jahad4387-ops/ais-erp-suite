@@ -1716,25 +1716,46 @@ function findMockCostInputByIdentifier(state, identifier) {
   return state.mockCostInputs.get(identifier) ?? null;
 }
 
+function findPhase4CostPoolByIdentifier(state, identifier) {
+  const payrollPool = state.payrollCostPools.get(identifier);
+  if (payrollPool) {
+    return { ...payrollPool, sourceType: "phase4_payroll_cost_pool" };
+  }
+  const depreciationPool = state.assetDepreciationCostPools.get(identifier);
+  if (depreciationPool) {
+    return { ...depreciationPool, sourceType: "phase4_depreciation_cost_pool" };
+  }
+  return null;
+}
+
 function buildCostAllocation(state, body, actorId, { dryRun }) {
   const workOrder = findWorkOrderByIdentifier(state, body.workOrderId);
   if (!workOrder || workOrder.accountSetId !== body.accountSetId) {
     throw new Error("Work order was not found.");
   }
-  const inputs = (body.costInputIds ?? [])
+  const mockInputs = (body.costInputIds ?? [])
     .map((id) => findMockCostInputByIdentifier(state, id))
     .filter(Boolean);
+  const phase4Inputs = (body.phase4CostPoolIds ?? [])
+    .map((id) => findPhase4CostPoolByIdentifier(state, id))
+    .filter(Boolean)
+    .filter((input) => input.accountSetId === body.accountSetId)
+    .filter((input) => !input.workOrderId || input.workOrderId === workOrder.id)
+    .filter((input) => input.fiscalYear === Number(body.fiscalYear))
+    .filter((input) => input.periodNo === Number(body.periodNo));
+  const inputs = [...mockInputs, ...phase4Inputs];
   if (inputs.length === 0) {
     throw new Error("At least one cost input is required.");
   }
   if (!dryRun && inputs.some((input) => !input.lockedAt)) {
-    return { error: errorResponse(409, "COST_INPUT_NOT_LOCKED", "Committed allocation requires locked mock/manual cost inputs.") };
+    return { error: errorResponse(409, "COST_INPUT_NOT_LOCKED", "Committed allocation requires locked cost inputs.") };
   }
   const allocationId = body.id ?? `cost-allocation:${randomUUID()}`;
   const lines = inputs.map((input) => ({
     id: `cost-allocation-line:${randomUUID()}`,
     costAllocationId: allocationId,
     costInputId: input.id,
+    sourceType: input.sourceType,
     costType: input.costType,
     allocatedAmount: roundAmount(input.amount)
   }));
@@ -4589,7 +4610,8 @@ async function route(request, state) {
     if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
     try {
       const result = buildCostAllocation(state, body, actorId, { dryRun: true });
-      return jsonResponse(200, result.allocation);
+      const statusCode = (body.phase4CostPoolIds ?? []).length > 0 ? 201 : 200;
+      return jsonResponse(statusCode, result.allocation);
     } catch (error) {
       return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
     }
