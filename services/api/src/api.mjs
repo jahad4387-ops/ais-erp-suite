@@ -59,6 +59,10 @@ export const DEFAULT_PERMISSION_CODES = [
   "voucher.view",
   "ledger.view",
   "report.view",
+  "report_template.manage",
+  "report_run.manage",
+  "report_export.manage",
+  "report_interpretation.manage",
   "attachment.upload",
   "attachment.delete",
   "bank_reconciliation.create",
@@ -565,6 +569,12 @@ function permissionFor(request) {
   if (request.method === "GET" && request.path === "/ledger/account-balances") return "ledger.view";
   if (request.method === "GET" && request.path === "/reports/account-balances") return "report.view";
   if (request.method === "GET" && request.path === "/reports/trial-balance") return "report.view";
+  if (segments[0] === "report-templates") {
+    return request.method === "GET" ? "report.view" : "report_template.manage";
+  }
+  if (segments[0] === "report-template-versions") {
+    return request.method === "GET" ? "report.view" : "report_template.manage";
+  }
   if (request.method === "GET" && (request.path === "/ledger/bank-statements" || request.path === "/bank/statements")) return "ledger.view";
   if (request.method === "POST" && (request.path === "/ledger/bank-statements/import" || request.path === "/bank/statements")) {
     return "bank_reconciliation.create";
@@ -854,6 +864,8 @@ function createState(options = {}) {
     assetCounts: new Map(),
     fixedAssetLedgerEntries: new Map(),
     fixedAssetReconciliationRuns: new Map(),
+    reportTemplates: new Map(),
+    reportTemplateVersions: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -3396,6 +3408,200 @@ async function listPostingBatches(state) {
     batchesById.set(batch.id, batch);
   }
   return [...batchesById.values()];
+}
+
+function cloneReportPayload(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function findReportTemplateByIdentifier(state, identifier) {
+  return [...state.reportTemplates.values()].find(
+    (template) => template.id === identifier || template.templateCode === identifier
+  );
+}
+
+function findReportTemplateVersionByIdentifier(state, identifier) {
+  return [...state.reportTemplateVersions.values()].find((version) => version.id === identifier);
+}
+
+function requireReportTemplatePayload(body) {
+  for (const field of ["accountSetId", "templateCode", "templateName", "reportType"]) {
+    if (typeof body[field] !== "string" || body[field].trim() === "") {
+      throw new Error(`${field} is required.`);
+    }
+  }
+}
+
+function normalizeReportVersionSheets(state, versionId, sheets = []) {
+  if (!Array.isArray(sheets) || sheets.length === 0) {
+    throw new Error("sheets are required.");
+  }
+
+  return sheets.map((sheet, sheetIndex) => {
+    if (typeof sheet.sheetCode !== "string" || sheet.sheetCode.trim() === "") {
+      throw new Error("sheetCode is required.");
+    }
+    const sheetId = `report-sheet:${state.reportTemplateVersions.size + 1}:${sheetIndex + 1}`;
+    const cells = Array.isArray(sheet.cells)
+      ? sheet.cells.map((cell, cellIndex) => {
+          if (typeof cell.cellAddress !== "string" || cell.cellAddress.trim() === "") {
+            throw new Error("cellAddress is required.");
+          }
+          const formula = cell.formula
+            ? {
+                id: `report-formula:${state.reportTemplateVersions.size + 1}:${sheetIndex + 1}:${cellIndex + 1}`,
+                formulaText: cell.formula.formulaText,
+                astJson: cloneReportPayload(cell.formula.astJson ?? {}),
+                dependenciesJson: cloneReportPayload(cell.formula.dependenciesJson ?? [])
+              }
+            : null;
+          if (formula && (typeof formula.formulaText !== "string" || formula.formulaText.trim() === "")) {
+            throw new Error("formulaText is required.");
+          }
+          return {
+            id: `report-cell:${state.reportTemplateVersions.size + 1}:${sheetIndex + 1}:${cellIndex + 1}`,
+            sheetId,
+            cellAddress: cell.cellAddress,
+            label: cell.label ?? null,
+            valueType: cell.valueType ?? (formula ? "formula" : "text"),
+            displayFormat: cell.displayFormat ?? null,
+            isEditable: cell.isEditable ?? true,
+            mergeRef: cell.mergeRef ?? null,
+            rowNo: cell.rowNo ?? null,
+            columnNo: cell.columnNo ?? null,
+            formula
+          };
+        })
+      : [];
+    return {
+      id: sheetId,
+      versionId,
+      sheetCode: sheet.sheetCode,
+      sheetName: sheet.sheetName ?? sheet.sheetCode,
+      rowCount: sheet.rowCount ?? 0,
+      columnCount: sheet.columnCount ?? 0,
+      orderNo: sheet.orderNo ?? sheetIndex + 1,
+      cells
+    };
+  });
+}
+
+function publicReportTemplate(template, versions) {
+  const templateVersions = versions.filter((version) => version.templateId === template.id);
+  return {
+    ...template,
+    latestVersionNo: template.latestVersionNo ?? Math.max(0, ...templateVersions.map((version) => version.versionNo)),
+    versionCount: templateVersions.length
+  };
+}
+
+async function createReportTemplate(state, body, actorId) {
+  requireReportTemplatePayload(body);
+  if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+    return accountSetAccessError(state, actorId, body.accountSetId);
+  }
+  const duplicate = [...state.reportTemplates.values()].find(
+    (template) => template.accountSetId === body.accountSetId && template.templateCode === body.templateCode
+  );
+  if (duplicate) {
+    return errorResponse(409, "REPORT_TEMPLATE_ALREADY_EXISTS", "Report template code already exists in this account set.");
+  }
+
+  const template = {
+    id: `report-template:${state.reportTemplates.size + 1}`,
+    accountSetId: body.accountSetId,
+    templateCode: body.templateCode,
+    templateName: body.templateName,
+    reportType: body.reportType,
+    status: body.status ?? "draft",
+    latestVersionNo: 0,
+    publishedVersionId: null,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    updatedAt: "now"
+  };
+  state.reportTemplates.set(template.id, template);
+  appendAuditLog(state, {
+    actorId: template.createdBy,
+    action: "report_template.create",
+    objectType: "report_template",
+    objectId: template.id
+  });
+  return jsonResponse(201, publicReportTemplate(template, [...state.reportTemplateVersions.values()]));
+}
+
+async function createReportTemplateVersion(state, templateId, body, actorId) {
+  const template = findReportTemplateByIdentifier(state, templateId);
+  if (!template) {
+    return errorResponse(404, "REPORT_TEMPLATE_NOT_FOUND", "Report template was not found.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, template.accountSetId))) {
+    return accountSetAccessError(state, actorId, template.accountSetId);
+  }
+  const templateVersions = [...state.reportTemplateVersions.values()].filter((version) => version.templateId === template.id);
+  const versionNo = Math.max(0, ...templateVersions.map((version) => version.versionNo)) + 1;
+  const versionId = `report-template-version:${state.reportTemplateVersions.size + 1}`;
+  const version = {
+    id: versionId,
+    templateId: template.id,
+    versionNo,
+    versionName: body.versionName ?? `Version ${versionNo}`,
+    status: "draft",
+    effectiveFromPeriod: body.effectiveFromPeriod ?? null,
+    layoutJson: cloneReportPayload(body.layoutJson ?? {}),
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    publishedBy: null,
+    publishedAt: null,
+    sheets: normalizeReportVersionSheets(state, versionId, body.sheets)
+  };
+  state.reportTemplateVersions.set(version.id, version);
+  state.reportTemplates.set(template.id, {
+    ...template,
+    latestVersionNo: versionNo,
+    updatedAt: "now"
+  });
+  appendAuditLog(state, {
+    actorId: version.createdBy,
+    action: "report_template_version.create",
+    objectType: "report_template_version",
+    objectId: version.id
+  });
+  return jsonResponse(201, cloneReportPayload(version));
+}
+
+async function publishReportTemplateVersion(state, versionId, body, actorId) {
+  const version = findReportTemplateVersionByIdentifier(state, versionId);
+  if (!version) {
+    return errorResponse(404, "REPORT_TEMPLATE_VERSION_NOT_FOUND", "Report template version was not found.");
+  }
+  const template = state.reportTemplates.get(version.templateId);
+  if (!template) {
+    return errorResponse(404, "REPORT_TEMPLATE_NOT_FOUND", "Report template was not found.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, template.accountSetId))) {
+    return accountSetAccessError(state, actorId, template.accountSetId);
+  }
+  const published = {
+    ...version,
+    status: "published",
+    publishedBy: body.publishedBy ?? actorId,
+    publishedAt: "now"
+  };
+  state.reportTemplateVersions.set(published.id, published);
+  state.reportTemplates.set(template.id, {
+    ...template,
+    status: "active",
+    publishedVersionId: published.id,
+    updatedAt: "now"
+  });
+  appendAuditLog(state, {
+    actorId: published.publishedBy,
+    action: "report_template_version.publish",
+    objectType: "report_template_version",
+    objectId: published.id
+  });
+  return jsonResponse(200, cloneReportPayload(published));
 }
 
 async function route(request, state) {
@@ -7555,6 +7761,50 @@ async function route(request, state) {
       return jsonResponse(200, await platformStore.listAccountPeriodBalances());
     }
     return jsonResponse(200, state.balances);
+  }
+
+  if (request.method === "GET" && request.path.split("?")[0] === "/report-templates") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const actorId = actorIdFor(request, state);
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const versions = [...state.reportTemplateVersions.values()];
+    const templates = [...state.reportTemplates.values()]
+      .filter((template) => !accountSetId || template.accountSetId === accountSetId)
+      .map((template) => publicReportTemplate(template, versions));
+    return jsonResponse(200, templates);
+  }
+
+  if (request.method === "POST" && request.path === "/report-templates") {
+    return createReportTemplate(state, body, actorIdFor(request, state));
+  }
+
+  if (request.method === "POST" && segments.length === 3 && segments[0] === "report-templates" && segments[2] === "versions") {
+    return createReportTemplateVersion(state, segments[1], body, actorIdFor(request, state));
+  }
+
+  if (request.method === "GET" && segments.length === 2 && segments[0] === "report-template-versions") {
+    const version = findReportTemplateVersionByIdentifier(state, segments[1]);
+    if (!version) {
+      return errorResponse(404, "REPORT_TEMPLATE_VERSION_NOT_FOUND", "Report template version was not found.");
+    }
+    const template = state.reportTemplates.get(version.templateId);
+    const actorId = actorIdFor(request, state);
+    if (template && !(await canAccessAccountSet(state, actorId, template.accountSetId))) {
+      return accountSetAccessError(state, actorId, template.accountSetId);
+    }
+    return jsonResponse(200, cloneReportPayload(version));
+  }
+
+  if (
+    request.method === "POST" &&
+    segments.length === 3 &&
+    segments[0] === "report-template-versions" &&
+    segments[2] === "publish"
+  ) {
+    return publishReportTemplateVersion(state, segments[1], body, actorIdFor(request, state));
   }
 
   if (request.method === "POST" && (request.path === "/ledger/bank-statements/import" || request.path === "/bank/statements")) {

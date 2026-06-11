@@ -8117,3 +8117,134 @@ test("external attachment metadata upload verifies target object storage before 
     }
   ]);
 });
+
+test("Phase 5 report templates persist UFO sheets, cells, and formula dependencies through publish workflow", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P5",
+      name: "Phase 5 Reports",
+      companyName: "Phase 5 Reports Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase5-report-template-account-set"
+  );
+
+  const created = await request(
+    api,
+    "POST",
+    "/report-templates",
+    {
+      accountSetId: accountSet.body.id,
+      templateCode: "BS-001",
+      templateName: "Balance Sheet",
+      reportType: "statutory",
+      createdBy: "system"
+    },
+    "phase5-report-template-create"
+  );
+  const version = await request(
+    api,
+    "POST",
+    `/report-templates/${created.body.id}/versions`,
+    {
+      versionName: "Initial balance sheet",
+      effectiveFromPeriod: "2026-06",
+      layoutJson: { columnWidths: { A: 140, B: 120 } },
+      sheets: [
+        {
+          sheetCode: "BS",
+          sheetName: "Balance Sheet",
+          rowCount: 60,
+          columnCount: 8,
+          cells: [
+            {
+              cellAddress: "B10",
+              label: "Cash",
+              valueType: "formula",
+              displayFormat: "currency",
+              isEditable: false,
+              formula: {
+                formulaText: "BAL(\"1001\", \"2026-06\", \"debit\")",
+                astJson: { name: "BAL", args: ["1001", "2026-06", "debit"] },
+                dependenciesJson: [{ sourceType: "account_balance", accountCode: "1001", period: "2026-06" }]
+              }
+            }
+          ]
+        }
+      ],
+      createdBy: "system"
+    },
+    "phase5-report-template-version-create"
+  );
+  const published = await request(
+    api,
+    "POST",
+    `/report-template-versions/${version.body.id}/publish`,
+    { publishedBy: "system" },
+    "phase5-report-template-version-publish"
+  );
+  const immutableEdit = await request(
+    api,
+    "POST",
+    `/report-templates/${created.body.id}/versions`,
+    {
+      baseVersionId: published.body.id,
+      versionName: "Balance sheet revised",
+      effectiveFromPeriod: "2026-07",
+      layoutJson: { columnWidths: { A: 160, B: 120 } },
+      sheets: [
+        {
+          sheetCode: "BS",
+          sheetName: "Balance Sheet",
+          cells: [
+            {
+              cellAddress: "B10",
+              label: "Cash revised",
+              valueType: "formula",
+              displayFormat: "currency",
+              isEditable: false,
+              formula: {
+                formulaText: "CLOSING(\"1001\", \"2026-07\")",
+                astJson: { name: "CLOSING", args: ["1001", "2026-07"] },
+                dependenciesJson: [{ sourceType: "account_balance", accountCode: "1001", period: "2026-07" }]
+              }
+            }
+          ]
+        }
+      ],
+      createdBy: "system"
+    },
+    "phase5-report-template-version-revise"
+  );
+  const templates = await request(api, "GET", `/report-templates?accountSetId=${accountSet.body.id}`, null, null);
+  const originalVersion = await request(api, "GET", `/report-template-versions/${published.body.id}`, null, null);
+  const revisedVersion = await request(api, "GET", `/report-template-versions/${immutableEdit.body.id}`, null, null);
+
+  assert.equal(accountSet.status, 201);
+  assert.equal(created.status, 201);
+  assert.equal(created.body.templateCode, "BS-001");
+  assert.equal(version.status, 201);
+  assert.equal(version.body.versionNo, 1);
+  assert.equal(version.body.status, "draft");
+  assert.equal(version.body.sheets[0].cells[0].formula.formulaText, "BAL(\"1001\", \"2026-06\", \"debit\")");
+  assert.deepEqual(version.body.sheets[0].cells[0].formula.dependenciesJson, [
+    { sourceType: "account_balance", accountCode: "1001", period: "2026-06" }
+  ]);
+  assert.equal(published.status, 200);
+  assert.equal(published.body.status, "published");
+  assert.equal(immutableEdit.status, 201);
+  assert.equal(immutableEdit.body.versionNo, 2);
+  assert.notEqual(immutableEdit.body.id, published.body.id);
+  assert.equal(templates.status, 200);
+  assert.equal(templates.body[0].latestVersionNo, 2);
+  assert.equal(templates.body[0].publishedVersionId, published.body.id);
+  assert.equal(originalVersion.body.sheets[0].cells[0].label, "Cash");
+  assert.equal(revisedVersion.body.sheets[0].cells[0].label, "Cash revised");
+});

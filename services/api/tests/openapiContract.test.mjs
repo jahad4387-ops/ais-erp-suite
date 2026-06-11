@@ -109,7 +109,10 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/depreciation-runs/{depreciationRunId}/lock:",
     "/asset-disposals:",
     "/asset-counts/preview:",
-    "/asset-counts:"
+    "/asset-counts:",
+    "/report-templates:",
+    "/report-templates/{reportTemplateId}/versions:",
+    "/report-template-versions/{reportTemplateVersionId}/publish:"
   ];
 
   for (const path of writePaths) {
@@ -213,6 +216,11 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "AssetCountLine:",
     "FixedAssetLedgerEntry:",
     "FixedAssetReconciliation:",
+    "ReportTemplate:",
+    "ReportTemplateVersion:",
+    "ReportSheet:",
+    "ReportCell:",
+    "ReportFormula:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -492,6 +500,35 @@ test("Phase 4 month-end integration documents formal cost-pool consumption by Ph
   assert.match(allocationBlock, /phase4CostPoolIds/);
   assert.match(contract, /phase4_payroll_cost_pool/);
   assert.match(contract, /phase4_depreciation_cost_pool/);
+});
+
+test("Phase 5 report template endpoints document UFO designer foundation and formula dependencies", () => {
+  const templatesBlock = blockAfter("  /report-templates:");
+  const versionsBlock = blockAfter("  /report-templates/{reportTemplateId}/versions:");
+  const publishBlock = blockAfter("  /report-template-versions/{reportTemplateVersionId}/publish:");
+  const versionDetailBlock = blockAfter("  /report-template-versions/{reportTemplateVersionId}:");
+
+  assert.match(templatesBlock, /x-permission: report\.view/);
+  assert.match(templatesBlock, /x-permission: report_template\.manage/);
+  assert.match(templatesBlock, /CreateReportTemplateRequest/);
+  assert.match(templatesBlock, /ReportTemplate/);
+  assert.match(versionsBlock, /x-permission: report_template\.manage/);
+  assert.match(versionsBlock, /CreateReportTemplateVersionRequest/);
+  assert.match(versionsBlock, /ReportTemplateVersion/);
+  assert.match(publishBlock, /x-permission: report_template\.manage/);
+  assert.match(publishBlock, /ReportTemplateVersion/);
+  assert.match(versionDetailBlock, /x-permission: report\.view/);
+  assert.match(versionDetailBlock, /ReportTemplateVersion/);
+  assert.match(contract, /formulaText:/);
+  assert.match(contract, /astJson:/);
+  assert.match(contract, /dependenciesJson:/);
+  assert.match(contract, /displayFormat:/);
+  assert.match(contract, /isEditable:/);
+  assert.match(contract, /BAL\(\)/);
+  assert.match(contract, /AMT\(\)/);
+  assert.match(contract, /OPENING\(\)/);
+  assert.match(contract, /CLOSING\(\)/);
+  assert.match(contract, /AUX_BAL\(\)/);
 });
 
 test("deployment configuration check endpoint is documented", () => {

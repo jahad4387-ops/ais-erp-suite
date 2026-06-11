@@ -20,6 +20,10 @@ const permissions = [
   "voucher.view",
   "ledger.view",
   "report.view",
+  "report_template.manage",
+  "report_run.manage",
+  "report_export.manage",
+  "report_interpretation.manage",
   "attachment.upload",
   "attachment.delete",
   "bank_reconciliation.create",
@@ -108,7 +112,11 @@ const roleTemplates = {
     "bank_reconciliation.create",
     "bank_reconciliation.match",
     "ledger.view",
-    "report.view"
+    "report.view",
+    "report_template.manage",
+    "report_run.manage",
+    "report_export.manage",
+    "report_interpretation.manage"
   ],
   制单员: ["voucher.create", "voucher.update_own", "voucher.submit", "voucher.view", "attachment.upload"],
   审核员: ["voucher.approve", "voucher.reject", "voucher.view"],

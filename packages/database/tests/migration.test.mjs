@@ -70,6 +70,9 @@ const phase4PayrollWorkflowMigrationSql = readFileSync(
   new URL("../prisma/migrations/20260611060000_phase4_payroll_workflow/migration.sql", import.meta.url)
 );
 const phase4PayrollWorkflowMigrationText = phase4PayrollWorkflowMigrationSql.toString("utf8");
+const phase5ReportTemplateFoundationMigrationText = readMigrationText(
+  "../prisma/migrations/20260611100000_phase5_report_template_foundation/migration.sql"
+);
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 function readMigrationText(relativePath) {
@@ -430,4 +433,29 @@ test("Phase 4 fixed asset final migration creates disposal, count, ledger, and r
   assert.match(migrationText, /CREATE INDEX "AssetDisposal_accountSetId_fiscalYear_periodNo_idx"/);
   assert.match(migrationText, /CREATE INDEX "FixedAssetLedgerEntry_accountSetId_fiscalYear_periodNo_idx"/);
   assert.match(migrationText, /CREATE INDEX "FixedAssetReconciliationRun_accountSetId_fiscalYear_periodNo_idx"/);
+});
+
+test("Phase 5 report template foundation migration creates UFO template and formula tables", () => {
+  for (const table of ["ReportTemplate", "ReportTemplateVersion", "ReportSheet", "ReportCell", "ReportFormula"]) {
+    assert.match(
+      phase5ReportTemplateFoundationMigrationText,
+      new RegExp(`CREATE TABLE "${table}"`),
+      `${table} must be created.`
+    );
+  }
+
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"templateCode" TEXT NOT NULL/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"reportType" TEXT NOT NULL/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"versionNo" INTEGER NOT NULL/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"status" TEXT NOT NULL DEFAULT 'draft'/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"layoutJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"cellAddress" TEXT NOT NULL/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"displayFormat" TEXT/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"isEditable" BOOLEAN NOT NULL DEFAULT true/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"formulaText" TEXT NOT NULL/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"astJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /"dependenciesJson" TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /CREATE UNIQUE INDEX "ReportTemplate_accountSetId_templateCode_key"/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /CREATE UNIQUE INDEX "ReportTemplateVersion_templateId_versionNo_key"/);
+  assert.match(phase5ReportTemplateFoundationMigrationText, /CREATE UNIQUE INDEX "ReportCell_sheetId_cellAddress_key"/);
 });

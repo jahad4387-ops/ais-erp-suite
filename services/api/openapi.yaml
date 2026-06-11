@@ -1357,6 +1357,133 @@ paths:
               schema:
                 $ref: "#/components/schemas/TrialBalance"
 
+  /report-templates:
+    get:
+      summary: List Phase 5 report templates for UFO-style report design.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Report template list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReportTemplate"
+    post:
+      summary: Create a Phase 5 report template header.
+      x-permission: report_template.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReportTemplateRequest"
+      responses:
+        "201":
+          description: Report template created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportTemplate"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /report-templates/{reportTemplateId}/versions:
+    post:
+      summary: Create a new draft template version instead of mutating a published version.
+      x-permission: report_template.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - name: reportTemplateId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReportTemplateVersionRequest"
+      responses:
+        "201":
+          description: Draft report template version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportTemplateVersion"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /report-template-versions/{reportTemplateVersionId}:
+    get:
+      summary: Read a report template version with sheets, cells, formulas, and dependencies.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: reportTemplateVersionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Report template version detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportTemplateVersion"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /report-template-versions/{reportTemplateVersionId}/publish:
+    post:
+      summary: Publish a draft report template version.
+      x-permission: report_template.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: reportTemplateVersionId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                publishedBy:
+                  type: string
+      responses:
+        "200":
+          description: Report template version published.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportTemplateVersion"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /audit-logs:
     get:
       summary: Query audit logs.
@@ -9477,6 +9604,233 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/FixedAssetLedgerEntry"
+
+    CreateReportTemplateRequest:
+      type: object
+      required: [accountSetId, templateCode, templateName, reportType]
+      properties:
+        accountSetId:
+          type: string
+        templateCode:
+          type: string
+        templateName:
+          type: string
+        reportType:
+          type: string
+          enum: [statutory, management, ufo]
+        createdBy:
+          type: string
+
+    ReportTemplate:
+      type: object
+      required: [id, accountSetId, templateCode, templateName, reportType, status, latestVersionNo]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        templateCode:
+          type: string
+        templateName:
+          type: string
+        reportType:
+          type: string
+          enum: [statutory, management, ufo]
+        status:
+          type: string
+          enum: [draft, active, archived]
+        latestVersionNo:
+          type: integer
+        publishedVersionId:
+          type: string
+        versionCount:
+          type: integer
+
+    CreateReportTemplateVersionRequest:
+      type: object
+      required: [sheets]
+      properties:
+        baseVersionId:
+          type: string
+          description: Optional published version to copy when creating a new immutable draft version.
+        versionName:
+          type: string
+        effectiveFromPeriod:
+          type: string
+          example: "2026-06"
+        layoutJson:
+          type: object
+          additionalProperties: true
+        sheets:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateReportSheetRequest"
+        createdBy:
+          type: string
+
+    CreateReportSheetRequest:
+      type: object
+      required: [sheetCode, sheetName]
+      properties:
+        sheetCode:
+          type: string
+        sheetName:
+          type: string
+        rowCount:
+          type: integer
+        columnCount:
+          type: integer
+        orderNo:
+          type: integer
+        cells:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateReportCellRequest"
+
+    CreateReportCellRequest:
+      type: object
+      required: [cellAddress]
+      properties:
+        cellAddress:
+          type: string
+        label:
+          type: string
+        valueType:
+          type: string
+          enum: [text, number, formula]
+        displayFormat:
+          type: string
+        isEditable:
+          type: boolean
+        mergeRef:
+          type: string
+        rowNo:
+          type: integer
+        columnNo:
+          type: integer
+        formula:
+          $ref: "#/components/schemas/CreateReportFormulaRequest"
+
+    CreateReportFormulaRequest:
+      type: object
+      required: [formulaText]
+      properties:
+        formulaText:
+          type: string
+          description: Supports BAL(), AMT(), OPENING(), CLOSING(), AUX_BAL(), cross-period, and cross-sheet references.
+          examples:
+            - BAL("1001", "2026-06", "debit")
+            - AMT("6001", "2026-06")
+            - OPENING("1122", "2026-06")
+            - CLOSING("1001", "2026-06")
+            - AUX_BAL("1122", "customer", "C001", "2026-06")
+        astJson:
+          type: object
+          additionalProperties: true
+        dependenciesJson:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    ReportTemplateVersion:
+      type: object
+      required: [id, templateId, versionNo, status, layoutJson, sheets]
+      properties:
+        id:
+          type: string
+        templateId:
+          type: string
+        versionNo:
+          type: integer
+        versionName:
+          type: string
+        status:
+          type: string
+          enum: [draft, published, archived]
+        effectiveFromPeriod:
+          type: string
+        layoutJson:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+        publishedBy:
+          type: string
+        publishedAt:
+          type: string
+        sheets:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportSheet"
+
+    ReportSheet:
+      type: object
+      required: [id, versionId, sheetCode, sheetName, cells]
+      properties:
+        id:
+          type: string
+        versionId:
+          type: string
+        sheetCode:
+          type: string
+        sheetName:
+          type: string
+        rowCount:
+          type: integer
+        columnCount:
+          type: integer
+        orderNo:
+          type: integer
+        cells:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportCell"
+
+    ReportCell:
+      type: object
+      required: [id, sheetId, cellAddress, valueType, isEditable]
+      properties:
+        id:
+          type: string
+        sheetId:
+          type: string
+        cellAddress:
+          type: string
+        label:
+          type: string
+        valueType:
+          type: string
+          enum: [text, number, formula]
+        displayFormat:
+          type: string
+        isEditable:
+          type: boolean
+        mergeRef:
+          type: string
+        rowNo:
+          type: integer
+        columnNo:
+          type: integer
+        formula:
+          $ref: "#/components/schemas/ReportFormula"
+
+    ReportFormula:
+      type: object
+      required: [id, formulaText, astJson, dependenciesJson]
+      properties:
+        id:
+          type: string
+        formulaText:
+          type: string
+        astJson:
+          type: object
+          additionalProperties: true
+        dependenciesJson:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
 
     CreateAgentActionRequest:
       type: object

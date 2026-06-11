@@ -89,6 +89,7 @@ model AccountSet {
   assetCounts      AssetCount[]
   fixedAssetLedgerEntries FixedAssetLedgerEntry[]
   fixedAssetReconciliationRuns FixedAssetReconciliationRun[]
+  reportTemplates  ReportTemplate[]
 }
 
 model User {
@@ -2128,4 +2129,86 @@ model FixedAssetReconciliationRun {
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
 
   @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model ReportTemplate {
+  id                 String   @id @default(uuid())
+  accountSetId       String
+  templateCode       String
+  templateName       String
+  reportType         String
+  status             String   @default("draft")
+  latestVersionNo    Int      @default(0)
+  publishedVersionId String?
+  createdBy          String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  versions   ReportTemplateVersion[]
+
+  @@unique([accountSetId, templateCode])
+}
+
+model ReportTemplateVersion {
+  id                  String   @id @default(uuid())
+  templateId          String
+  versionNo           Int
+  versionName         String?
+  status              String   @default("draft")
+  effectiveFromPeriod String?
+  layoutJson          String   @default("{}")
+  createdBy           String
+  createdAt           DateTime @default(now())
+  publishedBy         String?
+  publishedAt         DateTime?
+
+  template ReportTemplate @relation(fields: [templateId], references: [id])
+  sheets   ReportSheet[]
+
+  @@unique([templateId, versionNo])
+}
+
+model ReportSheet {
+  id          String @id @default(uuid())
+  versionId   String
+  sheetCode   String
+  sheetName   String
+  rowCount    Int    @default(0)
+  columnCount Int    @default(0)
+  orderNo     Int    @default(1)
+
+  version ReportTemplateVersion @relation(fields: [versionId], references: [id])
+  cells   ReportCell[]
+
+  @@unique([versionId, sheetCode])
+}
+
+model ReportCell {
+  id            String  @id @default(uuid())
+  sheetId       String
+  cellAddress   String
+  label         String?
+  valueType     String  @default("text")
+  displayFormat String?
+  isEditable    Boolean @default(true)
+  mergeRef      String?
+  rowNo         Int?
+  columnNo      Int?
+
+  sheet   ReportSheet @relation(fields: [sheetId], references: [id])
+  formula ReportFormula?
+
+  @@unique([sheetId, cellAddress])
+}
+
+model ReportFormula {
+  id               String @id @default(uuid())
+  cellId           String @unique
+  formulaText      String
+  astJson          String @default("{}")
+  dependenciesJson String @default("[]")
+  createdAt        DateTime @default(now())
+
+  cell ReportCell @relation(fields: [cellId], references: [id])
 }
