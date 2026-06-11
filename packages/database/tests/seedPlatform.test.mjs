@@ -97,7 +97,14 @@ test("Phase 1 platform seed is idempotent and creates an initial administrator f
   assert.equal(prisma.state.permissions.size, permissions.length);
   assert.equal(prisma.state.roles.size, Object.keys(roleTemplates).length);
   assert.equal(prisma.state.users.size, 1);
-  for (const code of ["partner.manage", "inventory_item.manage", "cost_allocation.manage", "payroll_setup.manage", "fixed_asset_setup.manage"]) {
+  for (const code of [
+    "partner.manage",
+    "inventory_item.manage",
+    "cost_allocation.manage",
+    "payroll_setup.manage",
+    "fixed_asset_setup.manage",
+    "report_approval.manage"
+  ]) {
     assert.ok(permissions.includes(code), `seed permissions should include ${code}`);
     assert.ok(prisma.state.permissions.has(code), `seed should persist ${code}`);
   }

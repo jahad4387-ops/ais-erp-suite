@@ -93,6 +93,7 @@ model AccountSet {
   reportRuns       ReportRun[]
   reportExports    ReportExport[]
   aiReportInterpretations AiReportInterpretation[]
+  reportApprovals  ReportApproval[]
 }
 
 model User {
@@ -2240,8 +2241,31 @@ model ReportRun {
   traceLinks      ReportTraceLink[]
   exports         ReportExport[]
   interpretations AiReportInterpretation[]
+  approvals       ReportApproval[]
 
   @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model ReportApproval {
+  id             String   @id @default(uuid())
+  accountSetId   String
+  reportRunId    String
+  status         String   @default("pending")
+  submittedBy    String
+  submittedAt    DateTime @default(now())
+  approvedBy     String?
+  approvedAt     DateTime?
+  rejectedBy     String?
+  rejectedAt     DateTime?
+  reviewComment  String?
+  exceptionCount Int      @default(0)
+  exceptionsJson String   @default("[]")
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  reportRun  ReportRun  @relation(fields: [reportRunId], references: [id])
+
+  @@index([accountSetId, status])
+  @@index([reportRunId])
 }
 
 model ReportRunCell {

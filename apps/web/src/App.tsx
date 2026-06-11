@@ -20,6 +20,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Reports } from './pages/Reports';
 import { ReportTemplates, UfoReportDesigner } from './pages/ReportTemplates';
 import { ReportRuns } from './pages/ReportRuns';
+import { ReportApprovals } from './pages/ReportApprovals';
 import { ReportExportCenter } from './pages/ReportExportCenter';
 import { BankReconciliation } from './pages/BankReconciliation';
 import { AgentCenter } from './pages/AgentCenter';
@@ -305,6 +306,7 @@ const AppFrame: React.FC = () => {
                   { key: 'report-templates', label: <Link to="/report-templates">Report Templates</Link> },
                   { key: 'ufo-report-designer', label: <Link to="/ufo-report-designer">UFO Designer</Link> },
                   { key: 'report-runs', label: <Link to="/report-runs">Report Runs</Link> },
+                  { key: 'report-approvals', label: <Link to="/report-approvals">Report Approvals</Link> },
                   { key: 'report-export-center', label: <Link to="/report-export-center">Export Center</Link> },
                   { key: 'trial', label: <Link to="/reports/trial-balance">试算平衡表</Link> },
                   { key: 'balances', label: <Link to="/reports/account-balances">科目余额表</Link> },
@@ -373,6 +375,7 @@ const AppFrame: React.FC = () => {
                 <Route path="/report-templates" element={<RequireAuth><ReportTemplates /></RequireAuth>} />
                 <Route path="/ufo-report-designer" element={<RequireAuth><UfoReportDesigner /></RequireAuth>} />
                 <Route path="/report-runs" element={<RequireAuth><ReportRuns /></RequireAuth>} />
+                <Route path="/report-approvals" element={<RequireAuth><ReportApprovals /></RequireAuth>} />
                 <Route path="/report-export-center" element={<RequireAuth><ReportExportCenter /></RequireAuth>} />
                 <Route path="/reports/:reportName" element={<RequireAuth><Reports /></RequireAuth>} />
                 <Route path="/bank-reconciliation" element={<RequireAuth><BankReconciliation /></RequireAuth>} />

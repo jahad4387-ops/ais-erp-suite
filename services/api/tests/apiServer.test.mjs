@@ -8476,6 +8476,178 @@ test("Phase 5 report runs calculate formula snapshots, lock values, and block cl
   assert.equal(closedRecalculate.body.code, "REPORT_PERIOD_CLOSED");
 });
 
+test("Phase 5 cash-flow reports block review and lock when cash or bank entries are unassigned", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P5CF",
+      name: "Phase 5 Cash Flow",
+      companyName: "Phase 5 Cash Flow Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase5-cash-flow-account-set"
+  );
+  const periods = await request(
+    api,
+    "POST",
+    `/account-sets/${accountSet.body.id}/periods/generate`,
+    {},
+    "phase5-cash-flow-periods"
+  );
+  await request(
+    api,
+    "POST",
+    "/accounts",
+    { accountSetId: accountSet.body.id, code: "1002", name: "Bank Deposits", accountType: "asset", normalBalance: "debit", isBank: true },
+    "phase5-cash-flow-bank"
+  );
+  await request(
+    api,
+    "POST",
+    "/accounts",
+    { accountSetId: accountSet.body.id, code: "6602", name: "Office Expense", accountType: "expense", normalBalance: "debit" },
+    "phase5-cash-flow-expense"
+  );
+  const voucher = await request(
+    api,
+    "POST",
+    "/vouchers",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      voucherDate: "2026-01-18",
+      createdBy: "maker",
+      lines: [
+        { summary: "Expense paid by bank", accountCode: "6602", debit: 500, credit: 0 },
+        { summary: "Bank payment without cash-flow item", accountCode: "1002", debit: 0, credit: 500 }
+      ]
+    },
+    "phase5-cash-flow-voucher"
+  );
+  await request(api, "POST", `/vouchers/${voucher.body.id}/submit`, { submittedBy: "maker" }, "phase5-cash-flow-submit-voucher");
+  await request(api, "POST", `/vouchers/${voucher.body.id}/approve`, { approvedBy: "reviewer" }, "phase5-cash-flow-approve-voucher");
+  await request(api, "POST", `/vouchers/${voucher.body.id}/post`, { postedBy: "poster" }, "phase5-cash-flow-post-voucher");
+
+  const template = await request(
+    api,
+    "POST",
+    "/report-templates",
+    {
+      accountSetId: accountSet.body.id,
+      templateCode: "CF-01",
+      templateName: "Cash Flow Statement",
+      reportType: "cash_flow",
+      createdBy: "system"
+    },
+    "phase5-cash-flow-template"
+  );
+  const version = await request(
+    api,
+    "POST",
+    `/report-templates/${template.body.id}/versions`,
+    {
+      sheets: [
+        {
+          sheetCode: "CF",
+          sheetName: "Cash Flow",
+          cells: [
+            {
+              cellAddress: "B12",
+              label: "Cash movement",
+              valueType: "formula",
+              formula: {
+                formulaText: "AMT(\"1002\", \"2026-01\")",
+                astJson: { name: "AMT", args: ["1002", "2026-01"] },
+                dependenciesJson: [{ sourceType: "account_balance", accountCode: "1002", period: "2026-01" }]
+              }
+            }
+          ]
+        }
+      ],
+      createdBy: "system"
+    },
+    "phase5-cash-flow-version"
+  );
+  await request(
+    api,
+    "POST",
+    `/report-template-versions/${version.body.id}/publish`,
+    { publishedBy: "system" },
+    "phase5-cash-flow-publish"
+  );
+  const run = await request(
+    api,
+    "POST",
+    "/report-runs",
+    {
+      accountSetId: accountSet.body.id,
+      templateVersionId: version.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      runMode: "formal",
+      createdBy: "system"
+    },
+    "phase5-cash-flow-run"
+  );
+
+  const blockedReview = await request(
+    api,
+    "POST",
+    `/report-runs/${run.body.id}/submit-review`,
+    { submittedBy: "system", reviewComment: "Submit cash-flow report" },
+    "phase5-cash-flow-submit-review-blocked"
+  );
+  const blockedLock = await request(
+    api,
+    "POST",
+    `/report-runs/${run.body.id}/lock`,
+    { lockedBy: "system" },
+    "phase5-cash-flow-lock-blocked"
+  );
+
+  const bankEntry = api.state.journalEntries.find((entry) => entry.accountCode === "1002");
+  bankEntry.auxiliarySnapshot = { cashFlowItemId: "CF-OPERATING-PAYMENT" };
+
+  const approval = await request(
+    api,
+    "POST",
+    `/report-runs/${run.body.id}/submit-review`,
+    { submittedBy: "system", reviewComment: "Cash-flow item assigned" },
+    "phase5-cash-flow-submit-review"
+  );
+  const approved = await request(
+    api,
+    "POST",
+    `/report-approvals/${approval.body.id}/approve`,
+    { approvedBy: "finance-manager", reviewComment: "Approved and locked" },
+    "phase5-cash-flow-approve-report"
+  );
+  const approvalList = await request(api, "GET", `/report-approvals?accountSetId=${accountSet.body.id}`, null, null);
+
+  assert.equal(periods.status, 201);
+  assert.equal(run.status, 201);
+  assert.equal(blockedReview.status, 409);
+  assert.equal(blockedReview.body.code, "REPORT_CASH_FLOW_UNASSIGNED");
+  assert.equal(blockedReview.body.exceptions[0].exceptionCode, "REPORT_CASH_FLOW_UNASSIGNED");
+  assert.match(blockedReview.body.exceptions[0].highlight, /未分配异常现金流/);
+  assert.equal(blockedLock.status, 409);
+  assert.equal(blockedLock.body.code, "REPORT_CASH_FLOW_UNASSIGNED");
+  assert.equal(approval.status, 201);
+  assert.equal(approval.body.status, "pending");
+  assert.equal(approval.body.exceptionCount, 0);
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.status, "approved");
+  assert.equal(approved.body.reportRun.status, "locked");
+  assert.equal(approvalList.body.length, 1);
+});
+
 test("Phase 5 report exports and AI interpretations are tied to snapshot evidence", async () => {
   const api = createApi();
   const accountSet = await request(

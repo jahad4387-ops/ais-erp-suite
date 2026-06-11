@@ -51,4 +51,5 @@ import "../apps/web/tests/fixedAssetFinalPages.test.mjs";
 import "../docs/tests/phase4AcceptanceReport.test.mjs";
 import "../apps/web/tests/reportTemplatePages.test.mjs";
 import "../apps/web/tests/reportRunPages.test.mjs";
+import "../apps/web/tests/reportApprovalPages.test.mjs";
 import "../apps/web/tests/reportExportAiPages.test.mjs";

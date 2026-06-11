@@ -24,6 +24,7 @@ const permissions = [
   "report_run.manage",
   "report_export.manage",
   "report_interpretation.manage",
+  "report_approval.manage",
   "attachment.upload",
   "attachment.delete",
   "bank_reconciliation.create",
@@ -116,7 +117,8 @@ const roleTemplates = {
     "report_template.manage",
     "report_run.manage",
     "report_export.manage",
-    "report_interpretation.manage"
+    "report_interpretation.manage",
+    "report_approval.manage"
   ],
   制单员: ["voucher.create", "voucher.update_own", "voucher.submit", "voucher.view", "attachment.upload"],
   审核员: ["voucher.approve", "voucher.reject", "voucher.view"],

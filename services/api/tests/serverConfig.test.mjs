@@ -47,6 +47,7 @@ test("runtime API can enable Prisma platform persistence from environment", asyn
   assert.ok(syncedPermissionCodes.includes("inventory_item.manage"));
   assert.ok(syncedPermissionCodes.includes("payroll_setup.manage"));
   assert.ok(syncedPermissionCodes.includes("fixed_asset_setup.manage"));
+  assert.ok(syncedPermissionCodes.includes("report_approval.manage"));
 });
 
 test("deployment config endpoint reports database and attachment storage status", async () => {

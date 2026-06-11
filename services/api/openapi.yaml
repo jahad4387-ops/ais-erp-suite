@@ -1619,8 +1619,126 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReportRun"
+        "409":
+          description: REPORT_CASH_FLOW_UNASSIGNED when a cash-flow report has cash or bank entries without cash-flow item assignments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /report-runs/{reportRunId}/submit-review:
+    post:
+      summary: Submit a report run to the Phase 5 report approval queue after blocking cash-flow assignment exceptions.
+      x-permission: report_approval.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: reportRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                submittedBy:
+                  type: string
+                reviewComment:
+                  type: string
+      responses:
+        "201":
+          description: Report approval submitted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportApproval"
+        "409":
+          description: REPORT_CASH_FLOW_UNASSIGNED when cash or bank entries are not assigned to cash-flow items.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - type: object
+                    properties:
+                      exceptions:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ReportApprovalException"
+
+  /report-approvals:
+    get:
+      summary: List Phase 5 report approval queue rows with exception counts and optional locked snapshot context.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          schema:
+            type: string
+        - name: reportRunId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Report approvals.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReportApproval"
+
+  /report-approvals/{reportApprovalId}/approve:
+    post:
+      summary: Approve a pending report approval and lock the report run snapshot.
+      x-permission: report_approval.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: reportApprovalId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                approvedBy:
+                  type: string
+                reviewComment:
+                  type: string
+      responses:
+        "200":
+          description: Report approval approved and report run locked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportApproval"
+        "409":
+          description: REPORT_APPROVAL_STATUS_INVALID or REPORT_CASH_FLOW_UNASSIGNED.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /report-runs/{reportRunId}/exports:
     post:
@@ -10114,7 +10232,7 @@ components:
           enum: [formal, simulation]
         status:
           type: string
-          enum: [calculated, locked, archived]
+          enum: [calculated, pending_review, locked, archived]
         snapshotHash:
           type: string
         renderMode:
@@ -10179,6 +10297,76 @@ components:
           type: integer
         amount:
           type: number
+
+    ReportApproval:
+      type: object
+      required: [id, accountSetId, reportRunId, status, submittedBy, submittedAt, exceptionCount, exceptions]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        reportRunId:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        submittedBy:
+          type: string
+        submittedAt:
+          type: string
+        approvedBy:
+          type: string
+        approvedAt:
+          type: string
+        rejectedBy:
+          type: string
+        rejectedAt:
+          type: string
+        reviewComment:
+          type: string
+        exceptionCount:
+          type: integer
+        exceptions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportApprovalException"
+        reportRun:
+          $ref: "#/components/schemas/ReportRun"
+
+    ReportApprovalException:
+      type: object
+      required: [exceptionCode, severity, highlight, message, reportRunId]
+      properties:
+        id:
+          type: string
+        exceptionCode:
+          type: string
+          example: REPORT_CASH_FLOW_UNASSIGNED
+        severity:
+          type: string
+          enum: [blocking, warning]
+        highlight:
+          type: string
+          example: 未分配异常现金流
+        message:
+          type: string
+        reportRunId:
+          type: string
+        accountCode:
+          type: string
+        accountName:
+          type: string
+        voucherId:
+          type: string
+        voucherLineNo:
+          type: integer
+        amount:
+          type: number
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
 
     CreateReportExportRequest:
       type: object

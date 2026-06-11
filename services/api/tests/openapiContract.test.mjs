@@ -116,6 +116,8 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/report-runs:",
     "/report-runs/{reportRunId}/recalculate:",
     "/report-runs/{reportRunId}/lock:",
+    "/report-runs/{reportRunId}/submit-review:",
+    "/report-approvals/{reportApprovalId}/approve:",
     "/report-runs/{reportRunId}/exports:",
     "/report-runs/{reportRunId}/interpretations:"
   ];
@@ -546,6 +548,9 @@ test("Phase 5 report run endpoints document formula snapshots, closed-period blo
   const detailBlock = blockAfter("  /report-runs/{reportRunId}:");
   const recalculateBlock = blockAfter("  /report-runs/{reportRunId}/recalculate:");
   const lockBlock = blockAfter("  /report-runs/{reportRunId}/lock:");
+  const submitReviewBlock = blockAfter("  /report-runs/{reportRunId}/submit-review:");
+  const approvalsBlock = blockAfter("  /report-approvals:");
+  const approveBlock = blockAfter("  /report-approvals/{reportApprovalId}/approve:");
 
   assert.match(runsBlock, /x-permission: report\.view/);
   assert.match(runsBlock, /x-permission: report_run\.manage/);
@@ -554,6 +559,10 @@ test("Phase 5 report run endpoints document formula snapshots, closed-period blo
   assert.match(detailBlock, /x-permission: report\.view/);
   assert.match(recalculateBlock, /x-permission: report_run\.manage/);
   assert.match(lockBlock, /x-permission: report_run\.manage/);
+  assert.match(submitReviewBlock, /x-permission: report_approval\.manage/);
+  assert.match(submitReviewBlock, /ReportApproval/);
+  assert.match(approvalsBlock, /x-permission: report\.view/);
+  assert.match(approveBlock, /x-permission: report_approval\.manage/);
   assert.match(contract, /includeUnposted:/);
   assert.match(contract, /calculatedValue:/);
   assert.match(contract, /snapshotHash:/);
@@ -561,6 +570,9 @@ test("Phase 5 report run endpoints document formula snapshots, closed-period blo
   assert.match(contract, /traceLinks:/);
   assert.match(contract, /REPORT_PERIOD_CLOSED/);
   assert.match(contract, /REPORT_RUN_LOCKED/);
+  assert.match(contract, /REPORT_CASH_FLOW_UNASSIGNED/);
+  assert.match(contract, /ReportApprovalException/);
+  assert.match(contract, /未分配异常现金流/);
 });
 
 test("Phase 5 export and AI interpretation endpoints document audit history and evidence references", () => {

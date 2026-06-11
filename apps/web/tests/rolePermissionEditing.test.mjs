@@ -39,7 +39,8 @@ test("role permission labels cover Phase 2-4 business permissions", () => {
     "cost_allocation.manage",
     "payroll_run.manage",
     "fixed_asset_card.manage",
-    "fixed_asset_depreciation.manage"
+    "fixed_asset_depreciation.manage",
+    "report_approval.manage"
   ]) {
     assert.match(source, new RegExp(`'${code}'`), `${code} should have a role-permission label.`);
   }

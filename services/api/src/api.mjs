@@ -63,6 +63,7 @@ export const DEFAULT_PERMISSION_CODES = [
   "report_run.manage",
   "report_export.manage",
   "report_interpretation.manage",
+  "report_approval.manage",
   "attachment.upload",
   "attachment.delete",
   "bank_reconciliation.create",
@@ -146,11 +147,12 @@ function jsonResponse(status, body) {
   return { status, body };
 }
 
-function errorResponse(status, code, message) {
+function errorResponse(status, code, message, extras = {}) {
   return jsonResponse(status, {
     code,
     message,
-    traceId: "local-api"
+    traceId: "local-api",
+    ...extras
   });
 }
 
@@ -573,6 +575,12 @@ function permissionFor(request) {
   if (segments[0] === "report-runs" && segments.length === 3 && segments[2] === "interpretations") {
     return request.method === "GET" ? "report.view" : "report_interpretation.manage";
   }
+  if (segments[0] === "report-runs" && segments.length === 3 && segments[2] === "submit-review") {
+    return "report_approval.manage";
+  }
+  if (segments[0] === "report-approvals") {
+    return request.method === "GET" ? "report.view" : "report_approval.manage";
+  }
   if (segments[0] === "report-exports" || segments[0] === "ai-report-interpretations") {
     return "report.view";
   }
@@ -873,6 +881,7 @@ function createState(options = {}) {
     reportRuns: new Map(),
     reportExports: new Map(),
     aiReportInterpretations: new Map(),
+    reportApprovals: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -3711,6 +3720,106 @@ function findReportRunByIdentifier(state, identifier) {
   return [...state.reportRuns.values()].find((run) => run.id === identifier);
 }
 
+function findReportTemplateForRun(state, run) {
+  const version = run ? findReportTemplateVersionByIdentifier(state, run.templateVersionId) : null;
+  return version ? state.reportTemplates.get(version.templateId) : null;
+}
+
+function isCashFlowReportTemplate(template) {
+  const text = `${template?.reportType ?? ""} ${template?.templateCode ?? ""} ${template?.templateName ?? ""}`.toLowerCase();
+  return text.includes("cash_flow") || text.includes("cash-flow") || text.includes("cashflow") || text.includes("现金流");
+}
+
+function parseAuxiliarySnapshot(value) {
+  if (!value) return {};
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === "object" ? value : {};
+}
+
+function hasCashFlowAssignment(entry) {
+  const snapshot = parseAuxiliarySnapshot(entry.auxiliarySnapshot ?? entry.auxiliarySnapshotJson);
+  return [
+    "cashFlowItemId",
+    "cashFlowItemCode",
+    "cashFlowProjectId",
+    "cashFlowStatementItem",
+    "cashFlowTag",
+    "cash_flow_item_id",
+    "cash_flow_item_code"
+  ].some((key) => typeof snapshot[key] === "string" && snapshot[key].trim() !== "");
+}
+
+async function detectUnassignedCashFlowExceptions(state, run) {
+  const template = findReportTemplateForRun(state, run);
+  if (!isCashFlowReportTemplate(template)) {
+    return [];
+  }
+
+  const accounts = state.config.platformStore?.listAccounts
+    ? await state.config.platformStore.listAccounts(run.accountSetId)
+    : listAccounts(state).filter((account) => account.accountSetId === run.accountSetId);
+  const cashAccounts = new Map(
+    accounts
+      .filter((account) => account.isCash || account.isBank)
+      .map((account) => [account.code ?? account.id, account])
+  );
+  if (cashAccounts.size === 0) {
+    return [];
+  }
+
+  const journalEntries = state.config.platformStore?.listJournalEntries
+    ? await state.config.platformStore.listJournalEntries(run.accountSetId)
+    : state.journalEntries;
+  return journalEntries
+    .filter(
+      (entry) =>
+        entry.accountSetId === run.accountSetId &&
+        entry.fiscalYear === run.fiscalYear &&
+        entry.periodNo === run.periodNo &&
+        cashAccounts.has(entry.accountCode ?? entry.accountId) &&
+        !hasCashFlowAssignment(entry)
+    )
+    .map((entry, index) => {
+      const account = cashAccounts.get(entry.accountCode ?? entry.accountId);
+      const debitAmount = Number(entry.debit ?? entry.debitAmount ?? 0);
+      const creditAmount = Number(entry.credit ?? entry.creditAmount ?? 0);
+      return {
+        id: `report-exception:${run.id}:${index + 1}`,
+        exceptionCode: "REPORT_CASH_FLOW_UNASSIGNED",
+        severity: "blocking",
+        highlight: "未分配异常现金流",
+        message: "现金流量表存在涉及现金或银行科目但未挂载现金流项目的凭证分录，必须补录后才能提交或锁定。",
+        reportRunId: run.id,
+        accountCode: account?.code ?? entry.accountCode ?? entry.accountId,
+        accountName: account?.name ?? null,
+        voucherId: entry.voucherId ?? null,
+        voucherLineNo: entry.voucherLineNo ?? null,
+        amount: Math.abs(debitAmount - creditAmount),
+        fiscalYear: entry.fiscalYear,
+        periodNo: entry.periodNo
+      };
+    });
+}
+
+async function cashFlowAssignmentErrorForRun(state, run) {
+  const exceptions = await detectUnassignedCashFlowExceptions(state, run);
+  if (exceptions.length === 0) {
+    return null;
+  }
+  return errorResponse(
+    409,
+    "REPORT_CASH_FLOW_UNASSIGNED",
+    "Cash-flow reports cannot be submitted or locked while cash or bank entries lack cash-flow item assignments.",
+    { exceptions }
+  );
+}
+
 function reportPeriodClosed(state, accountSetId, fiscalYear, periodNo) {
   const period = [...state.periods.values()].find(
     (row) => row.accountSetId === accountSetId && row.fiscalYear === fiscalYear && row.periodNo === periodNo
@@ -3892,6 +4001,8 @@ async function lockReportRun(state, runId, body, actorId) {
   if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) {
     return accountSetAccessError(state, actorId, run.accountSetId);
   }
+  const cashFlowError = await cashFlowAssignmentErrorForRun(state, run);
+  if (cashFlowError) return cashFlowError;
   const locked = {
     ...run,
     status: "locked",
@@ -3906,6 +4017,97 @@ async function lockReportRun(state, runId, body, actorId) {
     objectId: locked.id
   });
   return jsonResponse(200, publicReportRun(locked));
+}
+
+function publicReportApproval(approval, reportRun = null) {
+  return cloneReportPayload({
+    ...approval,
+    exceptions: parseAuxiliarySnapshot(approval.exceptionsJson ?? []),
+    reportRun: reportRun ? publicReportRun(reportRun) : undefined
+  });
+}
+
+function findReportApprovalByIdentifier(state, identifier) {
+  return [...state.reportApprovals.values()].find((approval) => approval.id === identifier);
+}
+
+async function submitReportRunReview(state, runId, body, actorId) {
+  const run = findReportRunByIdentifier(state, runId);
+  if (!run) {
+    return errorResponse(404, "REPORT_RUN_NOT_FOUND", "Report run was not found.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) {
+    return accountSetAccessError(state, actorId, run.accountSetId);
+  }
+  if (run.status === "locked" || run.status === "archived" || run.lockedAt) {
+    return errorResponse(409, "REPORT_RUN_LOCKED", "Locked or archived report runs cannot be submitted for review.");
+  }
+  const cashFlowError = await cashFlowAssignmentErrorForRun(state, run);
+  if (cashFlowError) return cashFlowError;
+
+  const existing = [...state.reportApprovals.values()].find(
+    (approval) => approval.reportRunId === run.id && approval.status === "pending"
+  );
+  if (existing) {
+    return errorResponse(409, "REPORT_APPROVAL_PENDING", "Report run already has a pending approval.");
+  }
+  const exceptions = await detectUnassignedCashFlowExceptions(state, run);
+  const approval = {
+    id: `report-approval:${state.reportApprovals.size + 1}`,
+    accountSetId: run.accountSetId,
+    reportRunId: run.id,
+    status: "pending",
+    submittedBy: body.submittedBy ?? actorId,
+    submittedAt: "now",
+    approvedBy: null,
+    approvedAt: null,
+    rejectedBy: null,
+    rejectedAt: null,
+    reviewComment: body.reviewComment ?? null,
+    exceptionCount: exceptions.length,
+    exceptionsJson: exceptions
+  };
+  const pendingRun = { ...run, status: "pending_review" };
+  state.reportRuns.set(run.id, pendingRun);
+  state.reportApprovals.set(approval.id, approval);
+  appendAuditLog(state, {
+    actorId: approval.submittedBy,
+    action: "report_approval.submit",
+    objectType: "report_approval",
+    objectId: approval.id
+  });
+  return jsonResponse(201, publicReportApproval(approval, pendingRun));
+}
+
+async function approveReportApproval(state, approvalId, body, actorId) {
+  const approval = findReportApprovalByIdentifier(state, approvalId);
+  if (!approval) {
+    return errorResponse(404, "REPORT_APPROVAL_NOT_FOUND", "Report approval was not found.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, approval.accountSetId))) {
+    return accountSetAccessError(state, actorId, approval.accountSetId);
+  }
+  if (approval.status !== "pending") {
+    return errorResponse(409, "REPORT_APPROVAL_STATUS_INVALID", "Only pending report approvals can be approved.");
+  }
+  const lock = await lockReportRun(state, approval.reportRunId, { lockedBy: body.approvedBy ?? actorId }, actorId);
+  if (lock.status !== 200) return lock;
+
+  const approved = {
+    ...approval,
+    status: "approved",
+    approvedBy: body.approvedBy ?? actorId,
+    approvedAt: "now",
+    reviewComment: body.reviewComment ?? approval.reviewComment
+  };
+  state.reportApprovals.set(approved.id, approved);
+  appendAuditLog(state, {
+    actorId: approved.approvedBy,
+    action: "report_approval.approve",
+    objectType: "report_approval",
+    objectId: approved.id
+  });
+  return jsonResponse(200, publicReportApproval(approved, findReportRunByIdentifier(state, approval.reportRunId)));
 }
 
 function publicAiReportInterpretation(interpretation) {
@@ -8257,6 +8459,37 @@ async function route(request, state) {
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "report-runs" && segments[2] === "lock") {
     return lockReportRun(state, segments[1], body, actorIdFor(request, state));
+  }
+
+  if (request.method === "POST" && segments.length === 3 && segments[0] === "report-runs" && segments[2] === "submit-review") {
+    return submitReportRunReview(state, segments[1], body, actorIdFor(request, state));
+  }
+
+  if (request.method === "GET" && request.path.split("?")[0] === "/report-approvals") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const reportRunId = query.get("reportRunId");
+    const status = query.get("status");
+    if (!accountSetId && !reportRunId) {
+      throw new Error("accountSetId or reportRunId is required.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const approvals = [];
+    for (const approval of state.reportApprovals.values()) {
+      if (accountSetId && approval.accountSetId !== accountSetId) continue;
+      if (reportRunId && approval.reportRunId !== reportRunId) continue;
+      if (status && approval.status !== status) continue;
+      if (!(await canAccessAccountSet(state, actorId, approval.accountSetId))) continue;
+      approvals.push(publicReportApproval(approval, findReportRunByIdentifier(state, approval.reportRunId)));
+    }
+    return jsonResponse(200, approvals);
+  }
+
+  if (request.method === "POST" && segments.length === 3 && segments[0] === "report-approvals" && segments[2] === "approve") {
+    return approveReportApproval(state, segments[1], body, actorIdFor(request, state));
   }
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "report-runs" && segments[2] === "exports") {

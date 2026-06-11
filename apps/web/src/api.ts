@@ -130,6 +130,7 @@ const errorCodeText: Record<string, string> = {
   AI_SUGGESTION_ALREADY_CONVERTED: '智能凭证建议已转换为凭证。',
   REPORT_PERIOD_CLOSED: '会计期间已结账，报表引擎不能重新计算。',
   REPORT_RUN_LOCKED: '报表已锁定，只能读取已保存的快照。',
+  REPORT_CASH_FLOW_UNASSIGNED: '现金流量表存在未分配异常现金流，请补录现金流项目后再提交或锁定。',
   REPORT_TEMPLATE_VERSION_NOT_PUBLISHED: '只有已发布的报表模板版本可以运行。',
   REPORT_RUN_NOT_FOUND: '未找到报表运行记录。',
   ROLE_ALREADY_EXISTS: '角色名称已存在。',
@@ -252,7 +253,9 @@ async function request(method: string, path: string, data?: any) {
   const responseData = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(zhErrorMessage(responseData?.message, responseData?.code));
+    const error = new Error(zhErrorMessage(responseData?.message, responseData?.code));
+    (error as any).data = responseData;
+    throw error;
   }
 
   return responseData;
