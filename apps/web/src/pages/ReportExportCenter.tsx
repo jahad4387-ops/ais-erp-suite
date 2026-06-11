@@ -53,7 +53,7 @@ export const ReportExportCenter: React.FC = () => {
   const createExport = async () => {
     const values = await form.validateFields(['reportRunId', 'fileType']);
     setReportRunId(values.reportRunId);
-    await api.post(`/report-runs/${reportRunId}/exports`, {
+    await api.post(`/report-runs/${values.reportRunId}/exports`, {
       fileType: values.fileType,
       exportedBy: currentUser,
     });
@@ -66,14 +66,14 @@ export const ReportExportCenter: React.FC = () => {
     const keyFindings = String(values.keyFindings ?? '').split('\n').filter(Boolean);
     const warnings = String(values.warnings ?? '').split('\n').filter(Boolean);
     const evidenceRefs = String(values.evidenceRefs ?? '').split('\n').filter(Boolean);
-    await api.post(`/report-runs/${reportRunId}/interpretations`, {
+    await api.post(`/report-runs/${values.reportRunId}/interpretations`, {
       summary: values.summary,
       keyFindings,
       warnings,
       evidenceRefs,
       interpretedBy: currentUser,
     });
-    const rows = await api.get(`/ai-report-interpretations?reportRunId=${reportRunId}`);
+    const rows = await api.get(`/ai-report-interpretations?reportRunId=${values.reportRunId}`);
     setInterpretations(rows ?? []);
   };
 

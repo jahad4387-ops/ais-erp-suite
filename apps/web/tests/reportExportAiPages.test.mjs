@@ -18,9 +18,10 @@ test("Phase 5 report export center wires export history and AI interpretation AP
   const source = readFileSync(pagePath, "utf8");
 
   assert.match(source, /api\.get\(`\/report-exports\?accountSetId=\$\{currentAccountSetId\}`\)/);
-  assert.match(source, /api\.post\(`\/report-runs\/\$\{reportRunId\}\/exports`/);
-  assert.match(source, /api\.post\(`\/report-runs\/\$\{reportRunId\}\/interpretations`/);
-  assert.match(source, /api\.get\(`\/ai-report-interpretations\?reportRunId=\$\{reportRunId\}`\)/);
+  assert.match(source, /api\.post\(`\/report-runs\/\$\{values\.reportRunId\}\/exports`/);
+  assert.match(source, /api\.post\(`\/report-runs\/\$\{values\.reportRunId\}\/interpretations`/);
+  assert.match(source, /api\.get\(`\/ai-report-interpretations\?reportRunId=\$\{values\.reportRunId\}`\)/);
+  assert.doesNotMatch(source, /api\.post\(`\/report-runs\/\$\{reportRunId\}\/exports`/);
   assert.match(source, /keyFindings/);
   assert.match(source, /warnings/);
   assert.match(source, /evidenceRefs/);
