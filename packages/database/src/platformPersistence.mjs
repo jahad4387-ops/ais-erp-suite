@@ -881,6 +881,22 @@ export function createPlatformPersistence(prisma) {
       return user ? userIdentity(user) : null;
     },
 
+    async findUserIdentityById(userId) {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        include: {
+          userRoles: {
+            include: {
+              role: {
+                include: { rolePermissions: { include: { permission: true } } }
+              }
+            }
+          }
+        }
+      });
+      return user ? userIdentity(user) : null;
+    },
+
     async createAccountSet(accountSet) {
       const created = await prisma.accountSet.create({
         data: {

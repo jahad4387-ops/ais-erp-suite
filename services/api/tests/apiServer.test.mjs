@@ -696,6 +696,59 @@ test("access tokens are signed with the configured token secret", async () => {
   assert.equal(signature, expected);
 });
 
+test("persisted token requests reload role permissions after API restart", async () => {
+  const persistedUser = {
+    id: "persisted-admin-id",
+    username: "persisted-admin",
+    password: "admin-password",
+    name: "Persisted Admin",
+    role: "系统管理员",
+    roleId: "role:persisted-admin"
+  };
+  const permissionCodes = [
+    "account_set.view",
+    "role.manage",
+    "user.manage",
+    "account_set.manage",
+    "account_set_user.manage",
+    "partner.manage"
+  ];
+  const platformStore = {
+    findUserIdentity: async (username) =>
+      username === persistedUser.username ? { user: persistedUser, permissionCodes } : null,
+    findUserIdentityById: async (userId) =>
+      userId === persistedUser.id ? { user: persistedUser, permissionCodes } : null,
+    canAccessAccountSet: async () => false
+  };
+  const firstApi = createApi({ tokenSecret: "persisted-token-secret", platformStore });
+  const login = await firstApi.handle({
+    method: "POST",
+    path: "/auth/login",
+    headers: {},
+    body: { username: persistedUser.username, password: persistedUser.password }
+  });
+  const restartedApi = createApi({ tokenSecret: "persisted-token-secret", platformStore });
+  const supplier = await restartedApi.handle({
+    method: "POST",
+    path: "/partners",
+    headers: {
+      Authorization: `Bearer ${login.body.accessToken}`,
+      "Idempotency-Key": "persisted-token-supplier"
+    },
+    body: {
+      accountSetId: "account-set:persisted",
+      partnerType: "supplier",
+      code: "SUP-TOKEN",
+      name: "Token Supplier"
+    }
+  });
+
+  assert.equal(login.status, 200);
+  assert.equal(supplier.status, 201);
+  assert.equal(supplier.body.name, "Token Supplier");
+  assert.equal(restartedApi.state.permissionsByActor.get(persistedUser.id).has("partner.manage"), true);
+});
+
 test("account-set authorization isolates vouchers between users with the same business permissions", async () => {
   const api = createApi();
   const permissions = new Set(["account_set.create", "account_set.view", "period.open", "account.create", "voucher.create", "voucher.view"]);

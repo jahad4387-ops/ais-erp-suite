@@ -817,6 +817,27 @@ test("Prisma platform persistence stores users with password hashes and role per
   assert.deepEqual(identity.permissionCodes, ["voucher.create", "voucher.view"]);
 });
 
+test("Prisma platform persistence can load user identity by user id for persisted tokens", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+
+  const role = await store.createRole({
+    name: "Persisted Admin",
+    description: "Reloads token permissions",
+    permissionCodes: ["voucher.view", "account.create"]
+  });
+  const user = await store.createUser({
+    username: "persisted-admin",
+    name: "Persisted Admin",
+    passwordHash: "sha256:salt:digest",
+    roleId: role.id
+  });
+  const identity = await store.findUserIdentityById(user.id);
+
+  assert.equal(identity.user.id, user.id);
+  assert.equal(identity.user.username, "persisted-admin");
+  assert.deepEqual(identity.permissionCodes, ["voucher.view", "account.create"]);
+});
+
 test("Prisma platform persistence updates role permission assignments", async () => {
   const store = createPlatformPersistence(createFakePrisma());
 

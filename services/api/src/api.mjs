@@ -776,14 +776,30 @@ function permissionFor(request) {
   return null;
 }
 
-function requirePermission(request, state) {
+async function permissionsForActor(state, actorId) {
+  const cachedPermissions = state.permissionsByActor.get(actorId);
+  if (cachedPermissions) {
+    return cachedPermissions;
+  }
+
+  const identity = await state.config.platformStore?.findUserIdentityById?.(actorId);
+  if (!identity) {
+    return new Set();
+  }
+
+  const permissions = new Set(identity.permissionCodes);
+  state.permissionsByActor.set(identity.user.id, permissions);
+  return permissions;
+}
+
+async function requirePermission(request, state) {
   const permission = permissionFor(request);
   if (!permission) {
     return null;
   }
 
   const actorId = actorIdFor(request, state);
-  const permissions = state.permissionsByActor.get(actorId) ?? new Set();
+  const permissions = await permissionsForActor(state, actorId);
   if (permissions.has("*") || permissions.has(permission)) {
     return null;
   }
@@ -9818,7 +9834,7 @@ export function createApi(options = {}) {
         return idempotencyError;
       }
 
-      const permissionError = requirePermission(request, state);
+      const permissionError = await requirePermission(request, state);
       if (permissionError) {
         return permissionError;
       }
