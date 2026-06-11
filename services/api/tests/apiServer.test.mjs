@@ -8839,6 +8839,178 @@ test("Phase 5 report runs calculate formula snapshots, lock values, and block cl
   assert.equal(closedRecalculate.body.code, "REPORT_PERIOD_CLOSED");
 });
 
+test("Phase 5 report formula engine resolves cross-sheet cell references from snapshots", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P5X",
+      name: "Phase 5 Cross Sheet",
+      companyName: "Phase 5 Cross Sheet Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase5-cross-sheet-account-set"
+  );
+  api.state.balances.push(
+    {
+      id: "balance:p5x:1001",
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      accountCode: "1001",
+      accountName: "Cash",
+      openingDebit: 0,
+      openingCredit: 0,
+      periodDebit: 0,
+      periodCredit: 0,
+      closingDebit: 120,
+      closingCredit: 0
+    },
+    {
+      id: "balance:p5x:6001",
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      accountCode: "6001",
+      accountName: "Revenue",
+      openingDebit: 0,
+      openingCredit: 0,
+      periodDebit: 0,
+      periodCredit: 80,
+      closingDebit: 0,
+      closingCredit: 80
+    }
+  );
+  const template = await request(
+    api,
+    "POST",
+    "/report-templates",
+    {
+      accountSetId: accountSet.body.id,
+      templateCode: "XREF-UFO",
+      templateName: "Cross Sheet UFO",
+      reportType: "ufo",
+      createdBy: "system"
+    },
+    "phase5-cross-sheet-template"
+  );
+  const version = await request(
+    api,
+    "POST",
+    `/report-templates/${template.body.id}/versions`,
+    {
+      sheets: [
+        {
+          sheetCode: "BS",
+          sheetName: "Balance Sheet",
+          cells: [
+            {
+              cellAddress: "A1",
+              label: "Forward reference",
+              valueType: "formula",
+              displayFormat: "currency",
+              isEditable: false,
+              formula: {
+                formulaText: "IS!B4 + 5",
+                astJson: { name: "ADD", args: ["IS!B4", "5"] },
+                dependenciesJson: [{ sourceType: "report_cell", sheetCode: "IS", cellAddress: "B4" }]
+              }
+            },
+            {
+              cellAddress: "B4",
+              label: "Cash",
+              valueType: "formula",
+              displayFormat: "currency",
+              isEditable: false,
+              formula: {
+                formulaText: "CLOSING(\"1001\", \"2026-06\")",
+                astJson: { name: "CLOSING", args: ["1001", "2026-06"] },
+                dependenciesJson: [{ sourceType: "account_balance", accountCode: "1001", period: "2026-06" }]
+              }
+            }
+          ]
+        },
+        {
+          sheetCode: "IS",
+          sheetName: "Income Statement",
+          cells: [
+            {
+              cellAddress: "B4",
+              label: "Revenue",
+              valueType: "formula",
+              displayFormat: "currency",
+              isEditable: false,
+              formula: {
+                formulaText: "AMT(\"6001\", \"2026-06\")",
+                astJson: { name: "AMT", args: ["6001", "2026-06"] },
+                dependenciesJson: [{ sourceType: "account_balance", accountCode: "6001", period: "2026-06" }]
+              }
+            }
+          ]
+        },
+        {
+          sheetCode: "MGMT",
+          sheetName: "Management",
+          cells: [
+            {
+              cellAddress: "C6",
+              label: "Cash plus revenue",
+              valueType: "formula",
+              displayFormat: "currency",
+              isEditable: false,
+              formula: {
+                formulaText: "BS!B4 + IS!B4",
+                astJson: { name: "ADD", args: ["BS!B4", "IS!B4"] },
+                dependenciesJson: [
+                  { sourceType: "report_cell", sheetCode: "BS", cellAddress: "B4" },
+                  { sourceType: "report_cell", sheetCode: "IS", cellAddress: "B4" }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      createdBy: "system"
+    },
+    "phase5-cross-sheet-version"
+  );
+  await request(api, "POST", `/report-template-versions/${version.body.id}/publish`, { publishedBy: "system" }, "phase5-cross-sheet-publish");
+  const run = await request(
+    api,
+    "POST",
+    "/report-runs",
+    {
+      accountSetId: accountSet.body.id,
+      templateVersionId: version.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      includeUnposted: false,
+      runMode: "management",
+      createdBy: "system"
+    },
+    "phase5-cross-sheet-run"
+  );
+  const forwardReferenceCell = run.body.cells.find((cell) => cell.sheetCode === "BS" && cell.cellAddress === "A1");
+  const cashCell = run.body.cells.find((cell) => cell.sheetCode === "BS" && cell.cellAddress === "B4");
+  const revenueCell = run.body.cells.find((cell) => cell.sheetCode === "IS" && cell.cellAddress === "B4");
+  const managementCell = run.body.cells.find((cell) => cell.sheetCode === "MGMT" && cell.cellAddress === "C6");
+
+  assert.equal(run.status, 201);
+  assert.equal(forwardReferenceCell.calculatedValue, -75);
+  assert.equal(cashCell.calculatedValue, 120);
+  assert.equal(revenueCell.calculatedValue, -80);
+  assert.equal(managementCell.calculatedValue, 40);
+  assert.equal(managementCell.formulaText, "BS!B4 + IS!B4");
+  assert.equal(run.body.traceLinks.filter((link) => link.traceId === managementCell.traceId).length, 2);
+  assert.ok(run.body.traceLinks.some((link) => link.traceId === managementCell.traceId && link.sourceType === "report_cell" && link.sourceCell === "BS!B4"));
+  assert.ok(run.body.traceLinks.some((link) => link.traceId === managementCell.traceId && link.sourceType === "report_cell" && link.sourceCell === "IS!B4"));
+});
+
 test("Phase 5 report cell drilldown exposes formula, snapshot source links, ledger entries, and vouchers", async () => {
   const api = createApi();
   const accountSet = await request(

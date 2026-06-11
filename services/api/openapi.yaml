@@ -10412,8 +10412,15 @@ components:
           type: string
         sourceType:
           type: string
-          enum: [account_balance, journal_entry, voucher, source_document]
+          enum: [account_balance, journal_entry, voucher, source_document, report_cell]
         sourceDocumentId:
+          type: string
+        sourceCell:
+          type: string
+          description: Cross-sheet report cell reference such as BS!B4 when sourceType is report_cell.
+        sheetCode:
+          type: string
+        cellAddress:
           type: string
         accountCode:
           type: string

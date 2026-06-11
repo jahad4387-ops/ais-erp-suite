@@ -579,6 +579,10 @@ test("Phase 5 report run endpoints document formula snapshots, closed-period blo
   assert.match(contract, /snapshotHash:/);
   assert.match(contract, /renderMode:/);
   assert.match(contract, /traceLinks:/);
+  assert.match(contract, /report_cell/);
+  assert.match(contract, /sourceCell:/);
+  assert.match(contract, /sheetCode:/);
+  assert.match(contract, /cellAddress:/);
   assert.match(contract, /sourceBalances:/);
   assert.match(contract, /ledgerEntries:/);
   assert.match(contract, /vouchers:/);

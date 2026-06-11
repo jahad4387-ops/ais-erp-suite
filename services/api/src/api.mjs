@@ -3850,6 +3850,21 @@ function balanceLookupKey(accountCode, fiscalYear, periodNo) {
   return `${accountCode}:${fiscalYear}:${periodNo}`;
 }
 
+function reportCellLookupKey(sheetCode, cellAddress) {
+  return `${sheetCode}!${cellAddress}`;
+}
+
+function parseReportCellReference(token) {
+  const match = String(token ?? "").trim().match(/^([A-Za-z][A-Za-z0-9_]*)!([A-Za-z]+[0-9]+)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    sheetCode: match[1],
+    cellAddress: match[2].toUpperCase()
+  };
+}
+
 function buildReportBalanceLookup(balances, dependencies, fallbackPeriod) {
   const requested = new Set();
   for (const dependency of dependencies) {
@@ -3870,7 +3885,50 @@ function buildReportBalanceLookup(balances, dependencies, fallbackPeriod) {
   return lookup;
 }
 
-function calculateFormulaValue(formulaText, dependencies, balanceLookup, fallbackPeriod) {
+function calculateReportCellExpression(formulaText, cellLookup) {
+  const expression = String(formulaText ?? "").trim();
+  if (!expression || !/[A-Za-z][A-Za-z0-9_]*![A-Za-z]+[0-9]+/.test(expression)) {
+    return null;
+  }
+  const tokens = expression.match(/[+-]|[A-Za-z][A-Za-z0-9_]*![A-Za-z]+[0-9]+|-?\d+(?:\.\d+)?/g);
+  if (!tokens || tokens.join("").replace(/\s/g, "") !== expression.replace(/\s/g, "")) {
+    return null;
+  }
+
+  let operator = 1;
+  let total = 0;
+  const references = [];
+  for (const token of tokens) {
+    if (token === "+") {
+      operator = 1;
+      continue;
+    }
+    if (token === "-") {
+      operator = -1;
+      continue;
+    }
+    const reference = parseReportCellReference(token);
+    if (reference) {
+      const key = reportCellLookupKey(reference.sheetCode, reference.cellAddress);
+      const value = Number(cellLookup.get(key)?.calculatedValue ?? 0);
+      total += operator * value;
+      references.push({ ...reference, sourceCell: key, amount: operator * value });
+      operator = 1;
+      continue;
+    }
+    total += operator * Number(token);
+    operator = 1;
+  }
+
+  return { value: total, references };
+}
+
+function calculateFormulaValue(formulaText, dependencies, balanceLookup, fallbackPeriod, cellLookup = new Map()) {
+  const cellExpression = calculateReportCellExpression(formulaText, cellLookup);
+  if (cellExpression) {
+    return cellExpression.value;
+  }
+
   const { name, args } = parseFormulaArgs(formulaText);
   const accountCode = args[0] ?? dependencies?.[0]?.accountCode;
   const period = parseReportPeriod(args[1]) ?? parseReportPeriod(dependencies?.[0]?.period) ?? fallbackPeriod;
@@ -3895,6 +3953,26 @@ function calculateFormulaValue(formulaText, dependencies, balanceLookup, fallbac
     return Number(balance.closingDebit ?? 0) - Number(balance.closingCredit ?? 0);
   }
   return 0;
+}
+
+function traceLinksForReportCellReferences({ runId, traceId, formulaText, cellLookup, startIndex }) {
+  const cellExpression = calculateReportCellExpression(formulaText, cellLookup);
+  if (!cellExpression) {
+    return [];
+  }
+  return cellExpression.references.map((reference, index) => ({
+    id: `report-trace-link:${runId}:${startIndex + index + 1}`,
+    reportRunId: runId,
+    traceId,
+    sourceType: "report_cell",
+    sourceCell: reference.sourceCell,
+    sheetCode: reference.sheetCode,
+    cellAddress: reference.cellAddress,
+    accountCode: null,
+    fiscalYear: null,
+    periodNo: null,
+    amount: reference.amount
+  }));
 }
 
 function reportSnapshotHash(run) {
@@ -4100,11 +4178,11 @@ async function calculateReportRunSnapshot(state, { runId, accountSetId, template
   );
 
   const cells = [];
-  const traceLinks = [];
+  const cellLookup = new Map();
   for (const item of formulaCells) {
-    const calculatedValue = calculateFormulaValue(item.formula.formulaText, item.dependencies, balanceLookup, fallbackPeriod);
+    const calculatedValue = calculateFormulaValue(item.formula.formulaText, item.dependencies, balanceLookup, fallbackPeriod, cellLookup);
     const traceId = `report-trace:${runId}:${item.sheet.sheetCode}:${item.cell.cellAddress}`;
-    cells.push({
+    const runCell = {
       id: `report-run-cell:${runId}:${cells.length + 1}`,
       reportRunId: runId,
       sheetCode: item.sheet.sheetCode,
@@ -4114,8 +4192,39 @@ async function calculateReportRunSnapshot(state, { runId, accountSetId, template
       calculatedValue,
       displayFormat: item.cell.displayFormat ?? null,
       traceId
-    });
+    };
+    cells.push(runCell);
+    cellLookup.set(reportCellLookupKey(item.sheet.sheetCode, item.cell.cellAddress), runCell);
+  }
+
+  for (let pass = 0; pass < formulaCells.length; pass += 1) {
+    let changed = false;
+    for (const item of formulaCells) {
+      if (!calculateReportCellExpression(item.formula.formulaText, cellLookup)) {
+        continue;
+      }
+      const key = reportCellLookupKey(item.sheet.sheetCode, item.cell.cellAddress);
+      const runCell = cellLookup.get(key);
+      const calculatedValue = calculateFormulaValue(item.formula.formulaText, item.dependencies, balanceLookup, fallbackPeriod, cellLookup);
+      if (runCell && runCell.calculatedValue !== calculatedValue) {
+        runCell.calculatedValue = calculatedValue;
+        changed = true;
+      }
+    }
+    if (!changed) {
+      break;
+    }
+  }
+
+  const traceLinks = [];
+  for (const item of formulaCells) {
+    const runCell = cellLookup.get(reportCellLookupKey(item.sheet.sheetCode, item.cell.cellAddress));
+    const calculatedValue = Number(runCell?.calculatedValue ?? 0);
+    const traceId = runCell?.traceId ?? `report-trace:${runId}:${item.sheet.sheetCode}:${item.cell.cellAddress}`;
     for (const dependency of item.dependencies) {
+      if ((dependency.sourceType ?? "account_balance") !== "account_balance") {
+        continue;
+      }
       const period = parseReportPeriod(dependency.period) ?? fallbackPeriod;
       traceLinks.push({
         id: `report-trace-link:${runId}:${traceLinks.length + 1}`,
@@ -4129,6 +4238,15 @@ async function calculateReportRunSnapshot(state, { runId, accountSetId, template
         amount: calculatedValue
       });
     }
+    traceLinks.push(
+      ...traceLinksForReportCellReferences({
+        runId,
+        traceId,
+        formulaText: item.formula.formulaText,
+        cellLookup,
+        startIndex: traceLinks.length
+      })
+    );
   }
 
   return { cells, traceLinks };
