@@ -60,6 +60,9 @@ import { PayrollRuns } from './pages/PayrollRuns';
 import { FixedAssetSetup } from './pages/FixedAssetSetup';
 import { FixedAssets } from './pages/FixedAssets';
 import { DepreciationRuns } from './pages/DepreciationRuns';
+import { AssetDisposals } from './pages/AssetDisposals';
+import { AssetCounts } from './pages/AssetCounts';
+import { FixedAssetReconciliation } from './pages/FixedAssetReconciliation';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
@@ -263,6 +266,9 @@ const AppFrame: React.FC = () => {
                   { key: 'fixed-asset-setup', label: <Link to="/fixed-asset-setup">固资基础</Link> },
                   { key: 'fixed-assets', label: <Link to="/fixed-assets">资产卡片</Link> },
                   { key: 'depreciation-runs', label: <Link to="/depreciation-runs">折旧计提</Link> },
+                  { key: 'asset-disposals', label: <Link to="/asset-disposals">资产处置</Link> },
+                  { key: 'asset-counts', label: <Link to="/asset-counts">资产盘点</Link> },
+                  { key: 'fixed-asset-reconciliation', label: <Link to="/fixed-asset-reconciliation">固资对账</Link> },
                 ],
               },
               {
@@ -395,6 +401,9 @@ const AppFrame: React.FC = () => {
                 <Route path="/fixed-asset-setup" element={<RequireAuth><FixedAssetSetup /></RequireAuth>} />
                 <Route path="/fixed-assets" element={<RequireAuth><FixedAssets /></RequireAuth>} />
                 <Route path="/depreciation-runs" element={<RequireAuth><DepreciationRuns /></RequireAuth>} />
+                <Route path="/asset-disposals" element={<RequireAuth><AssetDisposals /></RequireAuth>} />
+                <Route path="/asset-counts" element={<RequireAuth><AssetCounts /></RequireAuth>} />
+                <Route path="/fixed-asset-reconciliation" element={<RequireAuth><FixedAssetReconciliation /></RequireAuth>} />
                 <Route path="/account-code-rules" element={<RequireAuth><AccountCodeRules /></RequireAuth>} />
                 <Route path="/periods" element={<RequireAuth><Periods /></RequireAuth>} />
                 <Route path="/auxiliaries" element={<RequireAuth><Auxiliaries /></RequireAuth>} />

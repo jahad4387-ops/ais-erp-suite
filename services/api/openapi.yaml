@@ -4399,6 +4399,154 @@ paths:
                 items:
                   $ref: "#/components/schemas/AssetDepreciationCostPoolOutput"
 
+  /asset-disposals:
+    post:
+      summary: Create a fixed asset disposal draft and phase4_asset_disposal voucher preview.
+      x-permission: fixed_asset_disposal.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetDisposalRequest"
+      responses:
+        "201":
+          description: Asset disposal draft created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetDisposal"
+
+  /asset-counts/preview:
+    post:
+      summary: Preview fixed asset count variances and phase4_asset_count voucher draft.
+      x-permission: fixed_asset_count.manage
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetCountRequest"
+      responses:
+        "201":
+          description: Asset count preview created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetCount"
+
+  /asset-counts:
+    get:
+      summary: List fixed asset count documents.
+      x-permission: fixed_asset_count.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Asset count list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssetCount"
+    post:
+      summary: Commit fixed asset count variances and ledger entries.
+      x-permission: fixed_asset_count.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetCountRequest"
+      responses:
+        "201":
+          description: Asset count committed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetCount"
+
+  /fixed-asset-ledger:
+    get:
+      summary: List fixed asset ledger entries by period.
+      x-permission: fixed_asset_reconciliation.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: fiscalYear
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: periodNo
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Fixed asset ledger rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FixedAssetLedgerEntry"
+
+  /fixed-asset-reconciliation:
+    get:
+      summary: Reconcile fixed asset subledger with GL net value.
+      x-permission: fixed_asset_reconciliation.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: fiscalYear
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: periodNo
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Fixed asset reconciliation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FixedAssetReconciliation"
+
 components:
   parameters:
     AccountSetId:
@@ -9009,7 +9157,7 @@ components:
           type: array
           items:
             type: string
-            enum: [NEW_ASSET_NOT_STARTED, FULLY_DEPRECIATED, DEPRECIATION_STOPPED, NET_VALUE_BRAKE_APPLIED]
+            enum: [NEW_ASSET_NOT_STARTED, DISPOSED_BEFORE_PERIOD, FULLY_DEPRECIATED, DEPRECIATION_STOPPED, NET_VALUE_BRAKE_APPLIED]
         approvedAt:
           type: string
         lockedAt:
@@ -9057,7 +9205,7 @@ components:
           type: boolean
         skippedReason:
           type: string
-          enum: [NEW_ASSET_NOT_STARTED, FULLY_DEPRECIATED, DEPRECIATION_STOPPED]
+          enum: [NEW_ASSET_NOT_STARTED, DISPOSED_BEFORE_PERIOD, FULLY_DEPRECIATED, DEPRECIATION_STOPPED]
         depreciationTimelineRule:
           type: string
           enum: [new_asset_next_month]
@@ -9092,6 +9240,226 @@ components:
           type: number
         lockedAt:
           type: string
+
+    CreateAssetDisposalRequest:
+      type: object
+      required: [accountSetId, fixedAssetId, disposalDate, disposalType]
+      properties:
+        accountSetId:
+          type: string
+        fixedAssetId:
+          type: string
+        disposalDate:
+          type: string
+          format: date
+        disposalType:
+          type: string
+          enum: [sale, scrap, inventory_loss]
+        proceedsAmount:
+          type: number
+        clearingAccountCode:
+          type: string
+        gainLossAccountCode:
+          type: string
+        createdBy:
+          type: string
+
+    AssetDisposal:
+      type: object
+      required: [id, accountSetId, fixedAssetId, disposalDate, disposalType, status, netValueAtDisposal, gainLossAmount, voucherDraft]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fixedAssetId:
+          type: string
+        disposalDate:
+          type: string
+        disposalType:
+          type: string
+        status:
+          type: string
+          enum: [draft]
+        proceedsAmount:
+          type: number
+        netValueAtDisposal:
+          type: number
+        gainLossAmount:
+          type: number
+        voucherDraft:
+          type: object
+          required: [status, sourceType, approvalRequired, lines]
+          properties:
+            status:
+              type: string
+              enum: [draft]
+            sourceType:
+              type: string
+              enum: [phase4_asset_disposal]
+            approvalRequired:
+              type: boolean
+            lines:
+              type: array
+              items:
+                type: object
+        fixedAsset:
+          $ref: "#/components/schemas/FixedAsset"
+
+    CreateAssetCountRequest:
+      type: object
+      required: [accountSetId, countNo, fiscalYear, periodNo, countDate, lines]
+      properties:
+        accountSetId:
+          type: string
+        countNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        countDate:
+          type: string
+          format: date
+        createdBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateAssetCountLineRequest"
+
+    CreateAssetCountLineRequest:
+      type: object
+      required: [actualStatus]
+      properties:
+        fixedAssetId:
+          type: string
+        assetNo:
+          type: string
+        assetName:
+          type: string
+        actualStatus:
+          type: string
+          enum: [found, missing, surplus]
+        estimatedValue:
+          type: number
+        departmentId:
+          type: string
+        remark:
+          type: string
+
+    AssetCount:
+      type: object
+      required: [id, accountSetId, countNo, fiscalYear, periodNo, dryRun, status, varianceCount, voucherDraft, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        countNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        dryRun:
+          type: boolean
+        status:
+          type: string
+          enum: [preview, counted]
+        varianceCount:
+          type: integer
+        voucherDraft:
+          type: object
+          required: [status, sourceType, approvalRequired, lines]
+          properties:
+            status:
+              type: string
+              enum: [draft]
+            sourceType:
+              type: string
+              enum: [phase4_asset_count]
+            approvalRequired:
+              type: boolean
+            lines:
+              type: array
+              items:
+                type: object
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetCountLine"
+
+    AssetCountLine:
+      type: object
+      required: [id, assetNo, actualStatus, varianceType, bookValue, estimatedValue]
+      properties:
+        id:
+          type: string
+        fixedAssetId:
+          type: string
+        assetNo:
+          type: string
+        assetName:
+          type: string
+        actualStatus:
+          type: string
+        varianceType:
+          type: string
+          enum: [matched, inventory_loss, inventory_surplus]
+        bookValue:
+          type: number
+        estimatedValue:
+          type: number
+
+    FixedAssetLedgerEntry:
+      type: object
+      required: [id, accountSetId, fiscalYear, periodNo, sourceType, sourceDocumentId, amount, occurredAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fixedAssetId:
+          type: string
+        assetNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        sourceType:
+          type: string
+          enum: [fixed_asset_addition, asset_depreciation, asset_disposal, asset_count]
+        sourceDocumentId:
+          type: string
+        amount:
+          type: number
+        occurredAt:
+          type: string
+
+    FixedAssetReconciliation:
+      type: object
+      required: [id, accountSetId, fiscalYear, periodNo, ledgerNetValue, glNetValue, differenceAmount, rows]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        ledgerNetValue:
+          type: number
+        glNetValue:
+          type: number
+        differenceAmount:
+          type: number
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/FixedAssetLedgerEntry"
 
     CreateAgentActionRequest:
       type: object

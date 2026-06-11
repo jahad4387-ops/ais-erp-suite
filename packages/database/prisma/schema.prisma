@@ -85,6 +85,10 @@ model AccountSet {
   assetValueChanges AssetValueChange[]
   depreciationRuns DepreciationRun[]
   assetDepreciationCostPoolOutputs AssetDepreciationCostPoolOutput[]
+  assetDisposals   AssetDisposal[]
+  assetCounts      AssetCount[]
+  fixedAssetLedgerEntries FixedAssetLedgerEntry[]
+  fixedAssetReconciliationRuns FixedAssetReconciliationRun[]
 }
 
 model User {
@@ -1903,6 +1907,9 @@ model FixedAsset {
   lastTransferAt             DateTime?
   isDepreciationStopped      Boolean  @default(false)
   depreciationStoppedAt      DateTime?
+  disposalDate               DateTime?
+  depreciationStopYear       Int?
+  depreciationStopPeriod     Int?
   createdBy                  String
   createdAt                  DateTime @default(now())
 
@@ -1913,6 +1920,9 @@ model FixedAsset {
   valueChanges       AssetValueChange[]
   depreciationLines  DepreciationRunLine[]
   depreciationCostPools AssetDepreciationCostPoolOutput[]
+  disposals          AssetDisposal[]
+  countLines         AssetCountLine[]
+  ledgerEntries      FixedAssetLedgerEntry[]
 
   @@unique([accountSetId, assetNo])
 }
@@ -2022,6 +2032,100 @@ model AssetDepreciationCostPoolOutput {
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
   sourceRun  DepreciationRun @relation(fields: [sourceRunId], references: [id])
   fixedAsset FixedAsset @relation(fields: [fixedAssetId], references: [id])
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model AssetDisposal {
+  id                 String   @id @default(uuid())
+  accountSetId       String
+  fixedAssetId       String
+  fiscalYear         Int
+  periodNo           Int
+  disposalDate       DateTime
+  disposalType       String
+  proceedsAmount     Float    @default(0)
+  netValueAtDisposal Float    @default(0)
+  gainLossAmount     Float    @default(0)
+  status             String   @default("draft")
+  voucherDraftJson   String
+  createdBy          String
+  createdAt          DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  fixedAsset FixedAsset @relation(fields: [fixedAssetId], references: [id])
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model AssetCount {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  countNo          String
+  fiscalYear       Int
+  periodNo         Int
+  countDate        DateTime
+  dryRun           Boolean  @default(true)
+  status           String   @default("preview")
+  varianceCount    Int      @default(0)
+  voucherDraftJson String
+  createdBy        String
+  createdAt        DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  lines      AssetCountLine[]
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model AssetCountLine {
+  id             String  @id @default(uuid())
+  assetCountId   String
+  fixedAssetId   String?
+  assetNo        String
+  assetName      String?
+  departmentId   String?
+  actualStatus   String
+  varianceType   String
+  bookValue      Float   @default(0)
+  estimatedValue Float   @default(0)
+  remark         String?
+
+  assetCount AssetCount @relation(fields: [assetCountId], references: [id])
+  fixedAsset FixedAsset? @relation(fields: [fixedAssetId], references: [id])
+}
+
+model FixedAssetLedgerEntry {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  fixedAssetId     String?
+  assetNo          String?
+  fiscalYear       Int
+  periodNo         Int
+  sourceType       String
+  sourceDocumentId String
+  amount           Float    @default(0)
+  occurredAt       DateTime
+  createdAt        DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  fixedAsset FixedAsset? @relation(fields: [fixedAssetId], references: [id])
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model FixedAssetReconciliationRun {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  fiscalYear       Int
+  periodNo         Int
+  ledgerNetValue   Float    @default(0)
+  glNetValue       Float    @default(0)
+  differenceAmount Float    @default(0)
+  rowsJson         String
+  createdAt        DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
 
   @@index([accountSetId, fiscalYear, periodNo])
 }

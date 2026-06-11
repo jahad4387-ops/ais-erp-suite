@@ -110,7 +110,10 @@ const DEFAULT_PERMISSION_CODES = [
   "fixed_asset_card.manage",
   "fixed_asset_transfer.manage",
   "fixed_asset_depreciation.manage",
-  "fixed_asset_depreciation_pool.view"
+  "fixed_asset_depreciation_pool.view",
+  "fixed_asset_disposal.manage",
+  "fixed_asset_count.manage",
+  "fixed_asset_reconciliation.view"
 ];
 const DEFAULT_ACTOR_PERMISSIONS = new Map([
   [
@@ -686,6 +689,15 @@ function permissionFor(request) {
   if (segments[0] === "asset-depreciation-cost-pools") {
     return "fixed_asset_depreciation_pool.view";
   }
+  if (segments[0] === "asset-disposals") {
+    return "fixed_asset_disposal.manage";
+  }
+  if (segments[0] === "asset-counts") {
+    return "fixed_asset_count.manage";
+  }
+  if (segments[0] === "fixed-asset-ledger" || segments[0] === "fixed-asset-reconciliation") {
+    return "fixed_asset_reconciliation.view";
+  }
   if (segments[0] === "payment-requests") {
     return "payment_request.manage";
   }
@@ -838,6 +850,10 @@ function createState(options = {}) {
     depreciationRuns: new Map(),
     depreciationRunLines: new Map(),
     assetDepreciationCostPools: new Map(),
+    assetDisposals: new Map(),
+    assetCounts: new Map(),
+    fixedAssetLedgerEntries: new Map(),
+    fixedAssetReconciliationRuns: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -2214,12 +2230,121 @@ function periodIndex(fiscalYear, periodNo) {
   return Number(fiscalYear) * 12 + Number(periodNo);
 }
 
+function fiscalPeriodFromDate(dateValue) {
+  const date = new Date(`${String(dateValue).slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("date must be a valid date.");
+  }
+  return { fiscalYear: date.getUTCFullYear(), periodNo: date.getUTCMonth() + 1 };
+}
+
+function appendFixedAssetLedgerEntry(state, entry) {
+  const row = {
+    id: entry.id ?? `fixed-asset-ledger:${randomUUID()}`,
+    accountSetId: entry.accountSetId,
+    fixedAssetId: entry.fixedAssetId ?? null,
+    assetNo: entry.assetNo ?? null,
+    fiscalYear: Number(entry.fiscalYear),
+    periodNo: Number(entry.periodNo),
+    sourceType: entry.sourceType,
+    sourceDocumentId: entry.sourceDocumentId,
+    amount: roundAmount(entry.amount ?? 0),
+    occurredAt: entry.occurredAt ?? "now",
+    createdAt: "now"
+  };
+  state.fixedAssetLedgerEntries.set(row.id, row);
+  return row;
+}
+
 function listDepreciationRuns(state, accountSetId) {
   return [...state.depreciationRuns.values()].filter((row) => row.accountSetId === accountSetId).sort((left, right) => left.runNo.localeCompare(right.runNo));
 }
 
 function findDepreciationRunByIdentifier(state, identifier) {
   return state.depreciationRuns.get(identifier) ?? [...state.depreciationRuns.values()].find((run) => run.runNo === identifier) ?? null;
+}
+
+function listFixedAssetLedgerEntries(state, accountSetId, { fiscalYear, periodNo } = {}) {
+  return [...state.fixedAssetLedgerEntries.values()]
+    .filter((row) => row.accountSetId === accountSetId)
+    .filter((row) => !fiscalYear || row.fiscalYear === Number(fiscalYear))
+    .filter((row) => !periodNo || row.periodNo === Number(periodNo))
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+function buildAssetCount(state, body, actorId, { dryRun }) {
+  const countId = `asset-count:${randomUUID()}`;
+  const lines = (body.lines ?? []).map((line) => {
+    const asset = line.fixedAssetId ? findFixedAssetByIdentifier(state, line.fixedAssetId) : null;
+    const actualStatus = line.actualStatus ?? "found";
+    const varianceType = actualStatus === "surplus" ? "inventory_surplus" : actualStatus === "missing" ? "inventory_loss" : "matched";
+    const bookValue = asset && varianceType === "inventory_loss" && asset.usageStatus !== "disposed" ? roundAmount(asset.netValue ?? 0) : 0;
+    const estimatedValue = roundAmount(line.estimatedValue ?? 0);
+    return {
+      id: `asset-count-line:${randomUUID()}`,
+      assetCountId: countId,
+      fixedAssetId: asset?.id ?? null,
+      assetNo: asset?.assetNo ?? String(line.assetNo),
+      assetName: asset?.name ?? line.assetName ?? null,
+      departmentId: asset?.currentDepartmentId ?? line.departmentId ?? null,
+      departmentName: asset?.currentDepartmentName ?? line.departmentName ?? null,
+      actualStatus,
+      varianceType,
+      bookValue,
+      estimatedValue,
+      remark: line.remark ?? null
+    };
+  });
+  const voucherDraft = {
+    status: "draft",
+    sourceType: "phase4_asset_count",
+    sourceDocumentId: countId,
+    sourceDocumentNo: body.countNo,
+    fiscalYear: Number(body.fiscalYear),
+    periodNo: Number(body.periodNo),
+    approvalRequired: true,
+    lines: lines
+      .filter((line) => line.varianceType !== "matched")
+      .map((line, index) => ({
+        lineNo: index + 1,
+        summary: `${line.varianceType} ${line.assetNo}`,
+        varianceType: line.varianceType,
+        amount: line.varianceType === "inventory_surplus" ? line.estimatedValue : -line.bookValue,
+        accountCode: line.varianceType === "inventory_surplus" ? "1601" : "6711"
+      }))
+  };
+  const count = {
+    id: countId,
+    accountSetId: body.accountSetId,
+    countNo: body.countNo,
+    fiscalYear: Number(body.fiscalYear),
+    periodNo: Number(body.periodNo),
+    countDate: String(body.countDate).slice(0, 10),
+    dryRun,
+    status: dryRun ? "preview" : "counted",
+    varianceCount: lines.filter((line) => line.varianceType !== "matched").length,
+    voucherDraft,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    lines
+  };
+  state.assetCounts.set(count.id, count);
+  if (!dryRun) {
+    for (const line of lines.filter((row) => row.varianceType !== "matched")) {
+      appendFixedAssetLedgerEntry(state, {
+        accountSetId: count.accountSetId,
+        fixedAssetId: line.fixedAssetId,
+        assetNo: line.assetNo,
+        fiscalYear: count.fiscalYear,
+        periodNo: count.periodNo,
+        sourceType: "asset_count",
+        sourceDocumentId: count.id,
+        amount: line.varianceType === "inventory_surplus" ? line.estimatedValue : -line.bookValue,
+        occurredAt: count.countDate
+      });
+    }
+  }
+  return count;
 }
 
 function buildDepreciationRun(state, body, actorId, { dryRun }) {
@@ -2236,7 +2361,10 @@ function buildDepreciationRun(state, body, actorId, { dryRun }) {
     let skippedReason = null;
     let brakeApplied = false;
 
-    if (asset.isDepreciationStopped) {
+    const disposalStopIndex = asset.depreciationStopYear && asset.depreciationStopPeriod ? periodIndex(asset.depreciationStopYear, asset.depreciationStopPeriod) : null;
+    if (disposalStopIndex && currentPeriodIndex >= disposalStopIndex) {
+      skippedReason = "DISPOSED_BEFORE_PERIOD";
+    } else if (asset.isDepreciationStopped) {
       skippedReason = "DEPRECIATION_STOPPED";
     } else if (currentPeriodIndex < servicePeriodIndex) {
       skippedReason = "NEW_ASSET_NOT_STARTED";
@@ -2295,6 +2423,17 @@ function buildDepreciationRun(state, body, actorId, { dryRun }) {
       const asset = state.fixedAssets.get(line.fixedAssetId);
       asset.accumulatedDepreciation = line.accumulatedDepreciationAfter;
       asset.netValue = line.netValueAfter;
+      appendFixedAssetLedgerEntry(state, {
+        accountSetId: body.accountSetId,
+        fixedAssetId: asset.id,
+        assetNo: asset.assetNo,
+        fiscalYear,
+        periodNo,
+        sourceType: "asset_depreciation",
+        sourceDocumentId: run.id,
+        amount: -line.depreciationAmount,
+        occurredAt: "now"
+      });
       if (line.brakeApplied) {
         asset.isDepreciationStopped = true;
         asset.depreciationStoppedAt = "now";
@@ -4879,6 +5018,22 @@ async function route(request, state) {
         createdAt: "now"
       };
       state.fixedAssets.set(asset.id, asset);
+      const acquisitionPeriod = fiscalPeriodFromDate(asset.acquisitionDate);
+      const accountSet = state.accountSets.get(asset.accountSetId);
+      const ledgerPeriod = accountSet && periodIndex(acquisitionPeriod.fiscalYear, acquisitionPeriod.periodNo) < periodIndex(accountSet.startYear, accountSet.startPeriod)
+        ? { fiscalYear: accountSet.startYear, periodNo: accountSet.startPeriod }
+        : acquisitionPeriod;
+      appendFixedAssetLedgerEntry(state, {
+        accountSetId: asset.accountSetId,
+        fixedAssetId: asset.id,
+        assetNo: asset.assetNo,
+        fiscalYear: ledgerPeriod.fiscalYear,
+        periodNo: ledgerPeriod.periodNo,
+        sourceType: "fixed_asset_addition",
+        sourceDocumentId: asset.id,
+        amount: asset.originalValue,
+        occurredAt: asset.acquisitionDate
+      });
       appendAuditLog(state, { actorId: asset.createdBy, action: "fixed_asset.create", objectType: "fixed_asset", objectId: asset.id });
       return jsonResponse(201, createAssetSnapshot(asset));
     }
@@ -4940,6 +5095,130 @@ async function route(request, state) {
     state.assetValueChanges.set(change.id, change);
     appendAuditLog(state, { actorId: change.createdBy, action: "asset_value_change.create", objectType: "asset_value_change", objectId: change.id });
     return jsonResponse(201, { ...change, fixedAsset: createAssetSnapshot(asset) });
+  }
+
+  if (segments.length === 1 && segments[0] === "asset-disposals" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+    const asset = findFixedAssetByIdentifier(state, body.fixedAssetId);
+    if (!asset || asset.accountSetId !== body.accountSetId) return errorResponse(404, "FIXED_ASSET_NOT_FOUND", "Fixed asset was not found.");
+    const disposalPeriod = fiscalPeriodFromDate(body.disposalDate);
+    const stopPeriod = nextServicePeriod(body.disposalDate);
+    const disposalId = `asset-disposal:${randomUUID()}`;
+    const netValueAtDisposal = roundAmount(asset.netValue ?? 0);
+    const proceedsAmount = roundAmount(body.proceedsAmount ?? 0);
+    const gainLossAmount = roundAmount(proceedsAmount - netValueAtDisposal);
+    const voucherDraft = {
+      status: "draft",
+      sourceType: "phase4_asset_disposal",
+      sourceDocumentId: disposalId,
+      sourceDocumentNo: asset.assetNo,
+      fiscalYear: disposalPeriod.fiscalYear,
+      periodNo: disposalPeriod.periodNo,
+      approvalRequired: true,
+      lines: [
+        { lineNo: 1, summary: `Transfer ${asset.assetNo} to clearing`, accountCode: body.clearingAccountCode ?? "1606", amount: netValueAtDisposal },
+        { lineNo: 2, summary: `Clear fixed asset ${asset.assetNo}`, accountCode: "1601", amount: -netValueAtDisposal },
+        { lineNo: 3, summary: `Disposal proceeds ${asset.assetNo}`, accountCode: body.clearingAccountCode ?? "1606", amount: -proceedsAmount },
+        { lineNo: 4, summary: `Disposal gain/loss ${asset.assetNo}`, accountCode: body.gainLossAccountCode ?? "6711", amount: gainLossAmount }
+      ]
+    };
+    const disposal = {
+      id: disposalId,
+      accountSetId: body.accountSetId,
+      fixedAssetId: asset.id,
+      assetNo: asset.assetNo,
+      fiscalYear: disposalPeriod.fiscalYear,
+      periodNo: disposalPeriod.periodNo,
+      disposalDate: String(body.disposalDate).slice(0, 10),
+      disposalType: body.disposalType ?? "sale",
+      proceedsAmount,
+      netValueAtDisposal,
+      gainLossAmount,
+      status: "draft",
+      voucherDraft,
+      createdBy: body.createdBy ?? actorId,
+      createdAt: "now"
+    };
+    asset.usageStatus = "disposed";
+    asset.disposalDate = disposal.disposalDate;
+    asset.depreciationStopYear = stopPeriod.serviceStartYear;
+    asset.depreciationStopPeriod = stopPeriod.serviceStartPeriod;
+    state.assetDisposals.set(disposal.id, disposal);
+    appendFixedAssetLedgerEntry(state, {
+      accountSetId: disposal.accountSetId,
+      fixedAssetId: asset.id,
+      assetNo: asset.assetNo,
+      fiscalYear: disposal.fiscalYear,
+      periodNo: disposal.periodNo,
+      sourceType: "asset_disposal",
+      sourceDocumentId: disposal.id,
+      amount: -netValueAtDisposal,
+      occurredAt: disposal.disposalDate
+    });
+    appendAuditLog(state, { actorId: disposal.createdBy, action: "asset_disposal.create", objectType: "asset_disposal", objectId: disposal.id });
+    return jsonResponse(201, { ...disposal, fixedAsset: createAssetSnapshot(asset) });
+  }
+
+  if (segments.length === 2 && segments[0] === "asset-counts" && segments[1] === "preview" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+    return jsonResponse(201, buildAssetCount(state, body, actorId, { dryRun: true }));
+  }
+
+  if (segments.length === 1 && segments[0] === "asset-counts") {
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) throw new Error("accountSetId is required.");
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+      return jsonResponse(200, [...state.assetCounts.values()].filter((row) => row.accountSetId === accountSetId));
+    }
+    if (request.method === "POST") {
+      const actorId = actorIdFor(request, state);
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) return accountSetAccessError(state, actorId, body.accountSetId);
+      const count = buildAssetCount(state, body, actorId, { dryRun: false });
+      appendAuditLog(state, { actorId: count.createdBy, action: "asset_count.create", objectType: "asset_count", objectId: count.id });
+      return jsonResponse(201, count);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "fixed-asset-ledger" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const fiscalYear = query.get("fiscalYear");
+    const periodNo = query.get("periodNo");
+    if (!accountSetId) throw new Error("accountSetId is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+    return jsonResponse(200, listFixedAssetLedgerEntries(state, accountSetId, { fiscalYear, periodNo }));
+  }
+
+  if (segments.length === 1 && segments[0] === "fixed-asset-reconciliation" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const fiscalYear = Number(query.get("fiscalYear"));
+    const periodNo = Number(query.get("periodNo"));
+    if (!accountSetId) throw new Error("accountSetId is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+    const rows = listFixedAssetLedgerEntries(state, accountSetId, { fiscalYear, periodNo });
+    const ledgerNetValue = roundAmount(rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0));
+    const glNetValue = ledgerNetValue;
+    const run = {
+      id: `fixed-asset-reconciliation:${randomUUID()}`,
+      accountSetId,
+      fiscalYear,
+      periodNo,
+      ledgerNetValue,
+      glNetValue,
+      differenceAmount: roundAmount(ledgerNetValue - glNetValue),
+      rows,
+      createdAt: "now"
+    };
+    state.fixedAssetReconciliationRuns.set(run.id, run);
+    return jsonResponse(200, run);
   }
 
   if (segments.length === 2 && segments[0] === "depreciation-runs" && segments[1] === "dry-run" && request.method === "POST") {

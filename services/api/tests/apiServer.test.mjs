@@ -3344,6 +3344,163 @@ test("Phase 4 depreciation engine dry-runs timelines, applies net-value brake, l
   assert.ok(api.state.auditLogs.some((log) => log.action === "depreciation_run.lock" && log.objectId === formalRun.body.id));
 });
 
+test("Phase 4 fixed asset final workflow disposes assets, counts variances, and reconciles the asset ledger", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P4-FA-FINAL",
+      name: "Phase 4 Fixed Asset Final Set",
+      companyName: "Phase 4 Fixed Asset Final Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase4-fixed-asset-final-account-set"
+  );
+  const actorId = "phase4-fixed-asset-final-actor";
+  api.state.permissionsByActor.set(
+    actorId,
+    new Set([
+      "fixed_asset_setup.manage",
+      "fixed_asset_card.manage",
+      "fixed_asset_disposal.manage",
+      "fixed_asset_count.manage",
+      "fixed_asset_depreciation.manage",
+      "fixed_asset_reconciliation.view"
+    ])
+  );
+  api.state.accountSetAccessByActor.set(actorId, new Set([accountSet.body.id]));
+
+  const method = await api.handle({
+    method: "POST",
+    path: "/depreciation-methods",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-final-method" },
+    body: { accountSetId: accountSet.body.id, code: "SL", name: "Straight line", methodType: "straight_line", createdBy: actorId }
+  });
+  const category = await api.handle({
+    method: "POST",
+    path: "/asset-categories",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-final-category" },
+    body: { accountSetId: accountSet.body.id, code: "MACHINE", name: "Machine", depreciationMethodId: method.body.id, defaultUsefulLifeMonths: 12, defaultSalvageRate: 0, createdBy: actorId }
+  });
+  const asset = await api.handle({
+    method: "POST",
+    path: "/fixed-assets",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-final-asset" },
+    body: {
+      accountSetId: accountSet.body.id,
+      assetNo: "FA-FINAL-001",
+      name: "Packing machine",
+      categoryId: category.body.id,
+      depreciationMethodId: method.body.id,
+      acquisitionDate: "2025-12-15",
+      originalValue: 12000,
+      salvageValue: 0,
+      usefulLifeMonths: 12,
+      departmentId: "D-MFG",
+      departmentName: "Manufacturing",
+      createdBy: actorId
+    }
+  });
+  const disposal = await api.handle({
+    method: "POST",
+    path: "/asset-disposals",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-final-disposal" },
+    body: {
+      accountSetId: accountSet.body.id,
+      fixedAssetId: asset.body.id,
+      disposalDate: "2026-01-20",
+      disposalType: "sale",
+      proceedsAmount: 4500,
+      clearingAccountCode: "1606",
+      gainLossAccountCode: "6711",
+      createdBy: actorId
+    }
+  });
+  const januaryDryRun = await api.handle({
+    method: "POST",
+    path: "/depreciation-runs/dry-run",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-final-dep-jan" },
+    body: { accountSetId: accountSet.body.id, runNo: "DEP-FINAL-202601", fiscalYear: 2026, periodNo: 1, createdBy: actorId }
+  });
+  const februaryDryRun = await api.handle({
+    method: "POST",
+    path: "/depreciation-runs/dry-run",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-final-dep-feb" },
+    body: { accountSetId: accountSet.body.id, runNo: "DEP-FINAL-202602", fiscalYear: 2026, periodNo: 2, createdBy: actorId }
+  });
+  const countPreview = await api.handle({
+    method: "POST",
+    path: "/asset-counts/preview",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-final-count-preview" },
+    body: {
+      accountSetId: accountSet.body.id,
+      countNo: "FACOUNT-202601",
+      fiscalYear: 2026,
+      periodNo: 1,
+      countDate: "2026-01-31",
+      createdBy: actorId,
+      lines: [
+        { fixedAssetId: asset.body.id, actualStatus: "missing", remark: "Not found during count" },
+        { assetNo: "FA-SURPLUS-001", assetName: "Found tooling", actualStatus: "surplus", estimatedValue: 2500, departmentId: "D-MFG", departmentName: "Manufacturing" }
+      ]
+    }
+  });
+  const count = await api.handle({
+    method: "POST",
+    path: "/asset-counts",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "phase4-fa-final-count" },
+    body: {
+      accountSetId: accountSet.body.id,
+      countNo: "FACOUNT-202601",
+      fiscalYear: 2026,
+      periodNo: 1,
+      countDate: "2026-01-31",
+      createdBy: actorId,
+      lines: countPreview.body.lines
+    }
+  });
+  const ledger = await api.handle({
+    method: "GET",
+    path: `/fixed-asset-ledger?accountSetId=${accountSet.body.id}&fiscalYear=2026&periodNo=1`,
+    headers: { "Actor-Id": actorId }
+  });
+  const reconciliation = await api.handle({
+    method: "GET",
+    path: `/fixed-asset-reconciliation?accountSetId=${accountSet.body.id}&fiscalYear=2026&periodNo=1`,
+    headers: { "Actor-Id": actorId }
+  });
+
+  assert.equal(disposal.status, 201);
+  assert.equal(disposal.body.status, "draft");
+  assert.equal(disposal.body.voucherDraft.sourceType, "phase4_asset_disposal");
+  assert.equal(disposal.body.voucherDraft.approvalRequired, true);
+  assert.equal(disposal.body.fixedAsset.usageStatus, "disposed");
+  assert.equal(disposal.body.fixedAsset.disposalDate, "2026-01-20");
+  assert.equal(disposal.body.fixedAsset.depreciationStopYear, 2026);
+  assert.equal(disposal.body.fixedAsset.depreciationStopPeriod, 2);
+  assert.equal(januaryDryRun.body.lines.find((line) => line.fixedAssetId === asset.body.id).depreciationAmount, 1000);
+  assert.equal(februaryDryRun.body.lines.find((line) => line.fixedAssetId === asset.body.id).depreciationAmount, 0);
+  assert.equal(februaryDryRun.body.lines.find((line) => line.fixedAssetId === asset.body.id).skippedReason, "DISPOSED_BEFORE_PERIOD");
+  assert.equal(countPreview.status, 201);
+  assert.equal(countPreview.body.dryRun, true);
+  assert.deepEqual(countPreview.body.lines.map((line) => line.varianceType), ["inventory_loss", "inventory_surplus"]);
+  assert.equal(countPreview.body.voucherDraft.sourceType, "phase4_asset_count");
+  assert.equal(count.status, 201);
+  assert.equal(count.body.status, "counted");
+  assert.equal(ledger.status, 200);
+  assert.deepEqual(ledger.body.map((entry) => entry.sourceType), ["fixed_asset_addition", "asset_disposal", "asset_count", "asset_count"]);
+  assert.equal(reconciliation.status, 200);
+  assert.equal(reconciliation.body.ledgerNetValue, reconciliation.body.glNetValue);
+  assert.equal(reconciliation.body.differenceAmount, 0);
+  assert.ok(api.state.auditLogs.some((log) => log.action === "asset_disposal.create" && log.objectId === disposal.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "asset_count.create" && log.objectId === count.body.id));
+});
+
 test("API can persist account sets and scoped grants through platform store", async () => {
   let storedRole = null;
   let storedUser = null;

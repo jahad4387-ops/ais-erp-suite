@@ -106,7 +106,10 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/depreciation-runs/dry-run:",
     "/depreciation-runs:",
     "/depreciation-runs/{depreciationRunId}/approve:",
-    "/depreciation-runs/{depreciationRunId}/lock:"
+    "/depreciation-runs/{depreciationRunId}/lock:",
+    "/asset-disposals:",
+    "/asset-counts/preview:",
+    "/asset-counts:"
   ];
 
   for (const path of writePaths) {
@@ -205,6 +208,11 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "DepreciationRun:",
     "DepreciationRunLine:",
     "AssetDepreciationCostPoolOutput:",
+    "AssetDisposal:",
+    "AssetCount:",
+    "AssetCountLine:",
+    "FixedAssetLedgerEntry:",
+    "FixedAssetReconciliation:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -452,6 +460,28 @@ test("Phase 4 depreciation engine endpoints document dry-run, brake, locking, an
   assert.match(contract, /NEW_ASSET_NOT_STARTED/, "Depreciation dry-run must document new asset timeline skips.");
   assert.match(contract, /brakeApplied:/, "Depreciation run lines must expose net-value brake evidence.");
   assert.match(contract, /fixed_asset_depreciation/, "Cost pools must identify fixed asset depreciation source type.");
+});
+
+test("Phase 4 fixed asset final endpoints document disposal, count, ledger, and reconciliation", () => {
+  const disposalBlock = blockAfter("  /asset-disposals:");
+  const countPreviewBlock = blockAfter("  /asset-counts/preview:");
+  const countBlock = blockAfter("  /asset-counts:");
+  const ledgerBlock = blockAfter("  /fixed-asset-ledger:");
+  const reconciliationBlock = blockAfter("  /fixed-asset-reconciliation:");
+
+  assert.match(disposalBlock, /x-permission: fixed_asset_disposal\.manage/);
+  assert.match(disposalBlock, /AssetDisposal/);
+  assert.match(countPreviewBlock, /x-permission: fixed_asset_count\.manage/);
+  assert.match(countPreviewBlock, /AssetCount/);
+  assert.match(countBlock, /x-permission: fixed_asset_count\.manage/);
+  assert.match(countBlock, /AssetCount/);
+  assert.match(ledgerBlock, /x-permission: fixed_asset_reconciliation\.view/);
+  assert.match(ledgerBlock, /FixedAssetLedgerEntry/);
+  assert.match(reconciliationBlock, /x-permission: fixed_asset_reconciliation\.view/);
+  assert.match(reconciliationBlock, /FixedAssetReconciliation/);
+  assert.match(contract, /phase4_asset_disposal/, "Asset disposal must identify its voucher source.");
+  assert.match(contract, /phase4_asset_count/, "Asset count must identify its voucher source.");
+  assert.match(contract, /DISPOSED_BEFORE_PERIOD/, "Depreciation must document post-disposal stopping.");
 });
 
 test("deployment configuration check endpoint is documented", () => {

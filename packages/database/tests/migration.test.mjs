@@ -414,3 +414,20 @@ test("Phase 4 depreciation engine migration creates runs, brake fields, and lock
   assert.match(migrationText, /CREATE INDEX "DepreciationRun_accountSetId_fiscalYear_periodNo_idx"/);
   assert.match(migrationText, /CREATE INDEX "AssetDepreciationCostPoolOutput_accountSetId_fiscalYear_periodNo_idx"/);
 });
+
+test("Phase 4 fixed asset final migration creates disposal, count, ledger, and reconciliation tables", () => {
+  const migrationText = readMigrationText("../prisma/migrations/20260611090000_phase4_asset_disposal_count_reconciliation/migration.sql");
+
+  for (const table of ["AssetDisposal", "AssetCount", "AssetCountLine", "FixedAssetLedgerEntry", "FixedAssetReconciliationRun"]) {
+    assert.match(migrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(migrationText, /ALTER TABLE "FixedAsset" ADD COLUMN "disposalDate" DATETIME/);
+  assert.match(migrationText, /ALTER TABLE "FixedAsset" ADD COLUMN "depreciationStopPeriod" INTEGER/);
+  assert.match(migrationText, /"voucherDraftJson" TEXT NOT NULL/, "Disposal and count documents must preserve human-review voucher drafts.");
+  assert.match(migrationText, /"sourceType" TEXT NOT NULL/, "Fixed asset ledger entries must retain business source type.");
+  assert.match(migrationText, /"ledgerNetValue" REAL NOT NULL DEFAULT 0/, "Reconciliation must persist fixed asset ledger net value.");
+  assert.match(migrationText, /"glNetValue" REAL NOT NULL DEFAULT 0/, "Reconciliation must persist GL comparison value.");
+  assert.match(migrationText, /CREATE INDEX "AssetDisposal_accountSetId_fiscalYear_periodNo_idx"/);
+  assert.match(migrationText, /CREATE INDEX "FixedAssetLedgerEntry_accountSetId_fiscalYear_periodNo_idx"/);
+  assert.match(migrationText, /CREATE INDEX "FixedAssetReconciliationRun_accountSetId_fiscalYear_periodNo_idx"/);
+});
