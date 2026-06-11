@@ -115,7 +115,9 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/report-template-versions/{reportTemplateVersionId}/publish:",
     "/report-runs:",
     "/report-runs/{reportRunId}/recalculate:",
-    "/report-runs/{reportRunId}/lock:"
+    "/report-runs/{reportRunId}/lock:",
+    "/report-runs/{reportRunId}/exports:",
+    "/report-runs/{reportRunId}/interpretations:"
   ];
 
   for (const path of writePaths) {
@@ -227,6 +229,8 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "ReportRun:",
     "ReportRunCell:",
     "ReportTraceLink:",
+    "ReportExport:",
+    "AiReportInterpretation:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -557,6 +561,27 @@ test("Phase 5 report run endpoints document formula snapshots, closed-period blo
   assert.match(contract, /traceLinks:/);
   assert.match(contract, /REPORT_PERIOD_CLOSED/);
   assert.match(contract, /REPORT_RUN_LOCKED/);
+});
+
+test("Phase 5 export and AI interpretation endpoints document audit history and evidence references", () => {
+  const exportsBlock = blockAfter("  /report-runs/{reportRunId}/exports:");
+  const exportListBlock = blockAfter("  /report-exports:");
+  const interpretationBlock = blockAfter("  /report-runs/{reportRunId}/interpretations:");
+  const interpretationListBlock = blockAfter("  /ai-report-interpretations:");
+
+  assert.match(exportsBlock, /x-permission: report_export\.manage/);
+  assert.match(exportsBlock, /CreateReportExportRequest/);
+  assert.match(exportsBlock, /ReportExport/);
+  assert.match(exportListBlock, /x-permission: report\.view/);
+  assert.match(interpretationBlock, /x-permission: report_interpretation\.manage/);
+  assert.match(interpretationBlock, /CreateAiReportInterpretationRequest/);
+  assert.match(interpretationBlock, /AiReportInterpretation/);
+  assert.match(interpretationListBlock, /x-permission: report\.view/);
+  assert.match(contract, /keyFindings:/);
+  assert.match(contract, /warnings:/);
+  assert.match(contract, /evidenceRefs:/);
+  assert.match(contract, /report_cell:BS!B12/);
+  assert.match(contract, /sensitiveFieldNotice:/);
 });
 
 test("deployment configuration check endpoint is documented", () => {

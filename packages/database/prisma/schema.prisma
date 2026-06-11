@@ -91,6 +91,8 @@ model AccountSet {
   fixedAssetReconciliationRuns FixedAssetReconciliationRun[]
   reportTemplates  ReportTemplate[]
   reportRuns       ReportRun[]
+  reportExports    ReportExport[]
+  aiReportInterpretations AiReportInterpretation[]
 }
 
 model User {
@@ -2236,6 +2238,8 @@ model ReportRun {
   templateVersion ReportTemplateVersion @relation(fields: [templateVersionId], references: [id])
   cells           ReportRunCell[]
   traceLinks      ReportTraceLink[]
+  exports         ReportExport[]
+  interpretations AiReportInterpretation[]
 
   @@index([accountSetId, fiscalYear, periodNo])
 }
@@ -2272,4 +2276,40 @@ model ReportTraceLink {
 
   @@index([traceId])
   @@index([reportRunId])
+}
+
+model ReportExport {
+  id                   String   @id @default(uuid())
+  accountSetId          String
+  reportRunId           String
+  fileType              String
+  snapshotHash          String
+  downloadUrl           String
+  sensitiveFieldNotice  String?
+  exportedBy            String
+  createdAt             DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  reportRun  ReportRun  @relation(fields: [reportRunId], references: [id])
+
+  @@index([accountSetId, createdAt])
+  @@index([reportRunId])
+}
+
+model AiReportInterpretation {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  reportRunId      String
+  summary          String
+  keyFindingsJson  String   @default("[]")
+  warningsJson     String   @default("[]")
+  evidenceRefsJson String   @default("[]")
+  interpretedBy    String
+  createdAt        DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  reportRun  ReportRun  @relation(fields: [reportRunId], references: [id])
+
+  @@index([reportRunId])
+  @@index([accountSetId, createdAt])
 }

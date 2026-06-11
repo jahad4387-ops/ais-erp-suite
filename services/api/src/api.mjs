@@ -575,6 +575,15 @@ function permissionFor(request) {
   if (segments[0] === "report-template-versions") {
     return request.method === "GET" ? "report.view" : "report_template.manage";
   }
+  if (segments[0] === "report-runs" && segments.length === 3 && segments[2] === "exports") {
+    return request.method === "GET" ? "report.view" : "report_export.manage";
+  }
+  if (segments[0] === "report-runs" && segments.length === 3 && segments[2] === "interpretations") {
+    return request.method === "GET" ? "report.view" : "report_interpretation.manage";
+  }
+  if (segments[0] === "report-exports" || segments[0] === "ai-report-interpretations") {
+    return "report.view";
+  }
   if (segments[0] === "report-runs") {
     return request.method === "GET" ? "report.view" : "report_run.manage";
   }
@@ -870,6 +879,8 @@ function createState(options = {}) {
     reportTemplates: new Map(),
     reportTemplateVersions: new Map(),
     reportRuns: new Map(),
+    reportExports: new Map(),
+    aiReportInterpretations: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -3903,6 +3914,86 @@ async function lockReportRun(state, runId, body, actorId) {
     objectId: locked.id
   });
   return jsonResponse(200, publicReportRun(locked));
+}
+
+function publicAiReportInterpretation(interpretation) {
+  return cloneReportPayload(interpretation);
+}
+
+async function createReportExport(state, runId, body, actorId) {
+  const run = findReportRunByIdentifier(state, runId);
+  if (!run) {
+    return errorResponse(404, "REPORT_RUN_NOT_FOUND", "Report run was not found.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) {
+    return accountSetAccessError(state, actorId, run.accountSetId);
+  }
+  if (!["excel", "pdf"].includes(body.fileType)) {
+    throw new Error("fileType is required.");
+  }
+
+  const exportId = `report-export:${state.reportExports.size + 1}`;
+  const fileExtension = body.fileType === "excel" ? "xlsx" : "pdf";
+  const exportFile = {
+    id: exportId,
+    accountSetId: run.accountSetId,
+    reportRunId: run.id,
+    fileType: body.fileType,
+    snapshotHash: run.snapshotHash,
+    downloadUrl: `local://report-exports/${exportId}.${fileExtension}`,
+    sensitiveFieldNotice: body.sensitiveFieldNotice ?? `Generated from immutable snapshot ${run.snapshotHash}.`,
+    exportedBy: body.exportedBy ?? actorId,
+    createdAt: "now"
+  };
+  state.reportExports.set(exportFile.id, exportFile);
+  appendAuditLog(state, {
+    actorId: exportFile.exportedBy,
+    action: "report_export.create",
+    objectType: "report_export",
+    objectId: exportFile.id
+  });
+  return jsonResponse(201, cloneReportPayload(exportFile));
+}
+
+async function createAiReportInterpretation(state, runId, body, actorId) {
+  const run = findReportRunByIdentifier(state, runId);
+  if (!run) {
+    return errorResponse(404, "REPORT_RUN_NOT_FOUND", "Report run was not found.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) {
+    return accountSetAccessError(state, actorId, run.accountSetId);
+  }
+  if (typeof body.summary !== "string" || body.summary.trim() === "") {
+    throw new Error("summary is required.");
+  }
+  if (!Array.isArray(body.evidenceRefs) || body.evidenceRefs.length === 0) {
+    throw new Error("evidenceRefs are required.");
+  }
+  for (const ref of body.evidenceRefs) {
+    if (typeof ref !== "string" || !ref.startsWith("report_cell:")) {
+      throw new Error("evidenceRefs must point to report_cell references.");
+    }
+  }
+
+  const interpretation = {
+    id: `ai-report-interpretation:${state.aiReportInterpretations.size + 1}`,
+    accountSetId: run.accountSetId,
+    reportRunId: run.id,
+    summary: body.summary,
+    keyFindings: Array.isArray(body.keyFindings) ? [...body.keyFindings] : [],
+    warnings: Array.isArray(body.warnings) ? [...body.warnings] : [],
+    evidenceRefs: [...body.evidenceRefs],
+    interpretedBy: body.interpretedBy ?? actorId,
+    createdAt: "now"
+  };
+  state.aiReportInterpretations.set(interpretation.id, interpretation);
+  appendAuditLog(state, {
+    actorId: interpretation.interpretedBy,
+    action: "ai_report_interpretation.create",
+    objectType: "ai_report_interpretation",
+    objectId: interpretation.id
+  });
+  return jsonResponse(201, publicAiReportInterpretation(interpretation));
 }
 
 async function route(request, state) {
@@ -8123,6 +8214,35 @@ async function route(request, state) {
     );
   }
 
+  if (request.method === "GET" && request.path.split("?")[0] === "/report-exports") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const actorId = actorIdFor(request, state);
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    return jsonResponse(
+      200,
+      [...state.reportExports.values()].filter((exportFile) => !accountSetId || exportFile.accountSetId === accountSetId)
+    );
+  }
+
+  if (request.method === "GET" && request.path.split("?")[0] === "/ai-report-interpretations") {
+    const query = queryParamsFor(request.path);
+    const reportRunId = query.get("reportRunId");
+    const run = reportRunId ? findReportRunByIdentifier(state, reportRunId) : null;
+    const actorId = actorIdFor(request, state);
+    if (run && !(await canAccessAccountSet(state, actorId, run.accountSetId))) {
+      return accountSetAccessError(state, actorId, run.accountSetId);
+    }
+    return jsonResponse(
+      200,
+      [...state.aiReportInterpretations.values()]
+        .filter((interpretation) => !reportRunId || interpretation.reportRunId === reportRunId)
+        .map(publicAiReportInterpretation)
+    );
+  }
+
   if (request.method === "POST" && request.path === "/report-runs") {
     return createReportRun(state, body, actorIdFor(request, state));
   }
@@ -8145,6 +8265,14 @@ async function route(request, state) {
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "report-runs" && segments[2] === "lock") {
     return lockReportRun(state, segments[1], body, actorIdFor(request, state));
+  }
+
+  if (request.method === "POST" && segments.length === 3 && segments[0] === "report-runs" && segments[2] === "exports") {
+    return createReportExport(state, segments[1], body, actorIdFor(request, state));
+  }
+
+  if (request.method === "POST" && segments.length === 3 && segments[0] === "report-runs" && segments[2] === "interpretations") {
+    return createAiReportInterpretation(state, segments[1], body, actorIdFor(request, state));
   }
 
   if (request.method === "POST" && (request.path === "/ledger/bank-statements/import" || request.path === "/bank/statements")) {

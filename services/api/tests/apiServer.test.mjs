@@ -8398,3 +8398,140 @@ test("Phase 5 report runs calculate formula snapshots, lock values, and block cl
   assert.equal(closedRecalculate.status, 409);
   assert.equal(closedRecalculate.body.code, "REPORT_PERIOD_CLOSED");
 });
+
+test("Phase 5 report exports and AI interpretations are tied to snapshot evidence", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P5E",
+      name: "Phase 5 Exports",
+      companyName: "Phase 5 Exports Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase5-report-export-account-set"
+  );
+  api.state.periods.set("period:p5e:2026:6", {
+    id: "period:p5e:2026:6",
+    accountSetId: accountSet.body.id,
+    fiscalYear: 2026,
+    periodNo: 6,
+    status: "open",
+    isCurrent: true
+  });
+  api.state.balances.push({
+    accountSetId: accountSet.body.id,
+    fiscalYear: 2026,
+    periodNo: 6,
+    accountCode: "1001",
+    accountName: "Cash",
+    openingDebit: 100,
+    openingCredit: 0,
+    periodDebit: 20,
+    periodCredit: 0,
+    closingDebit: 120,
+    closingCredit: 0
+  });
+  const template = await request(
+    api,
+    "POST",
+    "/report-templates",
+    {
+      accountSetId: accountSet.body.id,
+      templateCode: "EXPORT-BS",
+      templateName: "Export Balance Sheet",
+      reportType: "statutory",
+      createdBy: "system"
+    },
+    "phase5-export-template"
+  );
+  const version = await request(
+    api,
+    "POST",
+    `/report-templates/${template.body.id}/versions`,
+    {
+      sheets: [
+        {
+          sheetCode: "BS",
+          sheetName: "Balance Sheet",
+          cells: [
+            {
+              cellAddress: "B10",
+              label: "Cash",
+              valueType: "formula",
+              displayFormat: "currency",
+              isEditable: false,
+              formula: {
+                formulaText: "CLOSING(\"1001\", \"2026-06\")",
+                astJson: { name: "CLOSING", args: ["1001", "2026-06"] },
+                dependenciesJson: [{ sourceType: "account_balance", accountCode: "1001", period: "2026-06" }]
+              }
+            }
+          ]
+        }
+      ],
+      createdBy: "system"
+    },
+    "phase5-export-version"
+  );
+  await request(
+    api,
+    "POST",
+    `/report-template-versions/${version.body.id}/publish`,
+    { publishedBy: "system" },
+    "phase5-export-publish"
+  );
+  const run = await request(
+    api,
+    "POST",
+    "/report-runs",
+    {
+      accountSetId: accountSet.body.id,
+      templateVersionId: version.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      includeUnposted: false,
+      createdBy: "system"
+    },
+    "phase5-export-run"
+  );
+  const exportFile = await request(
+    api,
+    "POST",
+    `/report-runs/${run.body.id}/exports`,
+    { fileType: "excel", exportedBy: "system" },
+    "phase5-export-file"
+  );
+  const interpretation = await request(
+    api,
+    "POST",
+    `/report-runs/${run.body.id}/interpretations`,
+    {
+      summary: "Cash increased.",
+      keyFindings: ["Cash closing balance is 120."],
+      warnings: [],
+      evidenceRefs: ["report_cell:BS!B10"],
+      interpretedBy: "system"
+    },
+    "phase5-ai-interpretation"
+  );
+  const exportList = await request(api, "GET", `/report-exports?accountSetId=${accountSet.body.id}`, null, null);
+  const interpretations = await request(api, "GET", `/ai-report-interpretations?reportRunId=${run.body.id}`, null, null);
+
+  assert.equal(exportFile.status, 201);
+  assert.equal(exportFile.body.fileType, "excel");
+  assert.equal(exportFile.body.snapshotHash, run.body.snapshotHash);
+  assert.match(exportFile.body.downloadUrl, /^local:\/\/report-exports\//);
+  assert.match(exportFile.body.sensitiveFieldNotice, /snapshot/);
+  assert.equal(interpretation.status, 201);
+  assert.deepEqual(interpretation.body.keyFindings, ["Cash closing balance is 120."]);
+  assert.deepEqual(interpretation.body.evidenceRefs, ["report_cell:BS!B10"]);
+  assert.equal(interpretation.body.reportRunId, run.body.id);
+  assert.equal(exportList.body.length, 1);
+  assert.equal(interpretations.body.length, 1);
+});

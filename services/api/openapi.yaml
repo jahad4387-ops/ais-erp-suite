@@ -1622,6 +1622,108 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /report-runs/{reportRunId}/exports:
+    post:
+      summary: Generate an audited Excel or PDF export record from a report snapshot.
+      x-permission: report_export.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - name: reportRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReportExportRequest"
+      responses:
+        "201":
+          description: Report export generated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportExport"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /report-exports:
+    get:
+      summary: List audited report export history.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Report export history.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReportExport"
+
+  /report-runs/{reportRunId}/interpretations:
+    post:
+      summary: Create an AI report interpretation draft with explicit evidence references.
+      x-permission: report_interpretation.manage
+      x-risk-level: low
+      x-agent-allowed: false
+      parameters:
+        - name: reportRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAiReportInterpretationRequest"
+      responses:
+        "201":
+          description: AI interpretation draft created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiReportInterpretation"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /ai-report-interpretations:
+    get:
+      summary: List AI report interpretations for a report run.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: reportRunId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: AI interpretation drafts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AiReportInterpretation"
+
   /audit-logs:
     get:
       summary: Query audit logs.
@@ -10077,6 +10179,94 @@ components:
           type: integer
         amount:
           type: number
+
+    CreateReportExportRequest:
+      type: object
+      required: [fileType]
+      properties:
+        fileType:
+          type: string
+          enum: [excel, pdf]
+        exportedBy:
+          type: string
+        sensitiveFieldNotice:
+          type: string
+
+    ReportExport:
+      type: object
+      required: [id, accountSetId, reportRunId, fileType, snapshotHash, downloadUrl, exportedBy, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        reportRunId:
+          type: string
+        fileType:
+          type: string
+          enum: [excel, pdf]
+        snapshotHash:
+          type: string
+        downloadUrl:
+          type: string
+        sensitiveFieldNotice:
+          type: string
+        exportedBy:
+          type: string
+        createdAt:
+          type: string
+
+    CreateAiReportInterpretationRequest:
+      type: object
+      required: [summary, keyFindings, warnings, evidenceRefs]
+      properties:
+        summary:
+          type: string
+        keyFindings:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+          examples:
+            - ["report_cell:BS!B12"]
+        interpretedBy:
+          type: string
+
+    AiReportInterpretation:
+      type: object
+      required: [id, accountSetId, reportRunId, summary, keyFindings, warnings, evidenceRefs, interpretedBy]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        reportRunId:
+          type: string
+        summary:
+          type: string
+        keyFindings:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        interpretedBy:
+          type: string
+        createdAt:
+          type: string
 
     CreateAgentActionRequest:
       type: object

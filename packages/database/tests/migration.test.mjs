@@ -76,6 +76,9 @@ const phase5ReportTemplateFoundationMigrationText = readMigrationText(
 const phase5ReportRunSnapshotMigrationText = readMigrationText(
   "../prisma/migrations/20260611110000_phase5_report_run_snapshot/migration.sql"
 );
+const phase5ReportExportAiMigrationText = readMigrationText(
+  "../prisma/migrations/20260611120000_phase5_report_export_ai/migration.sql"
+);
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 function readMigrationText(relativePath) {
@@ -482,4 +485,21 @@ test("Phase 5 report run snapshot migration creates run, cell snapshot, and trac
   assert.match(phase5ReportRunSnapshotMigrationText, /"sourceDocumentId" TEXT/);
   assert.match(phase5ReportRunSnapshotMigrationText, /CREATE INDEX "ReportRun_accountSetId_fiscalYear_periodNo_idx"/);
   assert.match(phase5ReportRunSnapshotMigrationText, /CREATE INDEX "ReportTraceLink_traceId_idx"/);
+});
+
+test("Phase 5 report export and AI interpretation migration creates audited export and evidence-backed interpretation tables", () => {
+  for (const table of ["ReportExport", "AiReportInterpretation"]) {
+    assert.match(phase5ReportExportAiMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+
+  assert.match(phase5ReportExportAiMigrationText, /"reportRunId" TEXT NOT NULL/);
+  assert.match(phase5ReportExportAiMigrationText, /"fileType" TEXT NOT NULL/);
+  assert.match(phase5ReportExportAiMigrationText, /"snapshotHash" TEXT NOT NULL/);
+  assert.match(phase5ReportExportAiMigrationText, /"downloadUrl" TEXT NOT NULL/);
+  assert.match(phase5ReportExportAiMigrationText, /"sensitiveFieldNotice" TEXT/);
+  assert.match(phase5ReportExportAiMigrationText, /"keyFindingsJson" TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(phase5ReportExportAiMigrationText, /"warningsJson" TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(phase5ReportExportAiMigrationText, /"evidenceRefsJson" TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(phase5ReportExportAiMigrationText, /CREATE INDEX "ReportExport_accountSetId_createdAt_idx"/);
+  assert.match(phase5ReportExportAiMigrationText, /CREATE INDEX "AiReportInterpretation_reportRunId_idx"/);
 });
