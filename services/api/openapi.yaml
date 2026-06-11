@@ -1401,6 +1401,36 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /report-templates/statutory-presets:
+    post:
+      summary: Create and publish statutory report presets for balance sheet, income statement, cash-flow statement, and owner equity statement.
+      x-permission: report_template.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStatutoryReportPresetsRequest"
+      responses:
+        "201":
+          description: Statutory report presets created and published.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatutoryReportPresetsResult"
+        "200":
+          description: Existing statutory report presets returned idempotently.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatutoryReportPresetsResult"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /report-templates/{reportTemplateId}/versions:
     post:
       summary: Create a new draft template version instead of mutating a published version.
@@ -10038,6 +10068,40 @@ components:
           type: string
         versionCount:
           type: integer
+
+    CreateStatutoryReportPresetsRequest:
+      type: object
+      required: [accountSetId, effectiveFromPeriod]
+      properties:
+        accountSetId:
+          type: string
+        effectiveFromPeriod:
+          type: string
+          example: "2026-06"
+        createdBy:
+          type: string
+
+    StatutoryReportPresetsResult:
+      type: object
+      required: [accountSetId, effectiveFromPeriod, templates]
+      properties:
+        accountSetId:
+          type: string
+        effectiveFromPeriod:
+          type: string
+        templates:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/ReportTemplate"
+              - type: object
+                required: [created]
+                properties:
+                  created:
+                    type: boolean
+                  templateCode:
+                    type: string
+                    enum: [STAT-BS, STAT-IS, STAT-CF, STAT-OE]
 
     CreateReportTemplateVersionRequest:
       type: object

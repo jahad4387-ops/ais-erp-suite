@@ -22,6 +22,7 @@ test("Phase 5 report template page wires UFO template CRUD and publish APIs", ()
 
   assert.match(source, /api\.get\(`\/report-templates\?accountSetId=\$\{currentAccountSetId\}`\)/);
   assert.match(source, /api\.post\('\/report-templates'/);
+  assert.match(source, /api\.post\('\/report-templates\/statutory-presets'/);
   assert.match(source, /api\.post\(`\/report-templates\/\$\{selectedTemplateId\}\/versions`/);
   assert.match(source, /api\.post\(`\/report-template-versions\/\$\{selectedVersionId\}\/publish`/);
   assert.match(source, /formulaText/);
@@ -29,4 +30,8 @@ test("Phase 5 report template page wires UFO template CRUD and publish APIs", ()
   assert.match(source, /displayFormat/);
   assert.match(source, /isEditable/);
   assert.match(source, /BAL\("1001", "2026-06", "debit"\)/);
+  assert.match(source, /STAT-BS/);
+  assert.match(source, /STAT-IS/);
+  assert.match(source, /STAT-CF/);
+  assert.match(source, /STAT-OE/);
 });

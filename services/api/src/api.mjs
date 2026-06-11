@@ -3623,6 +3623,170 @@ async function publishReportTemplateVersion(state, versionId, body, actorId) {
   return jsonResponse(200, cloneReportPayload(published));
 }
 
+function statutoryFormulaCell(cellAddress, label, formulaText, accountCode, period, displayFormat = "currency") {
+  const ast = parseFormulaArgs(formulaText);
+  return {
+    cellAddress,
+    label,
+    valueType: "formula",
+    displayFormat,
+    isEditable: false,
+    formula: {
+      formulaText,
+      astJson: ast,
+      dependenciesJson: [{ sourceType: "account_balance", accountCode, period }]
+    }
+  };
+}
+
+function statutoryReportPresetDefinitions(period) {
+  return [
+    {
+      templateCode: "STAT-BS",
+      templateName: "资产负债表",
+      sheetCode: "BS",
+      sheetName: "资产负债表",
+      cells: [
+        statutoryFormulaCell("B4", "货币资金", `CLOSING("1001", "${period}")`, "1001", period),
+        statutoryFormulaCell("B5", "应收账款", `BAL("1122", "${period}", "debit")`, "1122", period),
+        statutoryFormulaCell("B8", "资产合计", `CLOSING("1001", "${period}")`, "1001", period),
+        statutoryFormulaCell("D4", "短期借款", `BAL("2001", "${period}", "credit")`, "2001", period),
+        statutoryFormulaCell("D8", "负债和所有者权益合计", `BAL("3001", "${period}", "credit")`, "3001", period)
+      ]
+    },
+    {
+      templateCode: "STAT-IS",
+      templateName: "利润表",
+      sheetCode: "IS",
+      sheetName: "利润表",
+      cells: [
+        statutoryFormulaCell("B4", "营业收入", `AMT("6001", "${period}")`, "6001", period),
+        statutoryFormulaCell("B5", "营业成本", `AMT("6401", "${period}")`, "6401", period),
+        statutoryFormulaCell("B8", "利润总额", `AMT("6001", "${period}")`, "6001", period)
+      ]
+    },
+    {
+      templateCode: "STAT-CF",
+      templateName: "现金流量表",
+      sheetCode: "CF",
+      sheetName: "现金流量表",
+      cells: [
+        statutoryFormulaCell("B4", "销售商品、提供劳务收到的现金", `AMT("1002", "${period}")`, "1002", period),
+        statutoryFormulaCell("B5", "购买商品、接受劳务支付的现金", `AMT("1002", "${period}")`, "1002", period),
+        statutoryFormulaCell("B8", "现金及现金等价物净增加额", `CLOSING("1001", "${period}")`, "1001", period)
+      ]
+    },
+    {
+      templateCode: "STAT-OE",
+      templateName: "所有者权益变动表",
+      sheetCode: "OE",
+      sheetName: "所有者权益变动表",
+      cells: [
+        statutoryFormulaCell("B4", "实收资本", `BAL("3001", "${period}", "credit")`, "3001", period),
+        statutoryFormulaCell("B5", "资本公积", `BAL("3002", "${period}", "credit")`, "3002", period),
+        statutoryFormulaCell("B6", "未分配利润", `BAL("3104", "${period}", "credit")`, "3104", period)
+      ]
+    }
+  ];
+}
+
+async function createStatutoryReportPresets(state, body, actorId) {
+  if (typeof body.accountSetId !== "string" || body.accountSetId.trim() === "") {
+    throw new Error("accountSetId is required.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+    return accountSetAccessError(state, actorId, body.accountSetId);
+  }
+  const period = body.effectiveFromPeriod ?? reportPeriodKey(new Date().getFullYear(), 1);
+  const templates = [];
+  let createdCount = 0;
+
+  for (const preset of statutoryReportPresetDefinitions(period)) {
+    const existing = [...state.reportTemplates.values()].find(
+      (template) => template.accountSetId === body.accountSetId && template.templateCode === preset.templateCode
+    );
+    if (existing) {
+      templates.push({ ...publicReportTemplate(existing, [...state.reportTemplateVersions.values()]), created: false });
+      continue;
+    }
+
+    const templateId = `report-template:${state.reportTemplates.size + 1}`;
+    const template = {
+      id: templateId,
+      accountSetId: body.accountSetId,
+      templateCode: preset.templateCode,
+      templateName: preset.templateName,
+      reportType: "statutory",
+      status: "draft",
+      latestVersionNo: 0,
+      publishedVersionId: null,
+      createdBy: body.createdBy ?? actorId,
+      createdAt: "now",
+      updatedAt: "now"
+    };
+    state.reportTemplates.set(template.id, template);
+    appendAuditLog(state, {
+      actorId: template.createdBy,
+      action: "report_template.create",
+      objectType: "report_template",
+      objectId: template.id
+    });
+
+    const versionId = `report-template-version:${state.reportTemplateVersions.size + 1}`;
+    const draftVersion = {
+      id: versionId,
+      templateId: template.id,
+      versionNo: 1,
+      versionName: `${preset.templateName} 法定预置版`,
+      status: "draft",
+      effectiveFromPeriod: period,
+      layoutJson: { preset: "statutory", columnWidths: { A: 180, B: 140, C: 48, D: 180, E: 140 } },
+      createdBy: body.createdBy ?? actorId,
+      createdAt: "now",
+      publishedBy: null,
+      publishedAt: null,
+      sheets: normalizeReportVersionSheets(state, versionId, [
+        {
+          sheetCode: preset.sheetCode,
+          sheetName: preset.sheetName,
+          rowCount: 80,
+          columnCount: 8,
+          cells: preset.cells
+        }
+      ])
+    };
+    const publishedVersion = {
+      ...draftVersion,
+      status: "published",
+      publishedBy: body.createdBy ?? actorId,
+      publishedAt: "now"
+    };
+    state.reportTemplateVersions.set(publishedVersion.id, publishedVersion);
+    const activeTemplate = {
+      ...template,
+      status: "active",
+      latestVersionNo: 1,
+      publishedVersionId: publishedVersion.id,
+      updatedAt: "now"
+    };
+    state.reportTemplates.set(activeTemplate.id, activeTemplate);
+    appendAuditLog(state, {
+      actorId: publishedVersion.publishedBy,
+      action: "report_template_version.publish",
+      objectType: "report_template_version",
+      objectId: publishedVersion.id
+    });
+    templates.push({ ...publicReportTemplate(activeTemplate, [...state.reportTemplateVersions.values()]), created: true });
+    createdCount += 1;
+  }
+
+  return jsonResponse(createdCount > 0 ? 201 : 200, {
+    accountSetId: body.accountSetId,
+    effectiveFromPeriod: period,
+    templates
+  });
+}
+
 function reportPeriodKey(fiscalYear, periodNo) {
   return `${fiscalYear}-${String(periodNo).padStart(2, "0")}`;
 }
@@ -8568,6 +8732,10 @@ async function route(request, state) {
 
   if (request.method === "POST" && request.path === "/report-templates") {
     return createReportTemplate(state, body, actorIdFor(request, state));
+  }
+
+  if (request.method === "POST" && request.path === "/report-templates/statutory-presets") {
+    return createStatutoryReportPresets(state, body, actorIdFor(request, state));
   }
 
   if (request.method === "POST" && segments.length === 3 && segments[0] === "report-templates" && segments[2] === "versions") {

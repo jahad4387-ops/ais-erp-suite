@@ -8326,6 +8326,123 @@ test("Phase 5 report templates persist UFO sheets, cells, and formula dependenci
   assert.equal(revisedVersion.body.sheets[0].cells[0].label, "Cash revised");
 });
 
+test("Phase 5 statutory report presets create and publish the four required legal statements", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P5S",
+      name: "Phase 5 Statutory Presets",
+      companyName: "Phase 5 Statutory Presets Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase5-statutory-preset-account-set"
+  );
+  api.state.balances.push(
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      accountCode: "1001",
+      accountName: "Cash",
+      openingDebit: 800,
+      openingCredit: 0,
+      periodDebit: 300,
+      periodCredit: 100,
+      closingDebit: 1000,
+      closingCredit: 0
+    },
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      accountCode: "6001",
+      accountName: "Main Business Revenue",
+      openingDebit: 0,
+      openingCredit: 0,
+      periodDebit: 0,
+      periodCredit: 1200,
+      closingDebit: 0,
+      closingCredit: 1200
+    }
+  );
+
+  const presets = await request(
+    api,
+    "POST",
+    "/report-templates/statutory-presets",
+    {
+      accountSetId: accountSet.body.id,
+      effectiveFromPeriod: "2026-06",
+      createdBy: "system"
+    },
+    "phase5-statutory-presets"
+  );
+  const duplicate = await request(
+    api,
+    "POST",
+    "/report-templates/statutory-presets",
+    {
+      accountSetId: accountSet.body.id,
+      effectiveFromPeriod: "2026-06",
+      createdBy: "system"
+    },
+    "phase5-statutory-presets-duplicate"
+  );
+  const templates = await request(api, "GET", `/report-templates?accountSetId=${accountSet.body.id}`, null, null);
+  assert.equal(presets.status, 201);
+  assert.equal(duplicate.status, 200);
+  const balanceSheet = presets.body.templates.find((template) => template.templateCode === "STAT-BS");
+  const balanceSheetVersion = await request(api, "GET", `/report-template-versions/${balanceSheet.publishedVersionId}`, null, null);
+  const run = await request(
+    api,
+    "POST",
+    "/report-runs",
+    {
+      accountSetId: accountSet.body.id,
+      templateVersionId: balanceSheet.publishedVersionId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      includeUnposted: false,
+      createdBy: "system"
+    },
+    "phase5-statutory-balance-sheet-run"
+  );
+
+  assert.deepEqual(
+    presets.body.templates.map((template) => template.templateCode),
+    ["STAT-BS", "STAT-IS", "STAT-CF", "STAT-OE"]
+  );
+  assert.deepEqual(
+    presets.body.templates.map((template) => template.templateName),
+    ["资产负债表", "利润表", "现金流量表", "所有者权益变动表"]
+  );
+  assert.ok(presets.body.templates.every((template) => template.reportType === "statutory" && template.status === "active"));
+  assert.ok(presets.body.templates.every((template) => template.publishedVersionId));
+  assert.ok(presets.body.templates.every((template) => template.created === true));
+  assert.ok(duplicate.body.templates.every((template) => template.created === false));
+  assert.equal(templates.body.filter((template) => template.templateCode.startsWith("STAT-")).length, 4);
+  assert.equal(balanceSheetVersion.body.status, "published");
+  assert.deepEqual(
+    balanceSheetVersion.body.sheets[0].cells.map((cell) => [cell.cellAddress, cell.label, cell.formula.formulaText]),
+    [
+      ["B4", "货币资金", "CLOSING(\"1001\", \"2026-06\")"],
+      ["B5", "应收账款", "BAL(\"1122\", \"2026-06\", \"debit\")"],
+      ["B8", "资产合计", "CLOSING(\"1001\", \"2026-06\")"],
+      ["D4", "短期借款", "BAL(\"2001\", \"2026-06\", \"credit\")"],
+      ["D8", "负债和所有者权益合计", "BAL(\"3001\", \"2026-06\", \"credit\")"]
+    ]
+  );
+  assert.equal(run.status, 201);
+  assert.equal(run.body.cells.find((cell) => cell.cellAddress === "B4").calculatedValue, 1000);
+  assert.ok(run.body.traceLinks.some((link) => link.accountCode === "1001"));
+});
+
 test("Phase 5 report runs calculate formula snapshots, lock values, and block closed-period recalculation", async () => {
   const api = createApi();
   const accountSet = await request(

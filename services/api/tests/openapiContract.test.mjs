@@ -516,6 +516,7 @@ test("Phase 4 month-end integration documents formal cost-pool consumption by Ph
 
 test("Phase 5 report template endpoints document UFO designer foundation and formula dependencies", () => {
   const templatesBlock = blockAfter("  /report-templates:");
+  const statutoryPresetsBlock = blockAfter("  /report-templates/statutory-presets:");
   const versionsBlock = blockAfter("  /report-templates/{reportTemplateId}/versions:");
   const publishBlock = blockAfter("  /report-template-versions/{reportTemplateVersionId}/publish:");
   const versionDetailBlock = blockAfter("  /report-template-versions/{reportTemplateVersionId}:");
@@ -524,6 +525,9 @@ test("Phase 5 report template endpoints document UFO designer foundation and for
   assert.match(templatesBlock, /x-permission: report_template\.manage/);
   assert.match(templatesBlock, /CreateReportTemplateRequest/);
   assert.match(templatesBlock, /ReportTemplate/);
+  assert.match(statutoryPresetsBlock, /x-permission: report_template\.manage/);
+  assert.match(statutoryPresetsBlock, /CreateStatutoryReportPresetsRequest/);
+  assert.match(statutoryPresetsBlock, /StatutoryReportPresetsResult/);
   assert.match(versionsBlock, /x-permission: report_template\.manage/);
   assert.match(versionsBlock, /CreateReportTemplateVersionRequest/);
   assert.match(versionsBlock, /ReportTemplateVersion/);
@@ -541,6 +545,10 @@ test("Phase 5 report template endpoints document UFO designer foundation and for
   assert.match(contract, /OPENING\(\)/);
   assert.match(contract, /CLOSING\(\)/);
   assert.match(contract, /AUX_BAL\(\)/);
+  assert.match(contract, /STAT-BS/);
+  assert.match(contract, /STAT-IS/);
+  assert.match(contract, /STAT-CF/);
+  assert.match(contract, /STAT-OE/);
 });
 
 test("Phase 5 report run endpoints document formula snapshots, closed-period block, and trace links", () => {

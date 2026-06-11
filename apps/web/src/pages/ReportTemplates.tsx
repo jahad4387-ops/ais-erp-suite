@@ -32,6 +32,7 @@ type ReportTemplateVersion = {
 };
 
 const { Text, Title } = Typography;
+const statutoryPresetCodes = ['STAT-BS', 'STAT-IS', 'STAT-CF', 'STAT-OE'];
 
 export const ReportTemplates: React.FC = () => {
   const [templateForm] = Form.useForm();
@@ -77,6 +78,18 @@ export const ReportTemplates: React.FC = () => {
     });
     templateForm.resetFields();
     setSelectedTemplateId(created.id);
+    await fetchTemplates();
+  };
+
+  const createStatutoryPresets = async () => {
+    if (!currentAccountSetId) return;
+    const result = await api.post('/report-templates/statutory-presets', {
+      accountSetId: currentAccountSetId,
+      effectiveFromPeriod: periodKey,
+      createdBy: currentUser,
+    });
+    const createdCount = result?.templates?.filter((template: ReportTemplate & { created?: boolean }) => template.created).length ?? 0;
+    message.success(createdCount > 0 ? `Created statutory presets: ${statutoryPresetCodes.join(', ')}` : 'Statutory presets already exist');
     await fetchTemplates();
   };
 
@@ -138,7 +151,12 @@ export const ReportTemplates: React.FC = () => {
           <Title level={3} style={{ margin: 0 }}>Report Templates</Title>
           <Text type="secondary">UFO designer foundation: template, version, sheet, cell, formulaText, dependenciesJson.</Text>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={fetchTemplates} loading={loading}>Refresh</Button>
+        <Space>
+          <Button icon={<CloudUploadOutlined />} onClick={createStatutoryPresets} disabled={!currentAccountSetId}>
+            Statutory Presets
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={fetchTemplates} loading={loading}>Refresh</Button>
+        </Space>
       </div>
 
       <Space align="start" size={16} style={{ width: '100%' }} wrap>
