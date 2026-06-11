@@ -1,8 +1,19 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Checkbox, Form, Input, InputNumber, Select, Space, Table, Tag, Typography } from 'antd';
-import { LockOutlined, PlayCircleOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
+import { LockOutlined, PlayCircleOutlined, ReloadOutlined, SearchOutlined, SyncOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useAppContext } from '../context/AppContext';
+
+type ReportRunCell = {
+  id: string;
+  sheetCode: string;
+  cellAddress: string;
+  label?: string | null;
+  formulaText?: string | null;
+  calculatedValue: number;
+  displayFormat?: string | null;
+  traceId: string;
+};
 
 type ReportRun = {
   id: string;
@@ -14,22 +25,44 @@ type ReportRun = {
   status: string;
   snapshotHash: string;
   renderMode: string;
-  cells: Array<{
-    id: string;
-    sheetCode: string;
-    cellAddress: string;
-    label?: string | null;
-    formulaText?: string | null;
-    calculatedValue: number;
-    displayFormat?: string | null;
-    traceId: string;
-  }>;
+  cells: ReportRunCell[];
   traceLinks: Array<{
     id: string;
     traceId: string;
     sourceType: string;
     accountCode?: string | null;
     amount: number;
+  }>;
+};
+
+type ReportRunCellDrilldown = {
+  reportRunId: string;
+  renderMode: string;
+  snapshotHash: string;
+  cell: ReportRunCell;
+  traceLinks: ReportRun['traceLinks'];
+  sourceBalances: Array<{
+    sourceType: string;
+    sourceDocumentId?: string | null;
+    accountCode?: string | null;
+    fiscalYear: number;
+    periodNo: number;
+    snapshotAmount: number;
+  }>;
+  ledgerEntries: Array<{
+    id: string;
+    accountCode?: string | null;
+    accountName?: string | null;
+    debit?: number;
+    credit?: number;
+    voucherId?: string | null;
+    voucherNo?: string | null;
+  }>;
+  vouchers: Array<{
+    id: string;
+    voucherNo?: string | null;
+    voucherDate?: string | null;
+    status?: string | null;
   }>;
 };
 
@@ -41,6 +74,7 @@ export const ReportRuns: React.FC = () => {
   const [runs, setRuns] = useState<ReportRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>('');
   const [selectedRun, setSelectedRun] = useState<ReportRun | null>(null);
+  const [cellDrilldown, setCellDrilldown] = useState<ReportRunCellDrilldown | null>(null);
   const [loading, setLoading] = useState(false);
 
   const fetchRuns = useCallback(async () => {
@@ -74,6 +108,7 @@ export const ReportRuns: React.FC = () => {
     });
     setSelectedRunId(run.id);
     setSelectedRun(run);
+    setCellDrilldown(null);
     await fetchRuns();
   };
 
@@ -81,12 +116,14 @@ export const ReportRuns: React.FC = () => {
     if (!runId) return;
     const detail = await api.get(`/report-runs/${selectedRunId}`);
     setSelectedRun(detail);
+    setCellDrilldown(null);
   };
 
   const recalculateRun = async () => {
     if (!selectedRunId) return;
     const detail = await api.post(`/report-runs/${selectedRunId}/recalculate`, { recalculatedBy: currentUser });
     setSelectedRun(detail);
+    setCellDrilldown(null);
     await fetchRuns();
   };
 
@@ -94,7 +131,14 @@ export const ReportRuns: React.FC = () => {
     if (!selectedRunId) return;
     const detail = await api.post(`/report-runs/${selectedRunId}/lock`, { lockedBy: currentUser });
     setSelectedRun(detail);
+    setCellDrilldown(null);
     await fetchRuns();
+  };
+
+  const loadCellDrilldown = async (record: ReportRunCell) => {
+    if (!selectedRunId) return;
+    const detail = await api.get(`/report-runs/${selectedRunId}/cells/${record.cellAddress}/drilldown`);
+    setCellDrilldown(detail);
   };
 
   return (
@@ -127,7 +171,7 @@ export const ReportRuns: React.FC = () => {
         dataSource={runs}
         loading={loading}
         pagination={false}
-        onRow={(record) => ({ onClick: () => { setSelectedRunId(record.id); setSelectedRun(record); } })}
+        onRow={(record) => ({ onClick: () => { setSelectedRunId(record.id); setSelectedRun(record); setCellDrilldown(null); } })}
         columns={[
           { title: 'Run id', dataIndex: 'id' },
           { title: 'Template version', dataIndex: 'templateVersionId' },
@@ -164,8 +208,60 @@ export const ReportRuns: React.FC = () => {
               { title: 'Value', dataIndex: 'calculatedValue' },
               { title: 'Format', dataIndex: 'displayFormat' },
               { title: 'Trace', dataIndex: 'traceId' },
+              {
+                title: 'Drilldown',
+                render: (_, record: ReportRunCell) => (
+                  <Button size="small" icon={<SearchOutlined />} onClick={() => loadCellDrilldown(record)}>
+                    Open
+                  </Button>
+                ),
+              },
             ]}
           />
+          {cellDrilldown && (
+            <div style={{ width: '100%', marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Text strong>
+                {cellDrilldown.cell.sheetCode}!{cellDrilldown.cell.cellAddress} {cellDrilldown.renderMode}
+              </Text>
+              <Table
+                rowKey={(record) => `${record.accountCode}-${record.fiscalYear}-${record.periodNo}`}
+                dataSource={cellDrilldown.sourceBalances}
+                pagination={false}
+                size="small"
+                columns={[
+                  { title: 'Account', dataIndex: 'accountCode' },
+                  { title: 'Year', dataIndex: 'fiscalYear' },
+                  { title: 'Period', dataIndex: 'periodNo' },
+                  { title: 'Snapshot amount', dataIndex: 'snapshotAmount' },
+                  { title: 'Source', dataIndex: 'sourceType' },
+                ]}
+              />
+              <Table
+                rowKey="id"
+                dataSource={cellDrilldown.ledgerEntries}
+                pagination={false}
+                size="small"
+                columns={[
+                  { title: 'Account', dataIndex: 'accountCode' },
+                  { title: 'Name', dataIndex: 'accountName' },
+                  { title: 'Debit', dataIndex: 'debit' },
+                  { title: 'Credit', dataIndex: 'credit' },
+                  { title: 'Voucher', dataIndex: 'voucherNo' },
+                ]}
+              />
+              <Table
+                rowKey="id"
+                dataSource={cellDrilldown.vouchers}
+                pagination={false}
+                size="small"
+                columns={[
+                  { title: 'Voucher no', dataIndex: 'voucherNo' },
+                  { title: 'Date', dataIndex: 'voucherDate' },
+                  { title: 'Status', dataIndex: 'status' },
+                ]}
+              />
+            </div>
+          )}
           <pre style={{ whiteSpace: 'pre-wrap', background: '#f7f8fa', padding: 12, borderRadius: 6 }}>
             {JSON.stringify({ renderMode: selectedRun.renderMode, traceLinks: selectedRun.traceLinks }, null, 2)}
           </pre>

@@ -787,6 +787,9 @@ function requirePermission(request, state) {
   if (permissions.has("*") || permissions.has(permission)) {
     return null;
   }
+  if (hasPlatformAdministratorScope(state, actorId)) {
+    return null;
+  }
 
   return errorResponse(403, "PERMISSION_DENIED", `Actor ${actorId} lacks ${permission}.`);
 }
@@ -1128,9 +1131,19 @@ function grantAccountSetAccess(state, actorId, accountSetId) {
   state.accountSetAccessByActor.set(actorId, grants);
 }
 
-async function canAccessAccountSet(state, actorId, accountSetId) {
+function hasPlatformAdministratorScope(state, actorId) {
   const permissions = state.permissionsByActor.get(actorId) ?? new Set();
-  if (permissions.has("*")) {
+  return (
+    permissions.has("*") ||
+    (permissions.has("role.manage") &&
+      permissions.has("user.manage") &&
+      permissions.has("account_set.manage") &&
+      permissions.has("account_set_user.manage"))
+  );
+}
+
+async function canAccessAccountSet(state, actorId, accountSetId) {
+  if (hasPlatformAdministratorScope(state, actorId)) {
     return true;
   }
   if (state.accountSetAccessByActor.get(actorId)?.has(accountSetId)) {
@@ -3987,6 +4000,60 @@ async function cashFlowAssignmentErrorForRun(state, run) {
   );
 }
 
+async function buildReportCellDrilldown(state, runId, cellAddress, actorId) {
+  const run = findReportRunByIdentifier(state, runId);
+  if (!run) {
+    return errorResponse(404, "REPORT_RUN_NOT_FOUND", "Report run was not found.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) {
+    return accountSetAccessError(state, actorId, run.accountSetId);
+  }
+
+  const requestedCellAddress = decodeURIComponent(cellAddress);
+  const cell = (run.cells ?? []).find(
+    (item) => item.cellAddress === requestedCellAddress || `${item.sheetCode}!${item.cellAddress}` === requestedCellAddress
+  );
+  if (!cell) {
+    return errorResponse(404, "REPORT_RUN_CELL_NOT_FOUND", "Report run cell was not found.");
+  }
+
+  const traceLinks = (run.traceLinks ?? []).filter((link) => link.traceId === cell.traceId);
+  const sourceBalances = traceLinks.map((link) => ({
+    sourceType: link.sourceType,
+    sourceDocumentId: link.sourceDocumentId ?? null,
+    accountCode: link.accountCode ?? null,
+    fiscalYear: link.fiscalYear,
+    periodNo: link.periodNo,
+    snapshotAmount: Number(link.amount ?? 0)
+  }));
+  const tracedAccountCodes = new Set(traceLinks.map((link) => link.accountCode).filter(Boolean));
+  const tracedPeriods = new Set(traceLinks.map((link) => `${link.fiscalYear}:${link.periodNo}`));
+  const journalEntries = state.config.platformStore?.listJournalEntries
+    ? await state.config.platformStore.listJournalEntries(run.accountSetId)
+    : state.journalEntries;
+  const ledgerEntries = journalEntries.filter(
+    (entry) =>
+      entry.accountSetId === run.accountSetId &&
+      tracedAccountCodes.has(entry.accountCode) &&
+      tracedPeriods.has(`${entry.fiscalYear}:${entry.periodNo}`)
+  );
+  const voucherIds = [...new Set(ledgerEntries.map((entry) => entry.voucherId).filter(Boolean))];
+  const vouchers = state.config.platformStore?.listVouchers
+    ? (await state.config.platformStore.listVouchers(run.accountSetId)).filter((voucher) => voucherIds.includes(voucher.id))
+    : voucherIds.map((voucherId) => state.vouchers.get(voucherId)).filter(Boolean);
+
+  return jsonResponse(200, cloneReportPayload({
+    reportRunId: run.id,
+    renderMode: reportRunRenderMode(run),
+    snapshotHash: run.snapshotHash,
+    cell,
+    traceLinks,
+    sourceBalances,
+    ledgerEntries,
+    vouchers
+  }));
+}
+
 function reportPeriodClosed(state, accountSetId, fiscalYear, periodNo) {
   const period = [...state.periods.values()].find(
     (row) => row.accountSetId === accountSetId && row.fiscalYear === fiscalYear && row.periodNo === periodNo
@@ -4820,9 +4887,8 @@ async function route(request, state) {
 
   if (request.method === "GET" && request.path === "/account-sets") {
     const actorId = actorIdFor(request, state);
-    const permissions = state.permissionsByActor.get(actorId) ?? new Set();
     if (platformStore?.listAccessibleAccountSets) {
-      if (permissions.has("*") && platformStore.listAccountSets) {
+      if (hasPlatformAdministratorScope(state, actorId) && platformStore.listAccountSets) {
         return jsonResponse(200, await platformStore.listAccountSets());
       }
       return jsonResponse(200, await platformStore.listAccessibleAccountSets(actorId));
@@ -8810,6 +8876,16 @@ async function route(request, state) {
 
   if (request.method === "POST" && request.path === "/report-runs") {
     return createReportRun(state, body, actorIdFor(request, state));
+  }
+
+  if (
+    request.method === "GET" &&
+    segments.length === 5 &&
+    segments[0] === "report-runs" &&
+    segments[2] === "cells" &&
+    segments[4] === "drilldown"
+  ) {
+    return buildReportCellDrilldown(state, segments[1], segments[3], actorIdFor(request, state));
   }
 
   if (request.method === "GET" && segments.length === 2 && segments[0] === "report-runs") {

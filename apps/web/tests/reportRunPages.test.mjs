@@ -20,10 +20,15 @@ test("Phase 5 report run page wires run, lock, recalculate, and snapshot detail 
   assert.match(source, /api\.get\(`\/report-runs\?accountSetId=\$\{currentAccountSetId\}`\)/);
   assert.match(source, /api\.post\('\/report-runs'/);
   assert.match(source, /api\.get\(`\/report-runs\/\$\{selectedRunId\}`\)/);
+  assert.match(source, /api\.get\(`\/report-runs\/\$\{selectedRunId\}\/cells\/\$\{record\.cellAddress\}\/drilldown`\)/);
   assert.match(source, /api\.post\(`\/report-runs\/\$\{selectedRunId\}\/recalculate`/);
   assert.match(source, /api\.post\(`\/report-runs\/\$\{selectedRunId\}\/lock`/);
   assert.match(source, /includeUnposted/);
   assert.match(source, /calculatedValue/);
   assert.match(source, /traceLinks/);
+  assert.match(source, /cellDrilldown/);
+  assert.match(source, /sourceBalances/);
+  assert.match(source, /ledgerEntries/);
+  assert.match(source, /vouchers/);
   assert.match(source, /renderMode/);
 });

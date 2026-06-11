@@ -1584,6 +1584,33 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /report-runs/{reportRunId}/cells/{cellAddress}/drilldown:
+    get:
+      summary: Read a Phase 5 report cell drilldown from locked or calculated snapshots.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: reportRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: cellAddress
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Report cell formula, trace links, source balances, ledger entries, and vouchers.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportRunCellDrilldown"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /report-runs/{reportRunId}/recalculate:
     post:
       summary: Recalculate an unlocked report run unless the accounting period is closed.
@@ -10396,6 +10423,53 @@ components:
           type: integer
         amount:
           type: number
+
+    ReportRunSourceBalance:
+      type: object
+      required: [sourceType, accountCode, fiscalYear, periodNo, snapshotAmount]
+      properties:
+        sourceType:
+          type: string
+        sourceDocumentId:
+          type: string
+        accountCode:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        snapshotAmount:
+          type: number
+
+    ReportRunCellDrilldown:
+      type: object
+      required: [reportRunId, renderMode, snapshotHash, cell, traceLinks, sourceBalances, ledgerEntries, vouchers]
+      properties:
+        reportRunId:
+          type: string
+        renderMode:
+          type: string
+          enum: [calculated, snapshot]
+        snapshotHash:
+          type: string
+        cell:
+          $ref: "#/components/schemas/ReportRunCell"
+        traceLinks:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportTraceLink"
+        sourceBalances:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportRunSourceBalance"
+        ledgerEntries:
+          type: array
+          items:
+            $ref: "#/components/schemas/JournalEntry"
+        vouchers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Voucher"
 
     ReportApproval:
       type: object

@@ -240,6 +240,199 @@ test("system administrator role includes Phase 2-4 business permissions for crea
   assert.equal(partner.body.name, "Admin Supplier");
 });
 
+test("system administrator role can operate Phase 2-4 account-set modules without a separate grant", async () => {
+  const api = createApi();
+  const roles = await request(api, "GET", "/roles", null, null);
+  const systemAdminRole = roles.body.find((role) => role.id === "role:system-admin");
+  const user = await request(
+    api,
+    "POST",
+    "/users",
+    {
+      username: "business-root",
+      password: "admin-password",
+      name: "Business Root",
+      roleId: systemAdminRole.id
+    },
+    "business-root-create"
+  );
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "BUS-ROOT",
+      name: "Business Root Set",
+      companyName: "Business Root Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1,
+      fiscalYearStartMonth: 1
+    },
+    "business-root-account-set"
+  );
+  const supplier = await api.handle({
+    method: "POST",
+    path: "/partners",
+    headers: { "Actor-Id": user.body.id, "Idempotency-Key": "business-root-supplier" },
+    body: {
+      accountSetId: accountSet.body.id,
+      partnerType: "supplier",
+      code: "SUP-ROOT",
+      name: "Root Supplier"
+    }
+  });
+  const item = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": user.body.id, "Idempotency-Key": "business-root-item" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "RM-ROOT",
+      name: "Root Material",
+      itemType: "raw_material",
+      unit: "kg",
+      costMethod: "moving_average",
+      createdBy: user.body.id
+    }
+  });
+  const payrollCategory = await api.handle({
+    method: "POST",
+    path: "/payroll-categories",
+    headers: { "Actor-Id": user.body.id, "Idempotency-Key": "business-root-payroll-category" },
+    body: { accountSetId: accountSet.body.id, code: "ROOT-PAY", name: "Root payroll", createdBy: user.body.id }
+  });
+  const depreciationMethod = await api.handle({
+    method: "POST",
+    path: "/depreciation-methods",
+    headers: { "Actor-Id": user.body.id, "Idempotency-Key": "business-root-fa-method" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "ROOT-SL",
+      name: "Root straight line",
+      methodType: "straight_line",
+      createdBy: user.body.id
+    }
+  });
+
+  assert.equal(user.status, 201);
+  assert.equal(supplier.status, 201);
+  assert.equal(item.status, 201);
+  assert.equal(payrollCategory.status, 201);
+  assert.equal(depreciationMethod.status, 201);
+});
+
+test("platform administrator scope lists all persisted account sets without explicit grants", async () => {
+  const api = createApi();
+  const adminId = "persisted-admin";
+  const persistedAccountSets = [
+    {
+      id: "account-set:persisted-a",
+      code: "PA",
+      name: "Persisted A",
+      companyName: "Persisted A Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1,
+      status: "enabled"
+    }
+  ];
+  api.state.permissionsByActor.set(
+    adminId,
+    new Set(["role.manage", "user.manage", "account_set.manage", "account_set_user.manage", "account_set.view"])
+  );
+  api.state.config.platformStore = {
+    listAccessibleAccountSets: async () => [],
+    listAccountSets: async () => persistedAccountSets,
+    canAccessAccountSet: async () => false
+  };
+
+  const listed = await api.handle({
+    method: "GET",
+    path: "/account-sets",
+    headers: { "Actor-Id": adminId }
+  });
+
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.body, persistedAccountSets);
+});
+
+test("legacy platform administrator permissions cover Phase 2-4 module permissions after upgrade", async () => {
+  const api = createApi();
+  const actorId = "legacy-admin";
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "LEGACY-ADMIN",
+      name: "Legacy Admin Set",
+      companyName: "Legacy Admin Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1,
+      fiscalYearStartMonth: 1
+    },
+    "legacy-admin-account-set"
+  );
+  api.state.permissionsByActor.set(
+    actorId,
+    new Set(["role.manage", "user.manage", "account_set.manage", "account_set_user.manage", "account_set.view"])
+  );
+
+  const supplier = await api.handle({
+    method: "POST",
+    path: "/partners",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "legacy-admin-supplier" },
+    body: {
+      accountSetId: accountSet.body.id,
+      partnerType: "supplier",
+      code: "SUP-LEGACY",
+      name: "Legacy Supplier"
+    }
+  });
+  const item = await api.handle({
+    method: "POST",
+    path: "/inventory-items",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "legacy-admin-item" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "RM-LEGACY",
+      name: "Legacy Material",
+      itemType: "raw_material",
+      unit: "kg",
+      costMethod: "moving_average",
+      createdBy: actorId
+    }
+  });
+  const payrollCategory = await api.handle({
+    method: "POST",
+    path: "/payroll-categories",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "legacy-admin-payroll-category" },
+    body: { accountSetId: accountSet.body.id, code: "LEGACY-PAY", name: "Legacy payroll", createdBy: actorId }
+  });
+  const depreciationMethod = await api.handle({
+    method: "POST",
+    path: "/depreciation-methods",
+    headers: { "Actor-Id": actorId, "Idempotency-Key": "legacy-admin-fa-method" },
+    body: {
+      accountSetId: accountSet.body.id,
+      code: "LEGACY-SL",
+      name: "Legacy straight line",
+      methodType: "straight_line",
+      createdBy: actorId
+    }
+  });
+
+  assert.equal(supplier.status, 201);
+  assert.equal(item.status, 201);
+  assert.equal(payrollCategory.status, 201);
+  assert.equal(depreciationMethod.status, 201);
+});
+
 test("roles can be edited and updated permissions apply to the next login", async () => {
   const api = createApi();
   const role = await request(
@@ -8591,6 +8784,133 @@ test("Phase 5 report runs calculate formula snapshots, lock values, and block cl
   assert.equal(lockedRecalculate.body.code, "REPORT_RUN_LOCKED");
   assert.equal(closedRecalculate.status, 409);
   assert.equal(closedRecalculate.body.code, "REPORT_PERIOD_CLOSED");
+});
+
+test("Phase 5 report cell drilldown exposes formula, snapshot source links, ledger entries, and vouchers", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P5D",
+      name: "Phase 5 Drilldown",
+      companyName: "Phase 5 Drilldown Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase5-drilldown-account-set"
+  );
+  api.state.balances.push({
+    id: "balance:p5d:1001",
+    accountSetId: accountSet.body.id,
+    fiscalYear: 2026,
+    periodNo: 6,
+    accountCode: "1001",
+    accountName: "Cash",
+    openingDebit: 100,
+    openingCredit: 0,
+    periodDebit: 50,
+    periodCredit: 30,
+    closingDebit: 120,
+    closingCredit: 0
+  });
+  api.state.vouchers.set("voucher:p5d:cash", {
+    id: "voucher:p5d:cash",
+    accountSetId: accountSet.body.id,
+    voucherNo: "记-202606-001",
+    voucherDate: "2026-06-18",
+    status: "posted",
+    createdBy: "system",
+    lines: []
+  });
+  api.state.journalEntries.push({
+    id: "journal-entry:p5d:cash",
+    accountSetId: accountSet.body.id,
+    fiscalYear: 2026,
+    periodNo: 6,
+    accountCode: "1001",
+    accountName: "Cash",
+    debit: 50,
+    credit: 0,
+    voucherId: "voucher:p5d:cash",
+    voucherNo: "记-202606-001"
+  });
+  const template = await request(
+    api,
+    "POST",
+    "/report-templates",
+    {
+      accountSetId: accountSet.body.id,
+      templateCode: "DRILL-BS",
+      templateName: "Drilldown Balance Sheet",
+      reportType: "statutory",
+      createdBy: "system"
+    },
+    "phase5-drilldown-template"
+  );
+  const version = await request(
+    api,
+    "POST",
+    `/report-templates/${template.body.id}/versions`,
+    {
+      sheets: [
+        {
+          sheetCode: "BS",
+          sheetName: "Balance Sheet",
+          cells: [
+            {
+              cellAddress: "B10",
+              label: "Cash",
+              valueType: "formula",
+              displayFormat: "currency",
+              isEditable: false,
+              formula: {
+                formulaText: "CLOSING(\"1001\", \"2026-06\")",
+                astJson: { name: "CLOSING", args: ["1001", "2026-06"] },
+                dependenciesJson: [{ sourceType: "account_balance", accountCode: "1001", period: "2026-06" }]
+              }
+            }
+          ]
+        }
+      ],
+      createdBy: "system"
+    },
+    "phase5-drilldown-version"
+  );
+  await request(api, "POST", `/report-template-versions/${version.body.id}/publish`, { publishedBy: "system" }, "phase5-drilldown-publish");
+  const run = await request(
+    api,
+    "POST",
+    "/report-runs",
+    {
+      accountSetId: accountSet.body.id,
+      templateVersionId: version.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      includeUnposted: false,
+      createdBy: "system"
+    },
+    "phase5-drilldown-run"
+  );
+  await request(api, "POST", `/report-runs/${run.body.id}/lock`, { lockedBy: "system" }, "phase5-drilldown-lock");
+  api.state.balances[0] = { ...api.state.balances[0], closingDebit: 9999 };
+
+  const drilldown = await request(api, "GET", `/report-runs/${run.body.id}/cells/B10/drilldown`, null, null);
+
+  assert.equal(drilldown.status, 200);
+  assert.equal(drilldown.body.renderMode, "snapshot");
+  assert.equal(drilldown.body.cell.sheetCode, "BS");
+  assert.equal(drilldown.body.cell.cellAddress, "B10");
+  assert.equal(drilldown.body.cell.formulaText, "CLOSING(\"1001\", \"2026-06\")");
+  assert.equal(drilldown.body.cell.calculatedValue, 120);
+  assert.equal(drilldown.body.traceLinks[0].accountCode, "1001");
+  assert.equal(drilldown.body.traceLinks[0].amount, 120);
+  assert.deepEqual(drilldown.body.sourceBalances.map((row) => [row.accountCode, row.snapshotAmount]), [["1001", 120]]);
+  assert.deepEqual(drilldown.body.ledgerEntries.map((entry) => [entry.accountCode, entry.debit, entry.voucherId]), [["1001", 50, "voucher:p5d:cash"]]);
+  assert.deepEqual(drilldown.body.vouchers.map((voucher) => [voucher.id, voucher.voucherNo, voucher.status]), [["voucher:p5d:cash", "记-202606-001", "posted"]]);
 });
 
 test("Phase 5 cash-flow reports block review and lock when cash or bank entries are unassigned", async () => {

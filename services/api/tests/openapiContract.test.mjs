@@ -554,6 +554,7 @@ test("Phase 5 report template endpoints document UFO designer foundation and for
 test("Phase 5 report run endpoints document formula snapshots, closed-period block, and trace links", () => {
   const runsBlock = blockAfter("  /report-runs:");
   const detailBlock = blockAfter("  /report-runs/{reportRunId}:");
+  const drilldownBlock = blockAfter("  /report-runs/{reportRunId}/cells/{cellAddress}/drilldown:");
   const recalculateBlock = blockAfter("  /report-runs/{reportRunId}/recalculate:");
   const lockBlock = blockAfter("  /report-runs/{reportRunId}/lock:");
   const submitReviewBlock = blockAfter("  /report-runs/{reportRunId}/submit-review:");
@@ -565,6 +566,8 @@ test("Phase 5 report run endpoints document formula snapshots, closed-period blo
   assert.match(runsBlock, /CreateReportRunRequest/);
   assert.match(runsBlock, /ReportRun/);
   assert.match(detailBlock, /x-permission: report\.view/);
+  assert.match(drilldownBlock, /x-permission: report\.view/);
+  assert.match(drilldownBlock, /ReportRunCellDrilldown/);
   assert.match(recalculateBlock, /x-permission: report_run\.manage/);
   assert.match(lockBlock, /x-permission: report_run\.manage/);
   assert.match(submitReviewBlock, /x-permission: report_approval\.manage/);
@@ -576,6 +579,9 @@ test("Phase 5 report run endpoints document formula snapshots, closed-period blo
   assert.match(contract, /snapshotHash:/);
   assert.match(contract, /renderMode:/);
   assert.match(contract, /traceLinks:/);
+  assert.match(contract, /sourceBalances:/);
+  assert.match(contract, /ledgerEntries:/);
+  assert.match(contract, /vouchers:/);
   assert.match(contract, /REPORT_PERIOD_CLOSED/);
   assert.match(contract, /REPORT_RUN_LOCKED/);
   assert.match(contract, /REPORT_CASH_FLOW_UNASSIGNED/);
