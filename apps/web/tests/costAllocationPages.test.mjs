@@ -21,5 +21,10 @@ test("web app exposes Phase 3 mock cost input and allocation pages", () => {
   assert.match(inputsSource, /\/mock-cost-inputs\/\$\{[^}]+\.id\}\/lock/, "Mock cost input page should lock inputs.");
   assert.match(allocationsSource, /api\.post\('\/cost-allocations\/dry-run'/, "Allocation page should dry-run.");
   assert.match(allocationsSource, /api\.post\('\/cost-allocations'/, "Allocation page should commit.");
-  assert.match(allocationsSource, /PHASE4_SOURCE_MISSING/, "Allocation page should surface Phase 4 limitation warnings.");
+  assert.match(allocationsSource, /api\.get\(`\/payroll-cost-pools\?/, "Allocation page should load formal payroll cost pools.");
+  assert.match(allocationsSource, /api\.get\(`\/asset-depreciation-cost-pools\?/, "Allocation page should load formal depreciation cost pools.");
+  assert.match(allocationsSource, /phase4CostPoolIds/, "Allocation page should submit formal Phase 4 cost-pool IDs.");
+  assert.match(allocationsSource, /phase4_payroll_cost_pool/, "Allocation page should display formal payroll source type.");
+  assert.match(allocationsSource, /phase4_depreciation_cost_pool/, "Allocation page should display formal depreciation source type.");
+  assert.doesNotMatch(allocationsSource, /PHASE4_SOURCE_MISSING/, "Allocation page should not present Phase 4 as missing after integration.");
 });
