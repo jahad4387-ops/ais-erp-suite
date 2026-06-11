@@ -3462,6 +3462,28 @@ function cloneReportPayload(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function renderReportExportContent(run, fileType) {
+  const delimiter = fileType === "excel" ? "," : " | ";
+  const lines = [
+    `reportRunId${delimiter}${run.id}`,
+    `snapshotHash${delimiter}${run.snapshotHash}`,
+    `renderMode${delimiter}${reportRunRenderMode(run)}`,
+    ["sheetCell", "label", "calculatedValue", "displayFormat", "formulaText"].join(delimiter)
+  ];
+  for (const cell of run.cells ?? []) {
+    lines.push(
+      [
+        `${cell.sheetCode}!${cell.cellAddress}`,
+        cell.label ?? "",
+        Number(cell.calculatedValue ?? 0),
+        cell.displayFormat ?? "",
+        cell.formulaText ?? ""
+      ].join(delimiter)
+    );
+  }
+  return lines.join("\n");
+}
+
 function findReportTemplateByIdentifier(state, identifier) {
   return [...state.reportTemplates.values()].find(
     (template) => template.id === identifier || template.templateCode === identifier
@@ -4703,6 +4725,7 @@ async function createReportExport(state, runId, body, actorId) {
     fileType: body.fileType,
     snapshotHash: run.snapshotHash,
     downloadUrl: `local://report-exports/${exportId}.${fileExtension}`,
+    contentText: renderReportExportContent(run, body.fileType),
     sensitiveFieldNotice: body.sensitiveFieldNotice ?? `Generated from immutable snapshot ${run.snapshotHash}.`,
     exportedBy: body.exportedBy ?? actorId,
     createdAt: "now"

@@ -10562,7 +10562,7 @@ components:
 
     ReportExport:
       type: object
-      required: [id, accountSetId, reportRunId, fileType, snapshotHash, downloadUrl, exportedBy, createdAt]
+      required: [id, accountSetId, reportRunId, fileType, snapshotHash, downloadUrl, contentText, exportedBy, createdAt]
       properties:
         id:
           type: string
@@ -10577,6 +10577,9 @@ components:
           type: string
         downloadUrl:
           type: string
+        contentText:
+          type: string
+          description: Snapshot-rendered export content generated from stored report cells.
         sensitiveFieldNotice:
           type: string
         exportedBy:

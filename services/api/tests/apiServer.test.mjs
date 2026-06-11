@@ -9411,6 +9411,7 @@ test("Phase 5 report exports and AI interpretations are tied to snapshot evidenc
     },
     "phase5-export-run"
   );
+  api.state.balances[0] = { ...api.state.balances[0], closingDebit: 9999 };
   const exportFile = await request(
     api,
     "POST",
@@ -9439,6 +9440,10 @@ test("Phase 5 report exports and AI interpretations are tied to snapshot evidenc
   assert.equal(exportFile.body.snapshotHash, run.body.snapshotHash);
   assert.match(exportFile.body.downloadUrl, /^local:\/\/report-exports\//);
   assert.match(exportFile.body.sensitiveFieldNotice, /snapshot/);
+  assert.match(exportFile.body.contentText, /BS!B10/);
+  assert.match(exportFile.body.contentText, /Cash/);
+  assert.match(exportFile.body.contentText, /120/);
+  assert.doesNotMatch(exportFile.body.contentText, /9999/);
   assert.equal(interpretation.status, 201);
   assert.deepEqual(interpretation.body.keyFindings, ["Cash closing balance is 120."]);
   assert.deepEqual(interpretation.body.evidenceRefs, ["report_cell:BS!B10"]);

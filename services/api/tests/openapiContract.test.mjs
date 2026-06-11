@@ -612,6 +612,8 @@ test("Phase 5 export and AI interpretation endpoints document audit history and 
   assert.match(contract, /evidenceRefs:/);
   assert.match(contract, /report_cell:BS!B12/);
   assert.match(contract, /sensitiveFieldNotice:/);
+  assert.match(contract, /contentText:/);
+  assert.match(contract, /stored report cells/);
 });
 
 test("Phase 5 management analysis endpoint documents metrics, warnings, and drilldowns", () => {
