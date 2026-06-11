@@ -8689,6 +8689,141 @@ test("Phase 5 statutory report presets create and publish the four required lega
   assert.ok(run.body.traceLinks.some((link) => link.accountCode === "1001"));
 });
 
+test("Phase 5 formal statutory runs force unposted isolation while simulations can opt in", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P5U",
+      name: "Phase 5 Unposted Isolation",
+      companyName: "Phase 5 Unposted Isolation Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase5-unposted-account-set"
+  );
+  api.state.vouchers.set("voucher:p5u:draft", {
+    id: "voucher:p5u:draft",
+    accountSetId: accountSet.body.id,
+    voucherNo: "DRAFT-202606-001",
+    fiscalYear: 2026,
+    periodNo: 6,
+    voucherDate: "2026-06-12",
+    status: "draft",
+    createdBy: "maker",
+    lines: [{ summary: "Unposted cash", accountCode: "1001", debit: 500, credit: 0 }]
+  });
+
+  const statutoryTemplate = await request(
+    api,
+    "POST",
+    "/report-templates",
+    {
+      accountSetId: accountSet.body.id,
+      templateCode: "UNPOSTED-BS",
+      templateName: "Unposted Balance Sheet",
+      reportType: "statutory",
+      createdBy: "system"
+    },
+    "phase5-unposted-statutory-template"
+  );
+  const managementTemplate = await request(
+    api,
+    "POST",
+    "/report-templates",
+    {
+      accountSetId: accountSet.body.id,
+      templateCode: "UNPOSTED-MGMT",
+      templateName: "Unposted Management Report",
+      reportType: "management",
+      createdBy: "system"
+    },
+    "phase5-unposted-management-template"
+  );
+  const versionBody = {
+    sheets: [
+      {
+        sheetCode: "BS",
+        sheetName: "Balance Sheet",
+        cells: [
+          {
+            cellAddress: "B10",
+            label: "Cash",
+            valueType: "formula",
+            displayFormat: "currency",
+            isEditable: false,
+            formula: {
+              formulaText: "CLOSING(\"1001\", \"2026-06\")",
+              astJson: { name: "CLOSING", args: ["1001", "2026-06"] },
+              dependenciesJson: [{ sourceType: "account_balance", accountCode: "1001", period: "2026-06" }]
+            }
+          }
+        ]
+      }
+    ],
+    createdBy: "system"
+  };
+  const statutoryVersion = await request(
+    api,
+    "POST",
+    `/report-templates/${statutoryTemplate.body.id}/versions`,
+    versionBody,
+    "phase5-unposted-statutory-version"
+  );
+  const managementVersion = await request(
+    api,
+    "POST",
+    `/report-templates/${managementTemplate.body.id}/versions`,
+    versionBody,
+    "phase5-unposted-management-version"
+  );
+  await request(api, "POST", `/report-template-versions/${statutoryVersion.body.id}/publish`, { publishedBy: "system" }, "phase5-unposted-statutory-publish");
+  await request(api, "POST", `/report-template-versions/${managementVersion.body.id}/publish`, { publishedBy: "system" }, "phase5-unposted-management-publish");
+
+  const formal = await request(
+    api,
+    "POST",
+    "/report-runs",
+    {
+      accountSetId: accountSet.body.id,
+      templateVersionId: statutoryVersion.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      includeUnposted: true,
+      runMode: "formal",
+      createdBy: "system"
+    },
+    "phase5-unposted-formal-run"
+  );
+  const simulation = await request(
+    api,
+    "POST",
+    "/report-runs",
+    {
+      accountSetId: accountSet.body.id,
+      templateVersionId: managementVersion.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      includeUnposted: true,
+      runMode: "simulation",
+      createdBy: "system"
+    },
+    "phase5-unposted-simulation-run"
+  );
+
+  assert.equal(formal.status, 201);
+  assert.equal(formal.body.includeUnposted, false);
+  assert.equal(formal.body.cells[0].calculatedValue, 0);
+  assert.equal(simulation.status, 201);
+  assert.equal(simulation.body.includeUnposted, true);
+  assert.equal(simulation.body.cells[0].calculatedValue, 500);
+  assert.equal(simulation.body.traceLinks[0].amount, 500);
+});
+
 test("Phase 5 report runs calculate formula snapshots, lock values, and block closed-period recalculation", async () => {
   const api = createApi();
   const accountSet = await request(
@@ -9419,6 +9554,19 @@ test("Phase 5 report exports and AI interpretations are tied to snapshot evidenc
     { fileType: "excel", exportedBy: "system" },
     "phase5-export-file"
   );
+  const invalidInterpretation = await request(
+    api,
+    "POST",
+    `/report-runs/${run.body.id}/interpretations`,
+    {
+      summary: "Invalid evidence.",
+      keyFindings: ["This should not be accepted."],
+      warnings: [],
+      evidenceRefs: ["report_cell:BS!Z99"],
+      interpretedBy: "system"
+    },
+    "phase5-ai-invalid-interpretation"
+  );
   const interpretation = await request(
     api,
     "POST",
@@ -9444,12 +9592,107 @@ test("Phase 5 report exports and AI interpretations are tied to snapshot evidenc
   assert.match(exportFile.body.contentText, /Cash/);
   assert.match(exportFile.body.contentText, /120/);
   assert.doesNotMatch(exportFile.body.contentText, /9999/);
+  assert.equal(invalidInterpretation.status, 400);
+  assert.match(invalidInterpretation.body.message, /evidenceRefs must point to cells in the report run/);
   assert.equal(interpretation.status, 201);
   assert.deepEqual(interpretation.body.keyFindings, ["Cash closing balance is 120."]);
   assert.deepEqual(interpretation.body.evidenceRefs, ["report_cell:BS!B10"]);
   assert.equal(interpretation.body.reportRunId, run.body.id);
   assert.equal(exportList.body.length, 1);
   assert.equal(interpretations.body.length, 1);
+});
+
+test("Phase 5 report lists only expose account-set scoped rows", async () => {
+  const api = createApi();
+  const actorId = "phase5-report-viewer";
+  api.state.permissionsByActor.set(actorId, new Set(["report.view"]));
+  api.state.accountSetAccessByActor.set(actorId, new Set(["account-set:visible"]));
+  api.state.reportRuns.set("report-run:visible", {
+    id: "report-run:visible",
+    accountSetId: "account-set:visible",
+    templateVersionId: "version:visible",
+    fiscalYear: 2026,
+    periodNo: 6,
+    includeUnposted: false,
+    runMode: "formal",
+    status: "calculated",
+    snapshotHash: "sha256:visible",
+    createdBy: "system",
+    createdAt: "now",
+    recalculatedAt: null,
+    lockedBy: null,
+    lockedAt: null,
+    cells: [],
+    traceLinks: []
+  });
+  api.state.reportRuns.set("report-run:hidden", {
+    id: "report-run:hidden",
+    accountSetId: "account-set:hidden",
+    templateVersionId: "version:hidden",
+    fiscalYear: 2026,
+    periodNo: 6,
+    includeUnposted: false,
+    runMode: "formal",
+    status: "calculated",
+    snapshotHash: "sha256:hidden",
+    createdBy: "system",
+    createdAt: "now",
+    recalculatedAt: null,
+    lockedBy: null,
+    lockedAt: null,
+    cells: [],
+    traceLinks: []
+  });
+  api.state.reportExports.set("report-export:visible", {
+    id: "report-export:visible",
+    accountSetId: "account-set:visible",
+    reportRunId: "report-run:visible",
+    fileType: "excel",
+    snapshotHash: "sha256:visible",
+    downloadUrl: "local://report-exports/report-export:visible.xlsx",
+    contentText: "",
+    exportedBy: "system",
+    createdAt: "now"
+  });
+  api.state.reportExports.set("report-export:hidden", {
+    id: "report-export:hidden",
+    accountSetId: "account-set:hidden",
+    reportRunId: "report-run:hidden",
+    fileType: "excel",
+    snapshotHash: "sha256:hidden",
+    downloadUrl: "local://report-exports/report-export:hidden.xlsx",
+    contentText: "",
+    exportedBy: "system",
+    createdAt: "now"
+  });
+  api.state.aiReportInterpretations.set("ai-report-interpretation:visible", {
+    id: "ai-report-interpretation:visible",
+    accountSetId: "account-set:visible",
+    reportRunId: "report-run:visible",
+    summary: "Visible summary",
+    keyFindings: [],
+    warnings: [],
+    evidenceRefs: ["report_cell:BS!B10"],
+    interpretedBy: "system"
+  });
+  api.state.aiReportInterpretations.set("ai-report-interpretation:hidden", {
+    id: "ai-report-interpretation:hidden",
+    accountSetId: "account-set:hidden",
+    reportRunId: "report-run:hidden",
+    summary: "Hidden summary",
+    keyFindings: [],
+    warnings: [],
+    evidenceRefs: ["report_cell:BS!B10"],
+    interpretedBy: "system"
+  });
+
+  const runs = await api.handle({ method: "GET", path: "/report-runs", headers: { "Actor-Id": actorId } });
+  const exports = await api.handle({ method: "GET", path: "/report-exports", headers: { "Actor-Id": actorId } });
+  const interpretations = await api.handle({ method: "GET", path: "/ai-report-interpretations", headers: { "Actor-Id": actorId } });
+
+  assert.deepEqual(runs.body.map((row) => row.id), ["report-run:visible"]);
+  assert.deepEqual(exports.body.map((row) => row.id), ["report-export:visible"]);
+  assert.deepEqual(interpretations.body.map((row) => row.id), ["ai-report-interpretation:visible"]);
 });
 
 test("Phase 5 management analysis aggregates cross-module metrics with drilldowns", async () => {

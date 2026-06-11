@@ -1170,6 +1170,16 @@ async function canAccessAccountSet(state, actorId, accountSetId) {
     : false;
 }
 
+async function filterRowsByAccountSetAccess(state, actorId, rows) {
+  const visible = [];
+  for (const row of rows) {
+    if (await canAccessAccountSet(state, actorId, row.accountSetId)) {
+      visible.push(row);
+    }
+  }
+  return visible;
+}
+
 function accountSetAccessError(state, actorId, accountSetId) {
   appendAuditLog(state, {
     actorId,
@@ -4177,10 +4187,75 @@ function reportPeriodClosed(state, accountSetId, fiscalYear, periodNo) {
   return String(period?.status ?? "").toLowerCase() === "closed";
 }
 
-async function calculateReportRunSnapshot(state, { runId, accountSetId, templateVersion, fiscalYear, periodNo }) {
+function formalReportForcesPostedOnly(template, runMode) {
+  const reportType = String(template?.reportType ?? "").toLowerCase();
+  return String(runMode ?? "formal") === "formal" && ["statutory", "cash_flow"].includes(reportType);
+}
+
+async function reportBalancesForSnapshot(state, { accountSetId, fiscalYear, periodNo, balances, includeUnposted }) {
+  const rows = balances.filter((balance) => balance.accountSetId === accountSetId).map((balance) => ({ ...balance }));
+  if (!includeUnposted) {
+    return rows;
+  }
+
+  const byKey = new Map(rows.map((balance) => [balanceLookupKey(balance.accountCode ?? balance.accountId, balance.fiscalYear, balance.periodNo), balance]));
+  const vouchers = state.config.platformStore?.listVouchers
+    ? await state.config.platformStore.listVouchers(accountSetId)
+    : [...state.vouchers.values()];
+  for (const voucher of vouchers) {
+    if (
+      voucher.accountSetId !== accountSetId ||
+      Number(voucher.fiscalYear) !== Number(fiscalYear) ||
+      Number(voucher.periodNo) !== Number(periodNo) ||
+      ["posted", "voided"].includes(String(voucher.status ?? "").toLowerCase())
+    ) {
+      continue;
+    }
+    for (const line of voucher.lines ?? []) {
+      const accountCode = line.accountCode ?? line.accountId;
+      if (!accountCode) {
+        continue;
+      }
+      const key = balanceLookupKey(accountCode, fiscalYear, periodNo);
+      const balance =
+        byKey.get(key) ??
+        {
+          accountSetId,
+          fiscalYear,
+          periodNo,
+          accountCode,
+          accountName: line.accountName ?? null,
+          openingDebit: 0,
+          openingCredit: 0,
+          periodDebit: 0,
+          periodCredit: 0,
+          closingDebit: 0,
+          closingCredit: 0
+        };
+      balance.periodDebit = Number(balance.periodDebit ?? 0) + Number(line.debit ?? line.debitAmount ?? 0);
+      balance.periodCredit = Number(balance.periodCredit ?? 0) + Number(line.credit ?? line.creditAmount ?? 0);
+      balance.closingDebit = Number(balance.closingDebit ?? 0) + Number(line.debit ?? line.debitAmount ?? 0);
+      balance.closingCredit = Number(balance.closingCredit ?? 0) + Number(line.credit ?? line.creditAmount ?? 0);
+      if (!byKey.has(key)) {
+        byKey.set(key, balance);
+        rows.push(balance);
+      }
+    }
+  }
+  return rows;
+}
+
+async function calculateReportRunSnapshot(state, { runId, accountSetId, templateVersion, fiscalYear, periodNo, includeUnposted = false }) {
   const balances = state.config.platformStore?.listAccountPeriodBalances
     ? await state.config.platformStore.listAccountPeriodBalances(accountSetId)
     : state.balances;
+  const snapshotBalances = await reportBalancesForSnapshot(state, {
+    accountSetId,
+    fiscalYear,
+    periodNo,
+    balances,
+    includeUnposted
+  });
   const fallbackPeriod = { fiscalYear, periodNo };
   const formulaCells = templateVersion.sheets.flatMap((sheet) =>
     sheet.cells
@@ -4194,7 +4269,7 @@ async function calculateReportRunSnapshot(state, { runId, accountSetId, template
   );
   const allDependencies = formulaCells.flatMap((cell) => cell.dependencies);
   const balanceLookup = buildReportBalanceLookup(
-    balances.filter((balance) => balance.accountSetId === accountSetId),
+    snapshotBalances,
     allDependencies,
     fallbackPeriod
   );
@@ -4299,6 +4374,9 @@ async function createReportRun(state, body, actorId) {
   if (templateVersion.status !== "published") {
     return errorResponse(409, "REPORT_TEMPLATE_VERSION_NOT_PUBLISHED", "Only published report template versions can be run.");
   }
+  const template = state.reportTemplates.get(templateVersion.templateId);
+  const runMode = body.runMode ?? "formal";
+  const includeUnposted = formalReportForcesPostedOnly(template, runMode) ? false : Boolean(body.includeUnposted);
 
   const runId = `report-run:${state.reportRuns.size + 1}`;
   const snapshot = await calculateReportRunSnapshot(state, {
@@ -4306,7 +4384,8 @@ async function createReportRun(state, body, actorId) {
     accountSetId: body.accountSetId,
     templateVersion,
     fiscalYear: body.fiscalYear,
-    periodNo: body.periodNo
+    periodNo: body.periodNo,
+    includeUnposted
   });
   const run = {
     id: runId,
@@ -4314,8 +4393,8 @@ async function createReportRun(state, body, actorId) {
     templateVersionId: body.templateVersionId,
     fiscalYear: body.fiscalYear,
     periodNo: body.periodNo,
-    includeUnposted: body.includeUnposted ?? false,
-    runMode: body.runMode ?? "formal",
+    includeUnposted,
+    runMode,
     status: "calculated",
     snapshotHash: "pending",
     paramsJson: {
@@ -4363,7 +4442,8 @@ async function recalculateReportRun(state, runId, body, actorId) {
     accountSetId: run.accountSetId,
     templateVersion,
     fiscalYear: run.fiscalYear,
-    periodNo: run.periodNo
+    periodNo: run.periodNo,
+    includeUnposted: run.includeUnposted
   });
   const updated = {
     ...run,
@@ -4502,6 +4582,10 @@ async function approveReportApproval(state, approvalId, body, actorId) {
 
 function publicAiReportInterpretation(interpretation) {
   return cloneReportPayload(interpretation);
+}
+
+function reportCellEvidenceRef(cell) {
+  return `report_cell:${cell.sheetCode}!${cell.cellAddress}`;
 }
 
 function isInFiscalPeriod(row, fiscalYear, periodNo, dateField = null) {
@@ -4757,6 +4841,12 @@ async function createAiReportInterpretation(state, runId, body, actorId) {
   for (const ref of body.evidenceRefs) {
     if (typeof ref !== "string" || !ref.startsWith("report_cell:")) {
       throw new Error("evidenceRefs must point to report_cell references.");
+    }
+  }
+  const validEvidenceRefs = new Set((run.cells ?? []).map((cell) => reportCellEvidenceRef(cell)));
+  for (const ref of body.evidenceRefs) {
+    if (!validEvidenceRefs.has(ref)) {
+      throw new Error("evidenceRefs must point to cells in the report run.");
     }
   }
 
@@ -8947,8 +9037,10 @@ async function route(request, state) {
       return accountSetAccessError(state, actorId, accountSetId);
     }
     const versions = [...state.reportTemplateVersions.values()];
-    const templates = [...state.reportTemplates.values()]
-      .filter((template) => !accountSetId || template.accountSetId === accountSetId)
+    const visibleTemplates = accountSetId
+      ? [...state.reportTemplates.values()].filter((template) => template.accountSetId === accountSetId)
+      : await filterRowsByAccountSetAccess(state, actorId, [...state.reportTemplates.values()]);
+    const templates = visibleTemplates
       .map((template) => publicReportTemplate(template, versions));
     return jsonResponse(200, templates);
   }
@@ -8994,11 +9086,12 @@ async function route(request, state) {
     if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
       return accountSetAccessError(state, actorId, accountSetId);
     }
+    const visibleRuns = accountSetId
+      ? [...state.reportRuns.values()].filter((run) => run.accountSetId === accountSetId)
+      : await filterRowsByAccountSetAccess(state, actorId, [...state.reportRuns.values()]);
     return jsonResponse(
       200,
-      [...state.reportRuns.values()]
-        .filter((run) => !accountSetId || run.accountSetId === accountSetId)
-        .map(publicReportRun)
+      visibleRuns.map(publicReportRun)
     );
   }
 
@@ -9009,9 +9102,12 @@ async function route(request, state) {
     if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
       return accountSetAccessError(state, actorId, accountSetId);
     }
+    const visibleExports = accountSetId
+      ? [...state.reportExports.values()].filter((exportFile) => exportFile.accountSetId === accountSetId)
+      : await filterRowsByAccountSetAccess(state, actorId, [...state.reportExports.values()]);
     return jsonResponse(
       200,
-      [...state.reportExports.values()].filter((exportFile) => !accountSetId || exportFile.accountSetId === accountSetId)
+      visibleExports
     );
   }
 
@@ -9023,11 +9119,12 @@ async function route(request, state) {
     if (run && !(await canAccessAccountSet(state, actorId, run.accountSetId))) {
       return accountSetAccessError(state, actorId, run.accountSetId);
     }
+    const interpretations = reportRunId
+      ? [...state.aiReportInterpretations.values()].filter((interpretation) => interpretation.reportRunId === reportRunId)
+      : await filterRowsByAccountSetAccess(state, actorId, [...state.aiReportInterpretations.values()]);
     return jsonResponse(
       200,
-      [...state.aiReportInterpretations.values()]
-        .filter((interpretation) => !reportRunId || interpretation.reportRunId === reportRunId)
-        .map(publicAiReportInterpretation)
+      interpretations.map(publicAiReportInterpretation)
     );
   }
 
