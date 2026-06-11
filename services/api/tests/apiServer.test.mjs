@@ -163,6 +163,83 @@ test("roles assign permissions to newly created users and login uses the assigne
   assert.equal(login.body.user.role, "制单员");
 });
 
+test("system administrator role includes Phase 2-4 business permissions for created admin users", async () => {
+  const api = createApi();
+
+  const roles = await request(api, "GET", "/roles", null, null);
+  const systemAdminRole = roles.body.find((role) => role.id === "role:system-admin");
+  const requiredPermissions = [
+    "partner.manage",
+    "purchase_order.manage",
+    "inventory_item.manage",
+    "cost_allocation.manage",
+    "payroll_run.manage",
+    "fixed_asset_card.manage",
+    "fixed_asset_depreciation.manage"
+  ];
+
+  assert.equal(roles.status, 200);
+  for (const code of requiredPermissions) {
+    assert.ok(systemAdminRole.permissionCodes.includes(code), `system administrator should include ${code}`);
+  }
+
+  const user = await request(
+    api,
+    "POST",
+    "/users",
+    {
+      username: "business-admin",
+      password: "admin-password",
+      name: "Business Admin",
+      roleId: systemAdminRole.id
+    },
+    "business-admin-create"
+  );
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "BUS-ADMIN",
+      name: "Business Admin Set",
+      companyName: "Business Admin Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1,
+      fiscalYearStartMonth: 1
+    },
+    "business-admin-account-set"
+  );
+  const grant = await request(
+    api,
+    "POST",
+    `/account-sets/${accountSet.body.id}/users`,
+    {
+      actorId: user.body.id,
+      grantType: "member",
+      grantedBy: "system"
+    },
+    "business-admin-account-set-grant"
+  );
+  const partner = await api.handle({
+    method: "POST",
+    path: "/partners",
+    headers: { "Actor-Id": user.body.id, "Idempotency-Key": "business-admin-supplier" },
+    body: {
+      accountSetId: accountSet.body.id,
+      partnerType: "supplier",
+      code: "SUP-ADMIN",
+      name: "Admin Supplier"
+    }
+  });
+
+  assert.equal(user.status, 201);
+  assert.equal(grant.status, 201);
+  assert.equal(partner.status, 201);
+  assert.equal(partner.body.name, "Admin Supplier");
+});
+
 test("roles can be edited and updated permissions apply to the next login", async () => {
   const api = createApi();
   const role = await request(

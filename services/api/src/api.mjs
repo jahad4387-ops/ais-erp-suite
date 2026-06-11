@@ -133,15 +133,7 @@ const DEFAULT_ROLES = [
   {
     id: "role:system-admin",
     name: "系统管理员",
-    permissionCodes: [
-      "account_set.create",
-      "account_set.manage",
-      "account_set.view",
-      "account_set_user.manage",
-      "audit_log.view",
-      "user.manage",
-      "role.manage"
-    ]
+    permissionCodes: [...DEFAULT_PERMISSION_CODES]
   },
   {
     id: "role:viewer",
