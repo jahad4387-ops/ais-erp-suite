@@ -112,7 +112,10 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/asset-counts:",
     "/report-templates:",
     "/report-templates/{reportTemplateId}/versions:",
-    "/report-template-versions/{reportTemplateVersionId}/publish:"
+    "/report-template-versions/{reportTemplateVersionId}/publish:",
+    "/report-runs:",
+    "/report-runs/{reportRunId}/recalculate:",
+    "/report-runs/{reportRunId}/lock:"
   ];
 
   for (const path of writePaths) {
@@ -221,6 +224,9 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "ReportSheet:",
     "ReportCell:",
     "ReportFormula:",
+    "ReportRun:",
+    "ReportRunCell:",
+    "ReportTraceLink:",
     "AgentAction:",
     "AuditLog:",
     "ErrorResponse:"
@@ -529,6 +535,28 @@ test("Phase 5 report template endpoints document UFO designer foundation and for
   assert.match(contract, /OPENING\(\)/);
   assert.match(contract, /CLOSING\(\)/);
   assert.match(contract, /AUX_BAL\(\)/);
+});
+
+test("Phase 5 report run endpoints document formula snapshots, closed-period block, and trace links", () => {
+  const runsBlock = blockAfter("  /report-runs:");
+  const detailBlock = blockAfter("  /report-runs/{reportRunId}:");
+  const recalculateBlock = blockAfter("  /report-runs/{reportRunId}/recalculate:");
+  const lockBlock = blockAfter("  /report-runs/{reportRunId}/lock:");
+
+  assert.match(runsBlock, /x-permission: report\.view/);
+  assert.match(runsBlock, /x-permission: report_run\.manage/);
+  assert.match(runsBlock, /CreateReportRunRequest/);
+  assert.match(runsBlock, /ReportRun/);
+  assert.match(detailBlock, /x-permission: report\.view/);
+  assert.match(recalculateBlock, /x-permission: report_run\.manage/);
+  assert.match(lockBlock, /x-permission: report_run\.manage/);
+  assert.match(contract, /includeUnposted:/);
+  assert.match(contract, /calculatedValue:/);
+  assert.match(contract, /snapshotHash:/);
+  assert.match(contract, /renderMode:/);
+  assert.match(contract, /traceLinks:/);
+  assert.match(contract, /REPORT_PERIOD_CLOSED/);
+  assert.match(contract, /REPORT_RUN_LOCKED/);
 });
 
 test("deployment configuration check endpoint is documented", () => {

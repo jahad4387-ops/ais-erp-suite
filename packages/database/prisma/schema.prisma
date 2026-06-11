@@ -90,6 +90,7 @@ model AccountSet {
   fixedAssetLedgerEntries FixedAssetLedgerEntry[]
   fixedAssetReconciliationRuns FixedAssetReconciliationRun[]
   reportTemplates  ReportTemplate[]
+  reportRuns       ReportRun[]
 }
 
 model User {
@@ -2165,6 +2166,7 @@ model ReportTemplateVersion {
 
   template ReportTemplate @relation(fields: [templateId], references: [id])
   sheets   ReportSheet[]
+  runs     ReportRun[]
 
   @@unique([templateId, versionNo])
 }
@@ -2211,4 +2213,63 @@ model ReportFormula {
   createdAt        DateTime @default(now())
 
   cell ReportCell @relation(fields: [cellId], references: [id])
+}
+
+model ReportRun {
+  id                String   @id @default(uuid())
+  accountSetId      String
+  templateVersionId String
+  fiscalYear        Int
+  periodNo          Int
+  includeUnposted   Boolean  @default(false)
+  runMode           String   @default("formal")
+  status            String   @default("calculated")
+  snapshotHash      String
+  paramsJson        String   @default("{}")
+  createdBy         String
+  createdAt         DateTime @default(now())
+  recalculatedAt    DateTime?
+  lockedBy          String?
+  lockedAt          DateTime?
+
+  accountSet      AccountSet @relation(fields: [accountSetId], references: [id])
+  templateVersion ReportTemplateVersion @relation(fields: [templateVersionId], references: [id])
+  cells           ReportRunCell[]
+  traceLinks      ReportTraceLink[]
+
+  @@index([accountSetId, fiscalYear, periodNo])
+}
+
+model ReportRunCell {
+  id              String @id @default(uuid())
+  reportRunId     String
+  sheetCode       String
+  cellAddress     String
+  label           String?
+  formulaText     String?
+  calculatedValue Float  @default(0)
+  displayFormat   String?
+  traceId         String
+
+  reportRun ReportRun @relation(fields: [reportRunId], references: [id])
+
+  @@unique([reportRunId, sheetCode, cellAddress])
+  @@index([traceId])
+}
+
+model ReportTraceLink {
+  id               String @id @default(uuid())
+  reportRunId      String
+  traceId          String
+  sourceType       String
+  sourceDocumentId String?
+  accountCode      String?
+  fiscalYear       Int?
+  periodNo         Int?
+  amount           Float  @default(0)
+
+  reportRun ReportRun @relation(fields: [reportRunId], references: [id])
+
+  @@index([traceId])
+  @@index([reportRunId])
 }

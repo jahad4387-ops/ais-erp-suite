@@ -575,6 +575,9 @@ function permissionFor(request) {
   if (segments[0] === "report-template-versions") {
     return request.method === "GET" ? "report.view" : "report_template.manage";
   }
+  if (segments[0] === "report-runs") {
+    return request.method === "GET" ? "report.view" : "report_run.manage";
+  }
   if (request.method === "GET" && (request.path === "/ledger/bank-statements" || request.path === "/bank/statements")) return "ledger.view";
   if (request.method === "POST" && (request.path === "/ledger/bank-statements/import" || request.path === "/bank/statements")) {
     return "bank_reconciliation.create";
@@ -866,6 +869,7 @@ function createState(options = {}) {
     fixedAssetReconciliationRuns: new Map(),
     reportTemplates: new Map(),
     reportTemplateVersions: new Map(),
+    reportRuns: new Map(),
     auditLogs: [],
     aiVoucherSuggestions: new Map(),
     attachments: new Map(),
@@ -3602,6 +3606,303 @@ async function publishReportTemplateVersion(state, versionId, body, actorId) {
     objectId: published.id
   });
   return jsonResponse(200, cloneReportPayload(published));
+}
+
+function reportPeriodKey(fiscalYear, periodNo) {
+  return `${fiscalYear}-${String(periodNo).padStart(2, "0")}`;
+}
+
+function parseReportPeriod(period) {
+  if (typeof period !== "string") {
+    return null;
+  }
+  const match = period.match(/^(\d{4})-(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    fiscalYear: Number(match[1]),
+    periodNo: Number(match[2])
+  };
+}
+
+function parseFormulaArgs(formulaText) {
+  const match = String(formulaText ?? "").match(/^([A-Z_]+)\((.*)\)$/);
+  if (!match) {
+    return { name: "TEXT", args: [] };
+  }
+  const args = match[2]
+    .split(",")
+    .map((arg) => arg.trim().replace(/^"|"$/g, ""))
+    .filter((arg) => arg !== "");
+  return { name: match[1], args };
+}
+
+function balanceLookupKey(accountCode, fiscalYear, periodNo) {
+  return `${accountCode}:${fiscalYear}:${periodNo}`;
+}
+
+function buildReportBalanceLookup(balances, dependencies, fallbackPeriod) {
+  const requested = new Set();
+  for (const dependency of dependencies) {
+    if (dependency.sourceType !== "account_balance" || !dependency.accountCode) {
+      continue;
+    }
+    const period = parseReportPeriod(dependency.period) ?? fallbackPeriod;
+    requested.add(balanceLookupKey(dependency.accountCode, period.fiscalYear, period.periodNo));
+  }
+
+  const lookup = new Map();
+  for (const balance of balances) {
+    const key = balanceLookupKey(balance.accountCode ?? balance.accountId, balance.fiscalYear, balance.periodNo);
+    if (requested.size === 0 || requested.has(key)) {
+      lookup.set(key, balance);
+    }
+  }
+  return lookup;
+}
+
+function calculateFormulaValue(formulaText, dependencies, balanceLookup, fallbackPeriod) {
+  const { name, args } = parseFormulaArgs(formulaText);
+  const accountCode = args[0] ?? dependencies?.[0]?.accountCode;
+  const period = parseReportPeriod(args[1]) ?? parseReportPeriod(dependencies?.[0]?.period) ?? fallbackPeriod;
+  const balance = balanceLookup.get(balanceLookupKey(accountCode, period.fiscalYear, period.periodNo));
+  if (!balance) {
+    return 0;
+  }
+
+  if (name === "AMT") {
+    return Number(balance.periodDebit ?? 0) - Number(balance.periodCredit ?? 0);
+  }
+  if (name === "OPENING") {
+    return Number(balance.openingDebit ?? 0) - Number(balance.openingCredit ?? 0);
+  }
+  if (name === "BAL" || name === "AUX_BAL") {
+    const direction = args[2] ?? "debit";
+    return direction === "credit"
+      ? Number(balance.closingCredit ?? 0) - Number(balance.closingDebit ?? 0)
+      : Number(balance.closingDebit ?? 0) - Number(balance.closingCredit ?? 0);
+  }
+  if (name === "CLOSING") {
+    return Number(balance.closingDebit ?? 0) - Number(balance.closingCredit ?? 0);
+  }
+  return 0;
+}
+
+function reportSnapshotHash(run) {
+  return `sha256:${createHash("sha256").update(JSON.stringify(run.cells)).digest("hex")}`;
+}
+
+function reportRunRenderMode(run) {
+  return run.status === "locked" || run.status === "archived" || run.lockedAt ? "snapshot" : "calculated";
+}
+
+function publicReportRun(run) {
+  return cloneReportPayload({
+    ...run,
+    renderMode: reportRunRenderMode(run)
+  });
+}
+
+function findReportRunByIdentifier(state, identifier) {
+  return [...state.reportRuns.values()].find((run) => run.id === identifier);
+}
+
+function reportPeriodClosed(state, accountSetId, fiscalYear, periodNo) {
+  const period = [...state.periods.values()].find(
+    (row) => row.accountSetId === accountSetId && row.fiscalYear === fiscalYear && row.periodNo === periodNo
+  );
+  return String(period?.status ?? "").toLowerCase() === "closed";
+}
+
+async function calculateReportRunSnapshot(state, { runId, accountSetId, templateVersion, fiscalYear, periodNo }) {
+  const balances = state.config.platformStore?.listAccountPeriodBalances
+    ? await state.config.platformStore.listAccountPeriodBalances(accountSetId)
+    : state.balances;
+  const fallbackPeriod = { fiscalYear, periodNo };
+  const formulaCells = templateVersion.sheets.flatMap((sheet) =>
+    sheet.cells
+      .filter((cell) => cell.formula)
+      .map((cell) => ({
+        sheet,
+        cell,
+        formula: cell.formula,
+        dependencies: cell.formula.dependenciesJson ?? []
+      }))
+  );
+  const allDependencies = formulaCells.flatMap((cell) => cell.dependencies);
+  const balanceLookup = buildReportBalanceLookup(
+    balances.filter((balance) => balance.accountSetId === accountSetId),
+    allDependencies,
+    fallbackPeriod
+  );
+
+  const cells = [];
+  const traceLinks = [];
+  for (const item of formulaCells) {
+    const calculatedValue = calculateFormulaValue(item.formula.formulaText, item.dependencies, balanceLookup, fallbackPeriod);
+    const traceId = `report-trace:${runId}:${item.sheet.sheetCode}:${item.cell.cellAddress}`;
+    cells.push({
+      id: `report-run-cell:${runId}:${cells.length + 1}`,
+      reportRunId: runId,
+      sheetCode: item.sheet.sheetCode,
+      cellAddress: item.cell.cellAddress,
+      label: item.cell.label ?? null,
+      formulaText: item.formula.formulaText,
+      calculatedValue,
+      displayFormat: item.cell.displayFormat ?? null,
+      traceId
+    });
+    for (const dependency of item.dependencies) {
+      const period = parseReportPeriod(dependency.period) ?? fallbackPeriod;
+      traceLinks.push({
+        id: `report-trace-link:${runId}:${traceLinks.length + 1}`,
+        reportRunId: runId,
+        traceId,
+        sourceType: dependency.sourceType ?? "account_balance",
+        sourceDocumentId: dependency.sourceDocumentId ?? null,
+        accountCode: dependency.accountCode ?? null,
+        fiscalYear: period.fiscalYear,
+        periodNo: period.periodNo,
+        amount: calculatedValue
+      });
+    }
+  }
+
+  return { cells, traceLinks };
+}
+
+async function createReportRun(state, body, actorId) {
+  for (const field of ["accountSetId", "templateVersionId"]) {
+    if (typeof body[field] !== "string" || body[field].trim() === "") {
+      throw new Error(`${field} is required.`);
+    }
+  }
+  if (!Number.isInteger(body.fiscalYear)) {
+    throw new Error("fiscalYear is required.");
+  }
+  if (!Number.isInteger(body.periodNo)) {
+    throw new Error("periodNo is required.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+    return accountSetAccessError(state, actorId, body.accountSetId);
+  }
+  if (reportPeriodClosed(state, body.accountSetId, body.fiscalYear, body.periodNo)) {
+    return errorResponse(409, "REPORT_PERIOD_CLOSED", "Closed accounting periods cannot be recalculated by the report engine.");
+  }
+  const templateVersion = findReportTemplateVersionByIdentifier(state, body.templateVersionId);
+  if (!templateVersion) {
+    return errorResponse(404, "REPORT_TEMPLATE_VERSION_NOT_FOUND", "Report template version was not found.");
+  }
+  if (templateVersion.status !== "published") {
+    return errorResponse(409, "REPORT_TEMPLATE_VERSION_NOT_PUBLISHED", "Only published report template versions can be run.");
+  }
+
+  const runId = `report-run:${state.reportRuns.size + 1}`;
+  const snapshot = await calculateReportRunSnapshot(state, {
+    runId,
+    accountSetId: body.accountSetId,
+    templateVersion,
+    fiscalYear: body.fiscalYear,
+    periodNo: body.periodNo
+  });
+  const run = {
+    id: runId,
+    accountSetId: body.accountSetId,
+    templateVersionId: body.templateVersionId,
+    fiscalYear: body.fiscalYear,
+    periodNo: body.periodNo,
+    includeUnposted: body.includeUnposted ?? false,
+    runMode: body.runMode ?? "formal",
+    status: "calculated",
+    snapshotHash: "pending",
+    paramsJson: {
+      periodKey: reportPeriodKey(body.fiscalYear, body.periodNo)
+    },
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    recalculatedAt: null,
+    lockedBy: null,
+    lockedAt: null,
+    cells: snapshot.cells,
+    traceLinks: snapshot.traceLinks
+  };
+  run.snapshotHash = reportSnapshotHash(run);
+  state.reportRuns.set(run.id, run);
+  appendAuditLog(state, {
+    actorId: run.createdBy,
+    action: "report_run.create",
+    objectType: "report_run",
+    objectId: run.id
+  });
+  return jsonResponse(201, publicReportRun(run));
+}
+
+async function recalculateReportRun(state, runId, body, actorId) {
+  const run = findReportRunByIdentifier(state, runId);
+  if (!run) {
+    return errorResponse(404, "REPORT_RUN_NOT_FOUND", "Report run was not found.");
+  }
+  if (run.status === "locked" || run.status === "archived" || run.lockedAt) {
+    return errorResponse(409, "REPORT_RUN_LOCKED", "Locked or archived report runs must render from stored snapshots only.");
+  }
+  if (reportPeriodClosed(state, run.accountSetId, run.fiscalYear, run.periodNo)) {
+    return errorResponse(409, "REPORT_PERIOD_CLOSED", "Closed accounting periods cannot be recalculated by the report engine.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) {
+    return accountSetAccessError(state, actorId, run.accountSetId);
+  }
+  const templateVersion = findReportTemplateVersionByIdentifier(state, run.templateVersionId);
+  if (!templateVersion) {
+    return errorResponse(404, "REPORT_TEMPLATE_VERSION_NOT_FOUND", "Report template version was not found.");
+  }
+  const snapshot = await calculateReportRunSnapshot(state, {
+    runId: run.id,
+    accountSetId: run.accountSetId,
+    templateVersion,
+    fiscalYear: run.fiscalYear,
+    periodNo: run.periodNo
+  });
+  const updated = {
+    ...run,
+    status: "calculated",
+    recalculatedAt: "now",
+    cells: snapshot.cells,
+    traceLinks: snapshot.traceLinks
+  };
+  updated.snapshotHash = reportSnapshotHash(updated);
+  state.reportRuns.set(updated.id, updated);
+  appendAuditLog(state, {
+    actorId: body.recalculatedBy ?? actorId,
+    action: "report_run.recalculate",
+    objectType: "report_run",
+    objectId: updated.id
+  });
+  return jsonResponse(200, publicReportRun(updated));
+}
+
+async function lockReportRun(state, runId, body, actorId) {
+  const run = findReportRunByIdentifier(state, runId);
+  if (!run) {
+    return errorResponse(404, "REPORT_RUN_NOT_FOUND", "Report run was not found.");
+  }
+  if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) {
+    return accountSetAccessError(state, actorId, run.accountSetId);
+  }
+  const locked = {
+    ...run,
+    status: "locked",
+    lockedBy: body.lockedBy ?? actorId,
+    lockedAt: "now"
+  };
+  state.reportRuns.set(locked.id, locked);
+  appendAuditLog(state, {
+    actorId: locked.lockedBy,
+    action: "report_run.lock",
+    objectType: "report_run",
+    objectId: locked.id
+  });
+  return jsonResponse(200, publicReportRun(locked));
 }
 
 async function route(request, state) {
@@ -7805,6 +8106,45 @@ async function route(request, state) {
     segments[2] === "publish"
   ) {
     return publishReportTemplateVersion(state, segments[1], body, actorIdFor(request, state));
+  }
+
+  if (request.method === "GET" && request.path.split("?")[0] === "/report-runs") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const actorId = actorIdFor(request, state);
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    return jsonResponse(
+      200,
+      [...state.reportRuns.values()]
+        .filter((run) => !accountSetId || run.accountSetId === accountSetId)
+        .map(publicReportRun)
+    );
+  }
+
+  if (request.method === "POST" && request.path === "/report-runs") {
+    return createReportRun(state, body, actorIdFor(request, state));
+  }
+
+  if (request.method === "GET" && segments.length === 2 && segments[0] === "report-runs") {
+    const run = findReportRunByIdentifier(state, segments[1]);
+    if (!run) {
+      return errorResponse(404, "REPORT_RUN_NOT_FOUND", "Report run was not found.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, run.accountSetId))) {
+      return accountSetAccessError(state, actorId, run.accountSetId);
+    }
+    return jsonResponse(200, publicReportRun(run));
+  }
+
+  if (request.method === "POST" && segments.length === 3 && segments[0] === "report-runs" && segments[2] === "recalculate") {
+    return recalculateReportRun(state, segments[1], body, actorIdFor(request, state));
+  }
+
+  if (request.method === "POST" && segments.length === 3 && segments[0] === "report-runs" && segments[2] === "lock") {
+    return lockReportRun(state, segments[1], body, actorIdFor(request, state));
   }
 
   if (request.method === "POST" && (request.path === "/ledger/bank-statements/import" || request.path === "/bank/statements")) {

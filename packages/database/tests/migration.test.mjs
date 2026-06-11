@@ -73,6 +73,9 @@ const phase4PayrollWorkflowMigrationText = phase4PayrollWorkflowMigrationSql.toS
 const phase5ReportTemplateFoundationMigrationText = readMigrationText(
   "../prisma/migrations/20260611100000_phase5_report_template_foundation/migration.sql"
 );
+const phase5ReportRunSnapshotMigrationText = readMigrationText(
+  "../prisma/migrations/20260611110000_phase5_report_run_snapshot/migration.sql"
+);
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 function readMigrationText(relativePath) {
@@ -458,4 +461,25 @@ test("Phase 5 report template foundation migration creates UFO template and form
   assert.match(phase5ReportTemplateFoundationMigrationText, /CREATE UNIQUE INDEX "ReportTemplate_accountSetId_templateCode_key"/);
   assert.match(phase5ReportTemplateFoundationMigrationText, /CREATE UNIQUE INDEX "ReportTemplateVersion_templateId_versionNo_key"/);
   assert.match(phase5ReportTemplateFoundationMigrationText, /CREATE UNIQUE INDEX "ReportCell_sheetId_cellAddress_key"/);
+});
+
+test("Phase 5 report run snapshot migration creates run, cell snapshot, and trace-link tables", () => {
+  for (const table of ["ReportRun", "ReportRunCell", "ReportTraceLink"]) {
+    assert.match(
+      phase5ReportRunSnapshotMigrationText,
+      new RegExp(`CREATE TABLE "${table}"`),
+      `${table} must be created.`
+    );
+  }
+
+  assert.match(phase5ReportRunSnapshotMigrationText, /"templateVersionId" TEXT NOT NULL/);
+  assert.match(phase5ReportRunSnapshotMigrationText, /"includeUnposted" BOOLEAN NOT NULL DEFAULT false/);
+  assert.match(phase5ReportRunSnapshotMigrationText, /"snapshotHash" TEXT NOT NULL/);
+  assert.match(phase5ReportRunSnapshotMigrationText, /"calculatedValue" REAL NOT NULL DEFAULT 0/);
+  assert.match(phase5ReportRunSnapshotMigrationText, /"displayFormat" TEXT/);
+  assert.match(phase5ReportRunSnapshotMigrationText, /"traceId" TEXT NOT NULL/);
+  assert.match(phase5ReportRunSnapshotMigrationText, /"sourceType" TEXT NOT NULL/);
+  assert.match(phase5ReportRunSnapshotMigrationText, /"sourceDocumentId" TEXT/);
+  assert.match(phase5ReportRunSnapshotMigrationText, /CREATE INDEX "ReportRun_accountSetId_fiscalYear_periodNo_idx"/);
+  assert.match(phase5ReportRunSnapshotMigrationText, /CREATE INDEX "ReportTraceLink_traceId_idx"/);
 });

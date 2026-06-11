@@ -1484,6 +1484,144 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /report-runs:
+    get:
+      summary: List Phase 5 report runs and their snapshot render status.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Report run list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReportRun"
+    post:
+      summary: Calculate a report run from a published template version and persist the cell snapshot.
+      x-permission: report_run.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReportRunRequest"
+      responses:
+        "201":
+          description: Report run calculated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportRun"
+        "409":
+          description: REPORT_PERIOD_CLOSED when the accounting period is already closed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /report-runs/{reportRunId}:
+    get:
+      summary: Read a report run from stored calculated snapshots.
+      x-permission: report.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: reportRunId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Report run detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportRun"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /report-runs/{reportRunId}/recalculate:
+    post:
+      summary: Recalculate an unlocked report run unless the accounting period is closed.
+      x-permission: report_run.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: reportRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                recalculatedBy:
+                  type: string
+      responses:
+        "200":
+          description: Report run recalculated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportRun"
+        "409":
+          description: REPORT_RUN_LOCKED or REPORT_PERIOD_CLOSED.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /report-runs/{reportRunId}/lock:
+    post:
+      summary: Lock a report run so future rendering uses only stored calculatedValue snapshots.
+      x-permission: report_run.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - name: reportRunId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lockedBy:
+                  type: string
+      responses:
+        "200":
+          description: Report run locked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportRun"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /audit-logs:
     get:
       summary: Query audit logs.
@@ -9831,6 +9969,114 @@ components:
           items:
             type: object
             additionalProperties: true
+
+    CreateReportRunRequest:
+      type: object
+      required: [accountSetId, templateVersionId, fiscalYear, periodNo]
+      properties:
+        accountSetId:
+          type: string
+        templateVersionId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        includeUnposted:
+          type: boolean
+          description: Formal statutory reports force false; management dry-runs may opt in to simulated unposted data.
+        runMode:
+          type: string
+          enum: [formal, simulation]
+        createdBy:
+          type: string
+
+    ReportRun:
+      type: object
+      required: [id, accountSetId, templateVersionId, fiscalYear, periodNo, includeUnposted, status, snapshotHash, renderMode, cells, traceLinks]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        templateVersionId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        includeUnposted:
+          type: boolean
+        runMode:
+          type: string
+          enum: [formal, simulation]
+        status:
+          type: string
+          enum: [calculated, locked, archived]
+        snapshotHash:
+          type: string
+        renderMode:
+          type: string
+          enum: [calculated, snapshot]
+        lockedBy:
+          type: string
+        lockedAt:
+          type: string
+        cells:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportRunCell"
+        traceLinks:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportTraceLink"
+
+    ReportRunCell:
+      type: object
+      required: [id, reportRunId, sheetCode, cellAddress, calculatedValue, traceId]
+      properties:
+        id:
+          type: string
+        reportRunId:
+          type: string
+        sheetCode:
+          type: string
+        cellAddress:
+          type: string
+        label:
+          type: string
+        formulaText:
+          type: string
+        calculatedValue:
+          type: number
+        displayFormat:
+          type: string
+        traceId:
+          type: string
+
+    ReportTraceLink:
+      type: object
+      required: [id, reportRunId, traceId, sourceType]
+      properties:
+        id:
+          type: string
+        reportRunId:
+          type: string
+        traceId:
+          type: string
+        sourceType:
+          type: string
+          enum: [account_balance, journal_entry, voucher, source_document]
+        sourceDocumentId:
+          type: string
+        accountCode:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        amount:
+          type: number
 
     CreateAgentActionRequest:
       type: object

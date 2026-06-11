@@ -8248,3 +8248,153 @@ test("Phase 5 report templates persist UFO sheets, cells, and formula dependenci
   assert.equal(originalVersion.body.sheets[0].cells[0].label, "Cash");
   assert.equal(revisedVersion.body.sheets[0].cells[0].label, "Cash revised");
 });
+
+test("Phase 5 report runs calculate formula snapshots, lock values, and block closed-period recalculation", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P5R",
+      name: "Phase 5 Runs",
+      companyName: "Phase 5 Runs Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase5-report-run-account-set"
+  );
+  api.state.periods.set("period:p5r:2026:6", {
+    id: "period:p5r:2026:6",
+    accountSetId: accountSet.body.id,
+    fiscalYear: 2026,
+    periodNo: 6,
+    status: "open",
+    isCurrent: true
+  });
+  api.state.balances.push({
+    id: "balance:p5r:1001",
+    accountSetId: accountSet.body.id,
+    fiscalYear: 2026,
+    periodNo: 6,
+    accountCode: "1001",
+    accountName: "Cash",
+    openingDebit: 1000,
+    openingCredit: 0,
+    periodDebit: 300,
+    periodCredit: 50,
+    closingDebit: 1250,
+    closingCredit: 0
+  });
+
+  const template = await request(
+    api,
+    "POST",
+    "/report-templates",
+    {
+      accountSetId: accountSet.body.id,
+      templateCode: "RUN-BS",
+      templateName: "Run Balance Sheet",
+      reportType: "statutory",
+      createdBy: "system"
+    },
+    "phase5-report-run-template"
+  );
+  const version = await request(
+    api,
+    "POST",
+    `/report-templates/${template.body.id}/versions`,
+    {
+      sheets: [
+        {
+          sheetCode: "BS",
+          sheetName: "Balance Sheet",
+          cells: [
+            {
+              cellAddress: "B10",
+              label: "Cash",
+              valueType: "formula",
+              displayFormat: "currency",
+              isEditable: false,
+              formula: {
+                formulaText: "BAL(\"1001\", \"2026-06\", \"debit\")",
+                astJson: { name: "BAL", args: ["1001", "2026-06", "debit"] },
+                dependenciesJson: [{ sourceType: "account_balance", accountCode: "1001", period: "2026-06" }]
+              }
+            }
+          ]
+        }
+      ],
+      createdBy: "system"
+    },
+    "phase5-report-run-version"
+  );
+  await request(
+    api,
+    "POST",
+    `/report-template-versions/${version.body.id}/publish`,
+    { publishedBy: "system" },
+    "phase5-report-run-publish-version"
+  );
+
+  const run = await request(
+    api,
+    "POST",
+    "/report-runs",
+    {
+      accountSetId: accountSet.body.id,
+      templateVersionId: version.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      includeUnposted: false,
+      runMode: "formal",
+      createdBy: "system"
+    },
+    "phase5-report-run-create"
+  );
+  const lock = await request(
+    api,
+    "POST",
+    `/report-runs/${run.body.id}/lock`,
+    { lockedBy: "system" },
+    "phase5-report-run-lock"
+  );
+  api.state.balances[0] = { ...api.state.balances[0], closingDebit: 9999 };
+  const lockedDetail = await request(api, "GET", `/report-runs/${run.body.id}`, null, null);
+  const lockedRecalculate = await request(
+    api,
+    "POST",
+    `/report-runs/${run.body.id}/recalculate`,
+    { recalculatedBy: "system" },
+    "phase5-report-run-locked-recalculate"
+  );
+  api.state.reportRuns.set(run.body.id, { ...api.state.reportRuns.get(run.body.id), status: "calculated", lockedAt: null });
+  api.state.periods.set("period:p5r:2026:6", { ...api.state.periods.get("period:p5r:2026:6"), status: "closed" });
+  const closedRecalculate = await request(
+    api,
+    "POST",
+    `/report-runs/${run.body.id}/recalculate`,
+    { recalculatedBy: "system" },
+    "phase5-report-run-closed-recalculate"
+  );
+
+  assert.equal(run.status, 201);
+  assert.equal(run.body.status, "calculated");
+  assert.equal(run.body.includeUnposted, false);
+  assert.equal(run.body.cells[0].calculatedValue, 1250);
+  assert.equal(run.body.cells[0].displayFormat, "currency");
+  assert.equal(run.body.cells[0].traceId, run.body.traceLinks[0].traceId);
+  assert.equal(run.body.traceLinks[0].sourceType, "account_balance");
+  assert.equal(run.body.traceLinks[0].accountCode, "1001");
+  assert.match(run.body.snapshotHash, /^sha256:/);
+  assert.equal(lock.status, 200);
+  assert.equal(lock.body.status, "locked");
+  assert.equal(lockedDetail.body.renderMode, "snapshot");
+  assert.equal(lockedDetail.body.cells[0].calculatedValue, 1250);
+  assert.equal(lockedRecalculate.status, 409);
+  assert.equal(lockedRecalculate.body.code, "REPORT_RUN_LOCKED");
+  assert.equal(closedRecalculate.status, 409);
+  assert.equal(closedRecalculate.body.code, "REPORT_PERIOD_CLOSED");
+});
