@@ -852,6 +852,9 @@ function permissionFor(request) {
   if (segments[0] === "inventory-reconciliation") {
     return "inventory_reconciliation.view";
   }
+  if (segments[0] === "business-finance") {
+    return "cost_voucher.manage";
+  }
   if (segments[0] === "payroll-categories" || segments[0] === "payroll-items" || segments[0] === "employee-payroll-profiles") {
     return "payroll_setup.manage";
   }
@@ -3047,6 +3050,157 @@ function buildInventoryReconciliation(state, accountSetId, { fiscalYear, periodN
   };
   state.inventoryReconciliationRuns.set(run.id, run);
   return run;
+}
+
+function buildBusinessFinanceSourceTrace(state, draft) {
+  const workOrder = findWorkOrderByIdentifier(state, draft.workOrderId);
+  const requisitions = [...state.materialRequisitions.values()].filter((row) => row.workOrderId === draft.workOrderId);
+  const receipts = [...state.productReceipts.values()].filter((row) => row.workOrderId === draft.workOrderId);
+  const allocation = findCostAllocationByIdentifier(state, draft.costAllocationId);
+  const links = [
+    workOrder
+      ? {
+          sourceType: "work_order",
+          sourceDocumentId: workOrder.id,
+          sourceDocumentNo: workOrder.workOrderNo,
+          status: workOrder.status
+        }
+      : null,
+    ...requisitions.map((row) => ({
+      sourceType: "material_requisition",
+      sourceDocumentId: row.id,
+      sourceDocumentNo: row.requisitionNo,
+      sourceMovementId: row.sourceMovementId,
+      amount: row.totalAmount
+    })),
+    ...receipts.map((row) => ({
+      sourceType: "product_receipt",
+      sourceDocumentId: row.id,
+      sourceDocumentNo: row.receiptNo,
+      sourceMovementId: row.sourceMovementId,
+      amount: row.totalAmount
+    })),
+    allocation
+      ? {
+          sourceType: "cost_allocation",
+          sourceDocumentId: allocation.id,
+          sourceDocumentNo: allocation.workOrderNo,
+          amount: allocation.totalAllocatedAmount
+        }
+      : null
+  ].filter(Boolean);
+  return {
+    sourceType: "work_order",
+    sourceDocumentId: workOrder?.id ?? draft.workOrderId,
+    sourceDocumentNo: workOrder?.workOrderNo ?? draft.workOrderNo,
+    links
+  };
+}
+
+function buildSupplyChainCloseBlocks(state, accountSetId, fiscalYear, periodNo) {
+  const blocks = [];
+  const periodWorkOrders = [...state.workOrders.values()].filter(
+    (workOrder) =>
+      workOrder.accountSetId === accountSetId &&
+      Number(workOrder.fiscalYear) === Number(fiscalYear) &&
+      Number(workOrder.periodNo) === Number(periodNo) &&
+      workOrder.status !== "closed"
+  );
+  for (const workOrder of periodWorkOrders) {
+    const requisitions = [...state.materialRequisitions.values()].filter((row) => row.workOrderId === workOrder.id);
+    const receipts = [...state.productReceipts.values()].filter((row) => row.workOrderId === workOrder.id);
+    if (workOrder.status === "released" && requisitions.length === 0) {
+      blocks.push({
+        code: "WORK_ORDER_MATERIAL_NOT_ISSUED",
+        severity: "high",
+        sourceType: "work_order",
+        sourceDocumentId: workOrder.id,
+        sourceDocumentNo: workOrder.workOrderNo,
+        message: `工单 ${workOrder.workOrderNo} 尚未领料，不能关闭供应链期间。`,
+        evidenceRefs: [workOrder.id]
+      });
+    }
+    if (Number(workOrder.completedQuantity ?? 0) < Number(workOrder.plannedQuantity ?? 0) && receipts.length === 0) {
+      blocks.push({
+        code: "WORK_ORDER_NOT_RECEIVED",
+        severity: "medium",
+        sourceType: "work_order",
+        sourceDocumentId: workOrder.id,
+        sourceDocumentNo: workOrder.workOrderNo,
+        message: `工单 ${workOrder.workOrderNo} 尚未完工入库，不能关闭供应链期间。`,
+        evidenceRefs: [workOrder.id, ...requisitions.map((row) => row.id)]
+      });
+    }
+  }
+
+  for (const draft of listCostVoucherDrafts(state, accountSetId)) {
+    if (Number(draft.fiscalYear) !== Number(fiscalYear) || Number(draft.periodNo) !== Number(periodNo)) continue;
+    if (draft.status !== "approved" || draft.approvalRequired) {
+      blocks.push({
+        code: "COST_VOUCHER_DRAFT_PENDING",
+        severity: "medium",
+        sourceType: "cost_voucher_draft",
+        sourceDocumentId: draft.id,
+        sourceDocumentNo: draft.workOrderNo,
+        message: `工单 ${draft.workOrderNo} 的成本凭证草稿仍待复核。`,
+        evidenceRefs: [draft.id, draft.costAllocationId, draft.workOrderId].filter(Boolean)
+      });
+    }
+  }
+
+  const reconciliationExceptions = [...state.inventoryReconciliationRuns.values()].filter(
+    (run) =>
+      run.accountSetId === accountSetId &&
+      Number(run.fiscalYear) === Number(fiscalYear) &&
+      Number(run.periodNo) === Number(periodNo) &&
+      Number(run.differenceAmount) !== 0
+  );
+  for (const run of reconciliationExceptions) {
+    blocks.push({
+      code: "INVENTORY_RECONCILIATION_EXCEPTION",
+      severity: "high",
+      sourceType: "inventory_reconciliation",
+      sourceDocumentId: run.id,
+      sourceDocumentNo: `${run.fiscalYear}-${String(run.periodNo).padStart(2, "0")}`,
+      message: `存货对账差异 ${run.differenceAmount} 尚未处理。`,
+      evidenceRefs: [run.id]
+    });
+  }
+
+  return blocks;
+}
+
+function buildBusinessFinanceWorkbench(state, accountSetId, { fiscalYear, periodNo }) {
+  const voucherDrafts = listCostVoucherDrafts(state, accountSetId)
+    .filter((draft) => Number(draft.fiscalYear) === Number(fiscalYear) && Number(draft.periodNo) === Number(periodNo))
+    .map((draft) => ({
+      ...draft,
+      sourceTrace: buildBusinessFinanceSourceTrace(state, draft)
+    }));
+  const inventoryReconciliationExceptions = [...state.inventoryReconciliationRuns.values()]
+    .filter((run) => run.accountSetId === accountSetId)
+    .filter((run) => Number(run.fiscalYear) === Number(fiscalYear) && Number(run.periodNo) === Number(periodNo))
+    .filter((run) => Number(run.differenceAmount) !== 0)
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+  const closeBlocks = buildSupplyChainCloseBlocks(state, accountSetId, fiscalYear, periodNo);
+  const pendingVoucherDrafts = voucherDrafts.filter((draft) => ["draft", "generated"].includes(draft.status));
+  const approvalRequired = voucherDrafts.filter((draft) => draft.approvalRequired || draft.status !== "approved");
+  return {
+    accountSetId,
+    fiscalYear: Number(fiscalYear),
+    periodNo: Number(periodNo),
+    summary: {
+      pendingVoucherDrafts: pendingVoucherDrafts.length,
+      voucherDraftsRequiringApproval: approvalRequired.length,
+      inventoryReconciliationExceptions: inventoryReconciliationExceptions.length,
+      supplyChainCloseBlocks: closeBlocks.length
+    },
+    queues: {
+      voucherDrafts,
+      inventoryReconciliationExceptions,
+      closeBlocks
+    }
+  };
 }
 
 function listPayrollCategories(state, accountSetId) {
@@ -9838,10 +9992,14 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
   if (tool.name === "generate_cost_voucher_draft" && dashboard.summary.costPending.count > 0) {
     warnings.push("存在未锁定或待处理成本，成本凭证只能作为高风险 dry-run 建议。");
   }
+  const closeBlocks =
+    tool.name === "run_supply_chain_close_check"
+      ? buildSupplyChainCloseBlocks(state, body.accountSetId, body.fiscalYear, body.periodNo)
+      : [];
   if (tool.name === "run_supply_chain_close_check") {
-    if (dashboard.summary.workOrdersToIssue.count > 0) blockingErrors.push("仍有待领料工单，不能直接关闭供应链期间。");
-    if (dashboard.summary.workOrdersToReceive.count > 0) blockingErrors.push("仍有待完工工单，不能直接关闭供应链期间。");
-    if (dashboard.summary.costPending.count > 0) blockingErrors.push("仍有成本待处理事项，不能直接关闭供应链期间。");
+    for (const block of closeBlocks) {
+      blockingErrors.push(block.message);
+    }
   }
 
   return {
@@ -9873,6 +10031,7 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
       pendingOrders,
       pendingAgentApprovals: dashboard.queues.pendingAgentApprovals,
       workOrderProgress: dashboard.workOrderProgress,
+      closeBlocks,
       sourceObjectType: body.sourceObjectType ?? null,
       sourceObjectId: body.sourceObjectId ?? null,
       payload: body.payload ?? {}
@@ -11866,6 +12025,19 @@ async function route(request, state) {
     return jsonResponse(200, buildInventoryReconciliation(state, accountSetId, { fiscalYear, periodNo }));
   }
 
+  if (segments.length === 2 && segments[0] === "business-finance" && segments[1] === "workbench" && request.method === "GET") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const fiscalYear = query.get("fiscalYear");
+    const periodNo = query.get("periodNo");
+    if (!accountSetId) return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+    if (!fiscalYear) return errorResponse(400, "FISCAL_YEAR_REQUIRED", "fiscalYear is required.");
+    if (!periodNo) return errorResponse(400, "PERIOD_NO_REQUIRED", "periodNo is required.");
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) return accountSetAccessError(state, actorId, accountSetId);
+    return jsonResponse(200, buildBusinessFinanceWorkbench(state, accountSetId, { fiscalYear, periodNo }));
+  }
+
   if (segments.length === 1 && segments[0] === "payroll-categories") {
     if (request.method === "GET") {
       const query = queryParamsFor(request.path);
@@ -13722,6 +13894,12 @@ async function route(request, state) {
     const unpostedVoucherCount = countUnpostedVouchersForPeriod(state, period);
     if (unpostedVoucherCount > 0) {
       return errorResponse(409, "PERIOD_CLOSE_BLOCKED", `${unpostedVoucherCount} unposted vouchers remain.`);
+    }
+    const closeBlocks = buildSupplyChainCloseBlocks(state, period.accountSetId, period.fiscalYear, period.periodNo);
+    if (closeBlocks.length > 0) {
+      return errorResponse(409, "SUPPLY_CHAIN_CLOSE_BLOCKED", "Supply chain period close is blocked by unfinished business documents.", {
+        closeBlocks
+      });
     }
 
     const closed = closeAccountingPeriod(period, { unpostedVoucherCount, closedBy: body.closedBy ?? "system" });

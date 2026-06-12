@@ -722,7 +722,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/AccountingPeriod"
         "409":
-          $ref: "#/components/responses/Conflict"
+          description: PERIOD_CLOSE_BLOCKED or SUPPLY_CHAIN_CLOSE_BLOCKED when unposted vouchers or supply-chain close blocks remain.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - type: object
+                    properties:
+                      closeBlocks:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/SupplyChainCloseBlock"
 
   /periods/{periodId}/lock:
     post:
@@ -5427,6 +5438,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/InventoryReconciliation"
+
+  /business-finance/workbench:
+    get:
+      summary: Aggregate Phase 6 supply-chain accounting review, reconciliation exceptions, and close blocks for finance.
+      x-permission: cost_voucher.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: fiscalYear
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: periodNo
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Business-finance workbench payload.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessFinanceWorkbench"
 
   /payroll-categories:
     get:
@@ -11211,6 +11252,107 @@ components:
           enum: [debit, credit]
         accountCode:
           type: string
+
+    BusinessFinanceWorkbench:
+      type: object
+      required: [accountSetId, fiscalYear, periodNo, summary, queues]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        summary:
+          $ref: "#/components/schemas/BusinessFinanceWorkbenchSummary"
+        queues:
+          type: object
+          required: [voucherDrafts, inventoryReconciliationExceptions, closeBlocks]
+          properties:
+            voucherDrafts:
+              type: array
+              items:
+                allOf:
+                  - $ref: "#/components/schemas/CostVoucherDraft"
+                  - type: object
+                    properties:
+                      sourceTrace:
+                        $ref: "#/components/schemas/BusinessFinanceSourceTrace"
+            inventoryReconciliationExceptions:
+              type: array
+              items:
+                $ref: "#/components/schemas/InventoryReconciliation"
+            closeBlocks:
+              type: array
+              items:
+                $ref: "#/components/schemas/SupplyChainCloseBlock"
+
+    BusinessFinanceWorkbenchSummary:
+      type: object
+      required: [pendingVoucherDrafts, voucherDraftsRequiringApproval, inventoryReconciliationExceptions, supplyChainCloseBlocks]
+      properties:
+        pendingVoucherDrafts:
+          type: integer
+        voucherDraftsRequiringApproval:
+          type: integer
+        inventoryReconciliationExceptions:
+          type: integer
+        supplyChainCloseBlocks:
+          type: integer
+
+    BusinessFinanceSourceTrace:
+      type: object
+      required: [sourceType, sourceDocumentId, sourceDocumentNo, links]
+      properties:
+        sourceType:
+          type: string
+          enum: [work_order]
+        sourceDocumentId:
+          type: string
+        sourceDocumentNo:
+          type: string
+        links:
+          type: array
+          items:
+            type: object
+            properties:
+              sourceType:
+                type: string
+                enum: [work_order, material_requisition, product_receipt, cost_allocation]
+              sourceDocumentId:
+                type: string
+              sourceDocumentNo:
+                type: string
+              sourceMovementId:
+                type: string
+                nullable: true
+              amount:
+                type: number
+              status:
+                type: string
+
+    SupplyChainCloseBlock:
+      type: object
+      required: [code, severity, sourceType, sourceDocumentId, sourceDocumentNo, message, evidenceRefs]
+      properties:
+        code:
+          type: string
+          enum: [WORK_ORDER_MATERIAL_NOT_ISSUED, WORK_ORDER_NOT_RECEIVED, COST_VOUCHER_DRAFT_PENDING, INVENTORY_RECONCILIATION_EXCEPTION]
+        severity:
+          type: string
+          enum: [low, medium, high]
+        sourceType:
+          type: string
+        sourceDocumentId:
+          type: string
+        sourceDocumentNo:
+          type: string
+        message:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
 
     InventoryReconciliation:
       type: object

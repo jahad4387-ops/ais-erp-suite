@@ -243,6 +243,10 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "CostAllocationLine:",
     "InventoryCostAdjustment:",
     "CostVoucherDraft:",
+    "BusinessFinanceWorkbench:",
+    "BusinessFinanceWorkbenchSummary:",
+    "BusinessFinanceSourceTrace:",
+    "SupplyChainCloseBlock:",
     "InventoryReconciliation:",
     "PayrollCategory:",
     "PayrollItem:",
@@ -470,6 +474,23 @@ test("Phase 3 final endpoints document cost voucher drafts and inventory reconci
   assert.match(reconciliationBlock, /InventoryReconciliation/);
   assert.match(contract, /approvalRequired:/, "Cost voucher drafts must require human approval.");
   assert.match(contract, /differenceAmount:/, "Inventory reconciliation must expose differences.");
+});
+
+test("Phase 6 business finance endpoint documents supply-chain accounting review and close blocks", () => {
+  const block = blockAfter("  /business-finance/workbench:");
+  const periodCloseBlock = blockAfter("  /periods/{periodId}/close:");
+
+  assert.match(block, /x-permission: cost_voucher\.manage/);
+  assert.match(block, /x-risk-level: low/);
+  assert.match(block, /BusinessFinanceWorkbench/);
+  assert.match(block, /accountSetId/);
+  assert.match(block, /fiscalYear/);
+  assert.match(block, /periodNo/);
+  assert.match(periodCloseBlock, /SUPPLY_CHAIN_CLOSE_BLOCKED/);
+  assert.match(contract, /BusinessFinanceSourceTrace/);
+  assert.match(contract, /SupplyChainCloseBlock/);
+  assert.match(contract, /sourceTrace:/);
+  assert.match(contract, /closeBlocks:/);
 });
 
 test("Phase 4 payroll foundation endpoints document setup, variable import, and calculation contracts", () => {

@@ -94,6 +94,7 @@ export const APP_NAVIGATION: AppNavigationItem[] = [
         key: 'finance-cost-inventory',
         label: '成本与存货核算',
         children: [
+          { key: 'finance-business-finance-workbench', label: '业财工作台', to: '/business-finance/workbench' },
           { key: 'finance-cost-inputs', label: '成本输入', to: '/mock-cost-inputs' },
           { key: 'finance-cost-allocations', label: '成本分摊', to: '/cost-allocations' },
           { key: 'finance-cost-voucher-drafts', label: '成本凭证', to: '/cost-voucher-drafts' },
