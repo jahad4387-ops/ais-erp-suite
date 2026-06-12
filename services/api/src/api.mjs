@@ -6595,6 +6595,52 @@ const AGENT_DRAFT_TOOL_OUTPUT_SCHEMA = {
   }
 };
 
+const SUPPLY_CHAIN_AGENT_TOOL_INPUT_SCHEMA = {
+  type: "object",
+  required: ["accountSetId", "fiscalYear", "periodNo"],
+  properties: {
+    accountSetId: { type: "string" },
+    fiscalYear: { type: "integer" },
+    periodNo: { type: "integer" },
+    asOfDate: { type: "string" },
+    sourceObjectType: { type: "string" },
+    sourceObjectId: { type: "string" },
+    evidenceRefs: { type: "array", items: { type: "string" } },
+    payload: { type: "object", additionalProperties: true },
+    requestedBy: { type: "string" }
+  }
+};
+
+const SUPPLY_CHAIN_AGENT_TOOL_OUTPUT_SCHEMA = {
+  type: "object",
+  required: [
+    "toolName",
+    "riskLevel",
+    "status",
+    "summary",
+    "draftPayload",
+    "warnings",
+    "blockingErrors",
+    "matchedMasterData",
+    "unmatchedItems",
+    "evidenceRefs",
+    "nextActions"
+  ],
+  properties: {
+    toolName: { type: "string" },
+    riskLevel: { type: "string", enum: ["low", "medium", "high"] },
+    status: { type: "string" },
+    summary: { type: "string" },
+    draftPayload: { type: "object", additionalProperties: true },
+    warnings: { type: "array", items: { type: "string" } },
+    blockingErrors: { type: "array", items: { type: "string" } },
+    matchedMasterData: { type: "array", items: { type: "object", additionalProperties: true } },
+    unmatchedItems: { type: "array", items: { type: "object", additionalProperties: true } },
+    evidenceRefs: { type: "array", items: { type: "string" } },
+    nextActions: { type: "array", items: { type: "string" } }
+  }
+};
+
 const LOW_RISK_APPROVAL_POLICY = {
   approvalRequired: false,
   requiresHumanConfirmation: false,
@@ -6615,6 +6661,130 @@ const HIGH_RISK_APPROVAL_POLICY = {
   minApprovals: 2,
   executeRequiresUserToken: true
 };
+
+const SUPPLY_CHAIN_AGENT_TOOL_DEFINITIONS = [
+  {
+    name: "analyze_supply_chain_dashboard",
+    title: "Analyze supply chain dashboard",
+    description: "Summarize supply chain dashboard queues, exceptions, and suggested next actions without mutation.",
+    riskLevel: "low",
+    approvalPolicy: LOW_RISK_APPROVAL_POLICY
+  },
+  {
+    name: "detect_material_shortage",
+    title: "Detect material shortage",
+    description: "Analyze negative inventory, locked stock, and work-order demand to produce a shortage list.",
+    riskLevel: "low",
+    approvalPolicy: LOW_RISK_APPROVAL_POLICY
+  },
+  {
+    name: "generate_purchase_suggestions",
+    title: "Generate purchase suggestions",
+    description: "Generate non-mutating purchase suggestions from shortage and overdue signals.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "generate_production_plan",
+    title: "Generate production plan",
+    description: "Generate a rule-based production plan proposal from sales demand and available inventory.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "generate_work_orders_from_plan",
+    title: "Generate work orders from plan",
+    description: "Generate work-order draft recommendations from an approved production plan context.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "generate_material_requisition",
+    title: "Generate material requisition",
+    description: "Generate work-order material requisition recommendations after inventory availability checks.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "generate_product_receipt",
+    title: "Generate product receipt",
+    description: "Generate finished-goods receipt recommendations after work-order progress checks.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "generate_sales_delivery",
+    title: "Generate sales delivery",
+    description: "Generate delivery recommendations for sales orders that pass available-to-promise checks.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "analyze_inventory_availability",
+    title: "Analyze inventory availability",
+    description: "Analyze available quantity and locked quantity before delivery, issue, or transfer.",
+    riskLevel: "low",
+    approvalPolicy: LOW_RISK_APPROVAL_POLICY
+  },
+  {
+    name: "detect_inventory_anomalies",
+    title: "Detect inventory anomalies",
+    description: "Detect negative stock, locked quantity overflow, stale stock, and value anomalies.",
+    riskLevel: "low",
+    approvalPolicy: LOW_RISK_APPROVAL_POLICY
+  },
+  {
+    name: "generate_stock_count_plan",
+    title: "Generate stock count plan",
+    description: "Generate a stock-count plan recommendation from inventory anomaly signals.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "generate_outsourcing_order",
+    title: "Generate outsourcing order",
+    description: "Generate outsourcing recommendations when capacity or process rules require external processing.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "generate_rework_plan",
+    title: "Generate rework plan",
+    description: "Generate rework plan recommendations from quality, return, or work-order exception context.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "trace_material_batch",
+    title: "Trace material batch",
+    description: "Generate forward or backward traceability reports for materials, batches, orders, and receipts.",
+    riskLevel: "low",
+    approvalPolicy: LOW_RISK_APPROVAL_POLICY
+  },
+  {
+    name: "calculate_work_order_cost",
+    title: "Calculate work order cost",
+    description: "Run a work-order cost simulation without locking cost pools or creating vouchers.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
+    name: "generate_cost_voucher_draft",
+    title: "Generate cost voucher draft",
+    description: "Generate cost voucher draft recommendations after cost calculation and reconciliation checks.",
+    riskLevel: "high",
+    approvalPolicy: HIGH_RISK_APPROVAL_POLICY
+  },
+  {
+    name: "run_supply_chain_close_check",
+    title: "Run supply chain close check",
+    description: "Check unfinished supply chain transactions before period close without mutating business data.",
+    riskLevel: "high",
+    approvalPolicy: HIGH_RISK_APPROVAL_POLICY
+  }
+];
+
+const SUPPLY_CHAIN_AGENT_TOOL_NAMES = new Set(SUPPLY_CHAIN_AGENT_TOOL_DEFINITIONS.map((tool) => tool.name));
 
 function agentTool({
   name,
@@ -6805,6 +6975,15 @@ const AGENT_TOOL_REGISTRY = [
     inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
     outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
   }),
+  ...SUPPLY_CHAIN_AGENT_TOOL_DEFINITIONS.map((tool) =>
+    agentTool({
+      ...tool,
+      actionKind: "dry_run",
+      agentTokenAllowed: true,
+      inputSchema: SUPPLY_CHAIN_AGENT_TOOL_INPUT_SCHEMA,
+      outputSchema: SUPPLY_CHAIN_AGENT_TOOL_OUTPUT_SCHEMA
+    })
+  ),
   agentTool({
     name: "run_close_checklist",
     title: "Run close checklist",
@@ -7035,14 +7214,7 @@ function createAgentActionRecord(state, body, actorId) {
     payload: body.payload ?? {},
     requestedBy: body.requestedBy ?? actorId,
     createdAt: "now",
-    dryRunResult: {
-      status: tool.approvalPolicy.approvalRequired ? "ready_for_approval" : "ready_for_execution",
-      businessMutation: false,
-      toolName: tool.name,
-      actionKind: tool.actionKind,
-      approvalPolicy: tool.approvalPolicy,
-      impactSummary: "Agent action dry-run recorded. No business data was mutated."
-    },
+    dryRunResult: buildAgentActionDryRunResult(state, tool, body),
     approvalRequest: null,
     approvalHistory: [],
     approvalProgress: {
@@ -9093,6 +9265,101 @@ function buildSupplyChainDashboard(state, { accountSetId, fiscalYear, periodNo, 
     },
     agentSuggestions
   };
+}
+
+function genericAgentActionDryRunResult(tool) {
+  return {
+    status: tool.approvalPolicy.approvalRequired ? "ready_for_approval" : "ready_for_execution",
+    businessMutation: false,
+    toolName: tool.name,
+    actionKind: tool.actionKind,
+    approvalPolicy: tool.approvalPolicy,
+    impactSummary: "Agent action dry-run recorded. No business data was mutated."
+  };
+}
+
+function supplyChainNextActions(toolName, dashboard) {
+  const materialShortageCount = dashboard.summary.materialShortages.count;
+  const inventoryExceptionCount = dashboard.summary.inventoryExceptions.count;
+  const pendingOrderCount = dashboard.summary.pendingOrders.count;
+  const costPendingCount = dashboard.summary.costPending.count;
+  const byTool = {
+    analyze_supply_chain_dashboard: ["detect_material_shortage", "detect_inventory_anomalies", "run_supply_chain_close_check"],
+    detect_material_shortage: materialShortageCount > 0 ? ["generate_purchase_suggestions", "generate_material_requisition"] : [],
+    generate_purchase_suggestions: ["suggest_purchase_order_draft"],
+    generate_production_plan: ["generate_work_orders_from_plan"],
+    generate_work_orders_from_plan: ["suggest_material_requisition_draft"],
+    generate_material_requisition: ["suggest_material_requisition_draft"],
+    generate_product_receipt: ["suggest_product_receipt_draft", "calculate_work_order_cost"],
+    generate_sales_delivery: ["suggest_sales_order_draft"],
+    analyze_inventory_availability: pendingOrderCount > 0 ? ["generate_sales_delivery", "generate_material_requisition"] : [],
+    detect_inventory_anomalies: inventoryExceptionCount > 0 ? ["generate_stock_count_plan"] : [],
+    generate_stock_count_plan: ["suggest_stock_count_draft"],
+    generate_outsourcing_order: [],
+    generate_rework_plan: [],
+    trace_material_batch: [],
+    calculate_work_order_cost: costPendingCount > 0 ? ["generate_cost_voucher_draft"] : [],
+    generate_cost_voucher_draft: ["create_voucher_draft"],
+    run_supply_chain_close_check: []
+  };
+  return byTool[toolName] ?? [];
+}
+
+function buildSupplyChainAgentDryRunResult(state, tool, body) {
+  const asOfDate = body.asOfDate ?? new Date().toISOString().slice(0, 10);
+  const dashboard = buildSupplyChainDashboard(state, {
+    accountSetId: body.accountSetId,
+    fiscalYear: body.fiscalYear,
+    periodNo: body.periodNo,
+    asOfDate
+  });
+  const materialShortages = dashboard.queues.inventoryExceptions.filter((balance) => Number(balance.quantity ?? 0) < 0);
+  const inventoryExceptions = dashboard.queues.inventoryExceptions;
+  const pendingOrders = dashboard.queues.pendingOrders;
+  const warnings = dashboard.agentSuggestions.map((suggestion) => suggestion.message);
+  const blockingErrors = [];
+  if (tool.name === "generate_material_requisition" && materialShortages.length > 0) {
+    blockingErrors.push("存在缺料或负库存，正式领料草稿必须先完成人工复核。");
+  }
+  if (tool.name === "generate_cost_voucher_draft" && dashboard.summary.costPending.count > 0) {
+    warnings.push("存在未锁定或待处理成本，成本凭证只能作为高风险 dry-run 建议。");
+  }
+  if (tool.name === "run_supply_chain_close_check") {
+    if (dashboard.summary.workOrdersToIssue.count > 0) blockingErrors.push("仍有待领料工单，不能直接关闭供应链期间。");
+    if (dashboard.summary.workOrdersToReceive.count > 0) blockingErrors.push("仍有待完工工单，不能直接关闭供应链期间。");
+    if (dashboard.summary.costPending.count > 0) blockingErrors.push("仍有成本待处理事项，不能直接关闭供应链期间。");
+  }
+
+  return {
+    ...genericAgentActionDryRunResult(tool),
+    toolName: tool.name,
+    riskLevel: tool.riskLevel,
+    summary: `${tool.title} dry-run completed: ${dashboard.summary.pendingOrders.count} pending orders, ${materialShortages.length} material shortages, ${inventoryExceptions.length} inventory exceptions.`,
+    draftPayload: {
+      dashboardSummary: dashboard.summary,
+      materialShortages,
+      inventoryExceptions,
+      pendingOrders,
+      pendingAgentApprovals: dashboard.queues.pendingAgentApprovals,
+      workOrderProgress: dashboard.workOrderProgress,
+      sourceObjectType: body.sourceObjectType ?? null,
+      sourceObjectId: body.sourceObjectId ?? null,
+      payload: body.payload ?? {}
+    },
+    warnings,
+    blockingErrors,
+    matchedMasterData: [],
+    unmatchedItems: [],
+    evidenceRefs: body.evidenceRefs ?? [],
+    nextActions: supplyChainNextActions(tool.name, dashboard)
+  };
+}
+
+function buildAgentActionDryRunResult(state, tool, body) {
+  if (SUPPLY_CHAIN_AGENT_TOOL_NAMES.has(tool.name)) {
+    return buildSupplyChainAgentDryRunResult(state, tool, body);
+  }
+  return genericAgentActionDryRunResult(tool);
 }
 
 async function buildManagementAnalysis(state, { accountSetId, fiscalYear, periodNo, asOfDate }) {

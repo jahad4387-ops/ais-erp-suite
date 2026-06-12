@@ -13311,6 +13311,23 @@ components:
             - run_depreciation_dry_run
             - suggest_asset_change_draft
             - suggest_report_interpretation_draft
+            - analyze_supply_chain_dashboard
+            - detect_material_shortage
+            - generate_purchase_suggestions
+            - generate_production_plan
+            - generate_work_orders_from_plan
+            - generate_material_requisition
+            - generate_product_receipt
+            - generate_sales_delivery
+            - analyze_inventory_availability
+            - detect_inventory_anomalies
+            - generate_stock_count_plan
+            - generate_outsourcing_order
+            - generate_rework_plan
+            - trace_material_batch
+            - calculate_work_order_cost
+            - generate_cost_voucher_draft
+            - run_supply_chain_close_check
             - run_close_checklist
             - post_approved_voucher
             - execute_approved_payment

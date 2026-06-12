@@ -8,6 +8,7 @@ import "../packages/database/tests/seedPlatform.test.mjs";
 import "../services/api/tests/openapiContract.test.mjs";
 import "../services/api/tests/apiServer.test.mjs";
 import "../services/api/tests/supplyChainDashboard.test.mjs";
+import "../services/api/tests/agentSupplyChainTools.test.mjs";
 import "../services/api/tests/serverConfig.test.mjs";
 import "../apps/web/tests/antdCompatibility.test.mjs";
 import "../apps/web/tests/voucherAttachmentUpload.test.mjs";
