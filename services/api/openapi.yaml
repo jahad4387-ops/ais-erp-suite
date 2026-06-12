@@ -4769,6 +4769,310 @@ paths:
               schema:
                 $ref: "#/components/schemas/StockCountPreview"
 
+  /production-plans:
+    get:
+      summary: List Phase 5 APS production plans.
+      x-permission: work_order.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Production plan list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductionPlanList"
+    post:
+      summary: Create a Phase 5 APS production plan.
+      x-permission: work_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductionPlanRequest"
+      responses:
+        "201":
+          description: Production plan created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductionPlan"
+
+  /production-plans/{productionPlanId}/generate-work-orders:
+    post:
+      summary: Generate dry-run work order drafts from a production plan.
+      x-permission: work_order.manage
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - name: productionPlanId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Work order draft list generated from plan lines.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductionPlanWorkOrderDrafts"
+
+  /rework-orders:
+    get:
+      summary: List Phase 5 rework orders.
+      x-permission: work_order.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rework order list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReworkOrderList"
+    post:
+      summary: Create a Phase 5 rework order draft.
+      x-permission: work_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReworkOrderRequest"
+      responses:
+        "201":
+          description: Rework order created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReworkOrder"
+
+  /rework-orders/{reworkOrderId}/approve:
+    post:
+      summary: Approve a Phase 5 rework order.
+      x-permission: work_order.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - name: reworkOrderId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Rework order approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReworkOrder"
+
+  /outsourcing-orders:
+    get:
+      summary: List Phase 5 outsourcing orders.
+      x-permission: inventory_movement.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Outsourcing order list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutsourcingOrderList"
+    post:
+      summary: Create a Phase 5 outsourcing order draft.
+      x-permission: inventory_movement.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOutsourcingOrderRequest"
+      responses:
+        "201":
+          description: Outsourcing order created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutsourcingOrder"
+
+  /trace-rules:
+    get:
+      summary: List Phase 5 traceability rules.
+      x-permission: inventory_balance.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Trace rule list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraceRuleList"
+    post:
+      summary: Create a Phase 5 traceability rule.
+      x-permission: inventory_balance.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTraceRuleRequest"
+      responses:
+        "201":
+          description: Trace rule created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraceRule"
+
+  /traceability/query:
+    post:
+      summary: Run a Phase 5 batch traceability query.
+      x-permission: inventory_balance.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTraceQueryRequest"
+      responses:
+        "201":
+          description: Traceability query result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraceQueryRun"
+
+  /line-side-warehouses:
+    get:
+      summary: List Phase 5 line-side warehouse configurations.
+      x-permission: inventory_movement.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Line-side warehouse list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LineSideWarehouseConfigList"
+    post:
+      summary: Create a Phase 5 line-side warehouse configuration.
+      x-permission: inventory_movement.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLineSideWarehouseConfigRequest"
+      responses:
+        "201":
+          description: Line-side warehouse created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LineSideWarehouseConfig"
+
+  /line-side-material-movements:
+    get:
+      summary: List Phase 5 line-side material movements.
+      x-permission: inventory_movement.manage
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Line-side material movement list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LineSideMaterialMovementList"
+    post:
+      summary: Create a Phase 5 line-side material movement.
+      x-permission: inventory_movement.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLineSideMaterialMovementRequest"
+      responses:
+        "201":
+          description: Line-side material movement created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LineSideMaterialMovement"
+
   /work-orders:
     get:
       summary: List Phase 3 production work orders.
@@ -9933,6 +10237,517 @@ components:
           type: number
         reason:
           type: string
+
+    CreateProductionPlanRequest:
+      type: object
+      required: [accountSetId, fiscalYear, periodNo, lines]
+      properties:
+        accountSetId:
+          type: string
+        planNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [draft, planned, released, closed]
+        sourceType:
+          type: string
+          enum: [manual, sales_order, agent]
+        createdBy:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductionPlanLine"
+
+    ProductionPlan:
+      type: object
+      required: [id, accountSetId, planNo, fiscalYear, periodNo, status, sourceType, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        planNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [draft, planned, released, closed]
+        sourceType:
+          type: string
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductionPlanLine"
+
+    ProductionPlanLine:
+      type: object
+      required: [lineNo, productItemCode, plannedQuantity]
+      properties:
+        id:
+          type: string
+        productionPlanId:
+          type: string
+        lineNo:
+          type: integer
+        productItemId:
+          type: string
+          nullable: true
+        productItemCode:
+          type: string
+        productItemName:
+          type: string
+        plannedQuantity:
+          type: number
+        plannedStartDate:
+          type: string
+          nullable: true
+        plannedFinishDate:
+          type: string
+          nullable: true
+        status:
+          type: string
+
+    ProductionPlanList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductionPlan"
+
+    ProductionPlanWorkOrderDrafts:
+      type: object
+      required: [productionPlanId, planNo, dryRun, workOrderDrafts]
+      properties:
+        productionPlanId:
+          type: string
+        planNo:
+          type: string
+        dryRun:
+          type: boolean
+        requestedBy:
+          type: string
+        workOrderDrafts:
+          type: array
+          items:
+            type: object
+            required: [documentType, planLineId, workOrderNo, plannedQuantity, status]
+            properties:
+              documentType:
+                type: string
+                enum: [work_order_draft]
+              planLineId:
+                type: string
+              workOrderNo:
+                type: string
+              productItemId:
+                type: string
+                nullable: true
+              productItemCode:
+                type: string
+              productItemName:
+                type: string
+              plannedQuantity:
+                type: number
+              plannedStartDate:
+                type: string
+                nullable: true
+              plannedFinishDate:
+                type: string
+                nullable: true
+              fiscalYear:
+                type: integer
+              periodNo:
+                type: integer
+              status:
+                type: string
+                enum: [draft]
+
+    CreateReworkOrderRequest:
+      type: object
+      required: [accountSetId, itemCode, itemName, quantity]
+      properties:
+        accountSetId:
+          type: string
+        reworkNo:
+          type: string
+        sourceWorkOrderId:
+          type: string
+          nullable: true
+        sourceOrderNo:
+          type: string
+          nullable: true
+        originalBatchNo:
+          type: string
+          nullable: true
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+        reasonCode:
+          type: string
+        status:
+          type: string
+          enum: [draft, submitted, approved, closed]
+        createdBy:
+          type: string
+
+    ReworkOrder:
+      type: object
+      required: [id, accountSetId, reworkNo, itemCode, itemName, quantity, reasonCode, status]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        reworkNo:
+          type: string
+        sourceWorkOrderId:
+          type: string
+          nullable: true
+        sourceOrderNo:
+          type: string
+          nullable: true
+        originalBatchNo:
+          type: string
+          nullable: true
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+        reasonCode:
+          type: string
+        status:
+          type: string
+          enum: [draft, submitted, approved, closed]
+        approvedBy:
+          type: string
+          nullable: true
+        approvedAt:
+          type: string
+          nullable: true
+
+    ReworkOrderList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReworkOrder"
+
+    CreateOutsourcingOrderRequest:
+      type: object
+      required: [accountSetId, itemCode, itemName, quantity]
+      properties:
+        accountSetId:
+          type: string
+        outsourcingNo:
+          type: string
+        supplierId:
+          type: string
+          nullable: true
+        supplierName:
+          type: string
+          nullable: true
+        sourceWorkOrderId:
+          type: string
+          nullable: true
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+        processName:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [draft, issued, received, settled, closed]
+        createdBy:
+          type: string
+
+    OutsourcingOrder:
+      type: object
+      required: [id, accountSetId, outsourcingNo, itemCode, itemName, quantity, status]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        outsourcingNo:
+          type: string
+        supplierId:
+          type: string
+          nullable: true
+        supplierName:
+          type: string
+          nullable: true
+        sourceWorkOrderId:
+          type: string
+          nullable: true
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+        processName:
+          type: string
+          nullable: true
+        status:
+          type: string
+        issuedQuantity:
+          type: number
+        receivedQuantity:
+          type: number
+        settledAmount:
+          type: number
+
+    OutsourcingOrderList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutsourcingOrder"
+
+    CreateTraceRuleRequest:
+      type: object
+      required: [accountSetId, code, name]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        objectType:
+          type: string
+          enum: [batch, material, finished_good]
+        direction:
+          type: string
+          enum: [forward, backward, both]
+        isEnabled:
+          type: boolean
+        createdBy:
+          type: string
+
+    TraceRule:
+      type: object
+      required: [id, accountSetId, code, name, objectType, direction, isEnabled]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        objectType:
+          type: string
+        direction:
+          type: string
+          enum: [forward, backward, both]
+        isEnabled:
+          type: boolean
+
+    TraceRuleList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TraceRule"
+
+    CreateTraceQueryRequest:
+      type: object
+      required: [accountSetId, ruleId, batchNo]
+      properties:
+        accountSetId:
+          type: string
+        ruleId:
+          type: string
+        batchNo:
+          type: string
+        direction:
+          type: string
+          enum: [forward, backward, both]
+        requestedBy:
+          type: string
+
+    TraceQueryRun:
+      type: object
+      required: [id, accountSetId, ruleId, batchNo, direction, nodes, edges]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        ruleId:
+          type: string
+        ruleCode:
+          type: string
+        batchNo:
+          type: string
+        direction:
+          type: string
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              nodeType:
+                type: string
+              batchNo:
+                type: string
+              objectType:
+                type: string
+              direction:
+                type: string
+        edges:
+          type: array
+          items:
+            type: object
+
+    CreateLineSideWarehouseConfigRequest:
+      type: object
+      required: [accountSetId, code, name, productionLineCode, mainWarehouseCode]
+      properties:
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        productionLineCode:
+          type: string
+        mainWarehouseCode:
+          type: string
+        isEnabled:
+          type: boolean
+        createdBy:
+          type: string
+
+    LineSideWarehouseConfig:
+      type: object
+      required: [id, accountSetId, code, name, productionLineCode, mainWarehouseCode, isEnabled]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        code:
+          type: string
+        name:
+          type: string
+        productionLineCode:
+          type: string
+        mainWarehouseCode:
+          type: string
+        isEnabled:
+          type: boolean
+
+    LineSideWarehouseConfigList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LineSideWarehouseConfig"
+
+    CreateLineSideMaterialMovementRequest:
+      type: object
+      required: [accountSetId, lineSideWarehouseId, itemCode, itemName, quantity]
+      properties:
+        accountSetId:
+          type: string
+        lineSideWarehouseId:
+          type: string
+        movementType:
+          type: string
+          enum: [replenish, return, consume]
+        workOrderId:
+          type: string
+          nullable: true
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+        createdBy:
+          type: string
+
+    LineSideMaterialMovement:
+      type: object
+      required: [id, accountSetId, lineSideWarehouseId, lineSideWarehouseCode, movementType, itemCode, itemName, quantity]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        lineSideWarehouseId:
+          type: string
+        lineSideWarehouseCode:
+          type: string
+        movementType:
+          type: string
+          enum: [replenish, return, consume]
+        workOrderId:
+          type: string
+          nullable: true
+        itemCode:
+          type: string
+        itemName:
+          type: string
+        quantity:
+          type: number
+
+    LineSideMaterialMovementList:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LineSideMaterialMovement"
 
     CreateWorkOrderRequest:
       type: object

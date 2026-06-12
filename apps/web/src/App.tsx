@@ -14,6 +14,11 @@ import { ReportApprovals } from './pages/ReportApprovals';
 import { ReportExportCenter } from './pages/ReportExportCenter';
 import { ManagementAnalysis } from './pages/ManagementAnalysis';
 import { SupplyChainDashboard } from './pages/SupplyChainDashboard';
+import { ProductionPlans } from './pages/ProductionPlans';
+import { ReworkOrders } from './pages/ReworkOrders';
+import { OutsourcingOrders } from './pages/OutsourcingOrders';
+import { Traceability } from './pages/Traceability';
+import { LineSideWarehouses } from './pages/LineSideWarehouses';
 import { BankReconciliation } from './pages/BankReconciliation';
 import { AgentCenter } from './pages/AgentCenter';
 import { Login } from './pages/Login';
@@ -266,6 +271,11 @@ const AppFrame: React.FC = () => {
                 <Route path="/report-export-center" element={<RequireAuth><ReportExportCenter /></RequireAuth>} />
                 <Route path="/management-analysis" element={<RequireAuth><ManagementAnalysis /></RequireAuth>} />
                 <Route path="/supply-chain/dashboard" element={<RequireAuth><SupplyChainDashboard /></RequireAuth>} />
+                <Route path="/production-plans" element={<RequireAuth><ProductionPlans /></RequireAuth>} />
+                <Route path="/rework-orders" element={<RequireAuth><ReworkOrders /></RequireAuth>} />
+                <Route path="/outsourcing-orders" element={<RequireAuth><OutsourcingOrders /></RequireAuth>} />
+                <Route path="/traceability" element={<RequireAuth><Traceability /></RequireAuth>} />
+                <Route path="/line-side-warehouses" element={<RequireAuth><LineSideWarehouses /></RequireAuth>} />
                 <Route path="/reports/:reportName" element={<RequireAuth><Reports /></RequireAuth>} />
                 <Route path="/bank-reconciliation" element={<RequireAuth><BankReconciliation /></RequireAuth>} />
                 <Route path="/agent" element={<RequireAuth><AgentCenter /></RequireAuth>} />

@@ -152,7 +152,7 @@ export const APP_NAVIGATION: AppNavigationItem[] = [
           { key: 'supply-chain-sales-deliveries', label: '销售出库', to: '/sales-deliveries' },
         ],
       },
-      { key: 'supply-chain-aps-management', label: 'APS管理', disabled: true },
+      { key: 'supply-chain-aps-management', label: 'APS管理', to: '/production-plans' },
       {
         key: 'supply-chain-procurement',
         label: '采购管理',
@@ -182,6 +182,7 @@ export const APP_NAVIGATION: AppNavigationItem[] = [
           { key: 'supply-chain-work-orders', label: '工单管理', to: '/work-orders' },
           { key: 'supply-chain-material-requisitions', label: '领料申请', to: '/material-requisitions' },
           { key: 'supply-chain-product-receipts', label: '完工入库', to: '/product-receipts' },
+          { key: 'supply-chain-rework-orders', label: '返工计划', to: '/rework-orders' },
         ],
       },
       {
@@ -193,9 +194,9 @@ export const APP_NAVIGATION: AppNavigationItem[] = [
         ],
       },
       { key: 'supply-chain-device-management', label: '设备管理', disabled: true },
-      { key: 'supply-chain-outsourcing', label: '委外管理', disabled: true },
-      { key: 'supply-chain-traceability-rules', label: '追溯规则', disabled: true },
-      { key: 'supply-chain-line-side-warehouse', label: '线边仓管理', disabled: true },
+      { key: 'supply-chain-outsourcing', label: '委外管理', to: '/outsourcing-orders' },
+      { key: 'supply-chain-traceability-rules', label: '追溯规则', to: '/traceability' },
+      { key: 'supply-chain-line-side-warehouse', label: '线边仓管理', to: '/line-side-warehouses' },
       {
         key: 'supply-chain-statistical-reports',
         label: '统计报表',

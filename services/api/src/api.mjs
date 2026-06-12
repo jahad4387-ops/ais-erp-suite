@@ -11298,6 +11298,209 @@ async function route(request, state) {
     }
   }
 
+  if (segments.length === 1 && segments[0] === "production-plans") {
+    const actorId = actorIdFor(request, state);
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+      }
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, collectionResponse(listByAccountSet(state.productionPlans, accountSetId, "planNo")));
+    }
+
+    if (request.method === "POST") {
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      try {
+        return jsonResponse(201, createProductionPlan(state, body, actorId));
+      } catch (error) {
+        return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (segments.length === 3 && segments[0] === "production-plans" && segments[2] === "generate-work-orders" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    const planId = decodedPathId(segments[1]);
+    const plan = state.productionPlans.get(planId);
+    if (!plan) {
+      return errorResponse(404, "PRODUCTION_PLAN_NOT_FOUND", "Production plan was not found.");
+    }
+    if (!(await canAccessAccountSet(state, actorId, plan.accountSetId))) {
+      return accountSetAccessError(state, actorId, plan.accountSetId);
+    }
+    return jsonResponse(200, buildWorkOrderDraftsFromPlan(plan, { ...body, requestedBy: body.requestedBy ?? actorId }));
+  }
+
+  if (segments.length === 1 && segments[0] === "rework-orders") {
+    const actorId = actorIdFor(request, state);
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+      }
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, collectionResponse(listByAccountSet(state.reworkOrders, accountSetId, "reworkNo")));
+    }
+
+    if (request.method === "POST") {
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      try {
+        return jsonResponse(201, createReworkOrder(state, body, actorId));
+      } catch (error) {
+        return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (segments.length === 3 && segments[0] === "rework-orders" && segments[2] === "approve" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    const order = state.reworkOrders.get(decodedPathId(segments[1]));
+    if (!order) {
+      return errorResponse(404, "REWORK_ORDER_NOT_FOUND", "Rework order was not found.");
+    }
+    if (!(await canAccessAccountSet(state, actorId, order.accountSetId))) {
+      return accountSetAccessError(state, actorId, order.accountSetId);
+    }
+    if (order.status === "approved") {
+      return jsonResponse(200, { ...order });
+    }
+    if (!["draft", "submitted"].includes(order.status)) {
+      return errorResponse(409, "REWORK_APPROVAL_BLOCKED", "Only draft or submitted rework orders can be approved.");
+    }
+    order.status = "approved";
+    order.approvedBy = body.approvedBy ?? actorId;
+    order.approvedAt = "now";
+    appendAuditLog(state, { actorId: order.approvedBy, action: "rework_order.approve", objectType: "rework_order", objectId: order.id });
+    return jsonResponse(200, { ...order });
+  }
+
+  if (segments.length === 1 && segments[0] === "outsourcing-orders") {
+    const actorId = actorIdFor(request, state);
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+      }
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, collectionResponse(listByAccountSet(state.outsourcingOrders, accountSetId, "outsourcingNo")));
+    }
+
+    if (request.method === "POST") {
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      try {
+        return jsonResponse(201, createOutsourcingOrder(state, body, actorId));
+      } catch (error) {
+        return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "trace-rules") {
+    const actorId = actorIdFor(request, state);
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+      }
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, collectionResponse(listByAccountSet(state.traceRules, accountSetId, "code")));
+    }
+
+    if (request.method === "POST") {
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      try {
+        return jsonResponse(201, createTraceRule(state, body, actorId));
+      } catch (error) {
+        return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (segments.length === 2 && segments[0] === "traceability" && segments[1] === "query" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+      return accountSetAccessError(state, actorId, body.accountSetId);
+    }
+    try {
+      return jsonResponse(201, createTraceQueryRun(state, body, actorId));
+    } catch (error) {
+      return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "line-side-warehouses") {
+    const actorId = actorIdFor(request, state);
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+      }
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, collectionResponse(listByAccountSet(state.lineSideWarehouseConfigs, accountSetId, "code")));
+    }
+
+    if (request.method === "POST") {
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      try {
+        return jsonResponse(201, createLineSideWarehouseConfig(state, body, actorId));
+      } catch (error) {
+        return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (segments.length === 1 && segments[0] === "line-side-material-movements") {
+    const actorId = actorIdFor(request, state);
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      if (!accountSetId) {
+        return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+      }
+      if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      return jsonResponse(200, collectionResponse(listByAccountSet(state.lineSideMaterialMovements, accountSetId, "createdAt")));
+    }
+
+    if (request.method === "POST") {
+      if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+        return accountSetAccessError(state, actorId, body.accountSetId);
+      }
+      try {
+        return jsonResponse(201, createLineSideMaterialMovement(state, body, actorId));
+      } catch (error) {
+        return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
   if (segments.length === 1 && segments[0] === "work-orders") {
     if (request.method === "GET") {
       const query = queryParamsFor(request.path);
