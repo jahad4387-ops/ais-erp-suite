@@ -825,6 +825,15 @@ function permissionFor(request) {
   if (segments[0] === "work-orders") {
     return "work_order.manage";
   }
+  if (segments[0] === "production-plans" || segments[0] === "rework-orders") {
+    return "work_order.manage";
+  }
+  if (segments[0] === "outsourcing-orders" || segments[0] === "line-side-warehouses" || segments[0] === "line-side-material-movements") {
+    return "inventory_movement.manage";
+  }
+  if (segments[0] === "trace-rules" || segments[0] === "traceability") {
+    return "inventory_balance.manage";
+  }
   if (segments[0] === "material-requisitions") {
     return "material_requisition.manage";
   }
@@ -1105,6 +1114,13 @@ function createState(options = {}) {
     workOrders: new Map(),
     materialRequisitions: new Map(),
     productReceipts: new Map(),
+    productionPlans: new Map(),
+    reworkOrders: new Map(),
+    outsourcingOrders: new Map(),
+    traceRules: new Map(),
+    traceQueryRuns: new Map(),
+    lineSideWarehouseConfigs: new Map(),
+    lineSideMaterialMovements: new Map(),
     mockCostInputs: new Map(),
     costAllocations: new Map(),
     inventoryCostAdjustments: new Map(),
@@ -2571,6 +2587,228 @@ function listProductReceipts(state, accountSetId) {
   return [...state.productReceipts.values()]
     .filter((receipt) => receipt.accountSetId === accountSetId)
     .sort((left, right) => left.receiptNo.localeCompare(right.receiptNo));
+}
+
+function listByAccountSet(map, accountSetId, sortField) {
+  return [...map.values()]
+    .filter((row) => row.accountSetId === accountSetId)
+    .sort((left, right) => String(left[sortField] ?? left.id).localeCompare(String(right[sortField] ?? right.id)));
+}
+
+function collectionResponse(rows) {
+  return {
+    total: rows.length,
+    items: rows
+  };
+}
+
+function createProductionPlan(state, body, actorId) {
+  if (!Array.isArray(body.lines) || body.lines.length === 0) {
+    throw new Error("Production plan lines are required.");
+  }
+  const planId = body.id ?? `production-plan:${randomUUID()}`;
+  const lines = body.lines.map((line, index) => {
+    const plannedQuantity = Number(line.plannedQuantity);
+    if (!Number.isFinite(plannedQuantity) || plannedQuantity <= 0) {
+      throw new Error("Production plan line plannedQuantity must be greater than 0.");
+    }
+    return {
+      id: line.id ?? `production-plan-line:${planId}:${index + 1}`,
+      productionPlanId: planId,
+      lineNo: line.lineNo ?? index + 1,
+      productItemId: line.productItemId ?? null,
+      productItemCode: line.productItemCode,
+      productItemName: line.productItemName,
+      plannedQuantity,
+      plannedStartDate: line.plannedStartDate ?? null,
+      plannedFinishDate: line.plannedFinishDate ?? null,
+      status: line.status ?? "planned"
+    };
+  });
+  const plan = {
+    id: planId,
+    accountSetId: body.accountSetId,
+    planNo: body.planNo ?? `MPS-${state.productionPlans.size + 1}`,
+    fiscalYear: Number(body.fiscalYear),
+    periodNo: Number(body.periodNo),
+    status: body.status ?? "draft",
+    sourceType: body.sourceType ?? "manual",
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    updatedAt: "now",
+    lines
+  };
+  state.productionPlans.set(plan.id, plan);
+  appendAuditLog(state, { actorId: plan.createdBy, action: "production_plan.create", objectType: "production_plan", objectId: plan.id });
+  return plan;
+}
+
+function buildWorkOrderDraftsFromPlan(plan, body = {}) {
+  return {
+    productionPlanId: plan.id,
+    planNo: plan.planNo,
+    dryRun: body.dryRun !== false,
+    requestedBy: body.requestedBy ?? "system",
+    workOrderDrafts: plan.lines.map((line) => ({
+      documentType: "work_order_draft",
+      planLineId: line.id,
+      workOrderNo: `WO-${plan.planNo}-${String(line.lineNo).padStart(2, "0")}`,
+      productItemId: line.productItemId,
+      productItemCode: line.productItemCode,
+      productItemName: line.productItemName,
+      plannedQuantity: line.plannedQuantity,
+      plannedStartDate: line.plannedStartDate,
+      plannedFinishDate: line.plannedFinishDate,
+      fiscalYear: plan.fiscalYear,
+      periodNo: plan.periodNo,
+      status: "draft"
+    }))
+  };
+}
+
+function createReworkOrder(state, body, actorId) {
+  const quantity = Number(body.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new Error("Rework quantity must be greater than 0.");
+  }
+  const order = {
+    id: body.id ?? `rework-order:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    reworkNo: body.reworkNo ?? `RW-${state.reworkOrders.size + 1}`,
+    sourceWorkOrderId: body.sourceWorkOrderId ?? null,
+    sourceOrderNo: body.sourceOrderNo ?? null,
+    originalBatchNo: body.originalBatchNo ?? null,
+    itemCode: body.itemCode,
+    itemName: body.itemName,
+    quantity,
+    reasonCode: body.reasonCode ?? "manual",
+    status: body.status ?? "draft",
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now",
+    approvedBy: null,
+    approvedAt: null
+  };
+  state.reworkOrders.set(order.id, order);
+  appendAuditLog(state, { actorId: order.createdBy, action: "rework_order.create", objectType: "rework_order", objectId: order.id });
+  return order;
+}
+
+function createOutsourcingOrder(state, body, actorId) {
+  const quantity = Number(body.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new Error("Outsourcing quantity must be greater than 0.");
+  }
+  const order = {
+    id: body.id ?? `outsourcing-order:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    outsourcingNo: body.outsourcingNo ?? `OS-${state.outsourcingOrders.size + 1}`,
+    supplierId: body.supplierId ?? null,
+    supplierName: body.supplierName ?? null,
+    sourceWorkOrderId: body.sourceWorkOrderId ?? null,
+    itemCode: body.itemCode,
+    itemName: body.itemName,
+    quantity,
+    processName: body.processName ?? null,
+    status: body.status ?? "draft",
+    issuedQuantity: Number(body.issuedQuantity ?? 0),
+    receivedQuantity: Number(body.receivedQuantity ?? 0),
+    settledAmount: Number(body.settledAmount ?? 0),
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now"
+  };
+  state.outsourcingOrders.set(order.id, order);
+  appendAuditLog(state, { actorId: order.createdBy, action: "outsourcing_order.create", objectType: "outsourcing_order", objectId: order.id });
+  return order;
+}
+
+function createTraceRule(state, body, actorId) {
+  const rule = {
+    id: body.id ?? `trace-rule:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    code: body.code,
+    name: body.name,
+    objectType: body.objectType ?? "batch",
+    direction: body.direction ?? "both",
+    isEnabled: body.isEnabled !== false,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now"
+  };
+  state.traceRules.set(rule.id, rule);
+  appendAuditLog(state, { actorId: rule.createdBy, action: "trace_rule.create", objectType: "trace_rule", objectId: rule.id });
+  return rule;
+}
+
+function createTraceQueryRun(state, body, actorId) {
+  const rule = state.traceRules.get(body.ruleId);
+  if (!rule || rule.accountSetId !== body.accountSetId || rule.isEnabled === false) {
+    throw new Error("Trace rule was not found or is disabled.");
+  }
+  const run = {
+    id: body.id ?? `trace-query-run:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    ruleId: rule.id,
+    ruleCode: rule.code,
+    batchNo: body.batchNo,
+    direction: body.direction ?? rule.direction,
+    requestedBy: body.requestedBy ?? actorId,
+    createdAt: "now",
+    nodes: [
+      {
+        nodeType: "batch",
+        batchNo: body.batchNo,
+        objectType: rule.objectType,
+        direction: body.direction ?? rule.direction
+      }
+    ],
+    edges: []
+  };
+  state.traceQueryRuns.set(run.id, run);
+  appendAuditLog(state, { actorId: run.requestedBy, action: "trace_query.run", objectType: "trace_query_run", objectId: run.id });
+  return run;
+}
+
+function createLineSideWarehouseConfig(state, body, actorId) {
+  const config = {
+    id: body.id ?? `line-side-warehouse:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    code: body.code,
+    name: body.name,
+    productionLineCode: body.productionLineCode,
+    mainWarehouseCode: body.mainWarehouseCode,
+    isEnabled: body.isEnabled !== false,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now"
+  };
+  state.lineSideWarehouseConfigs.set(config.id, config);
+  appendAuditLog(state, { actorId: config.createdBy, action: "line_side_warehouse.create", objectType: "line_side_warehouse", objectId: config.id });
+  return config;
+}
+
+function createLineSideMaterialMovement(state, body, actorId) {
+  const config = state.lineSideWarehouseConfigs.get(body.lineSideWarehouseId);
+  if (!config || config.accountSetId !== body.accountSetId || config.isEnabled === false) {
+    throw new Error("Line-side warehouse was not found or is disabled.");
+  }
+  const quantity = Number(body.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new Error("Line-side movement quantity must be greater than 0.");
+  }
+  const movement = {
+    id: body.id ?? `line-side-material-movement:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    lineSideWarehouseId: config.id,
+    lineSideWarehouseCode: config.code,
+    movementType: body.movementType ?? "replenish",
+    workOrderId: body.workOrderId ?? null,
+    itemCode: body.itemCode,
+    itemName: body.itemName,
+    quantity,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: "now"
+  };
+  state.lineSideMaterialMovements.set(movement.id, movement);
+  appendAuditLog(state, { actorId: movement.createdBy, action: "line_side_material_movement.create", objectType: "line_side_material_movement", objectId: movement.id });
+  return movement;
 }
 
 function findBomByIdentifier(state, identifier) {
