@@ -341,3 +341,199 @@ test("Phase 4 inventory anomaly Agent classifies stock risks and proposes a coun
   assert.equal(response.body.result.dryRunResult.draftPayload.stockCountPlan.documentType, "stock_count_plan");
   assert.ok(response.body.result.dryRunResult.nextActions.includes("generate_stock_count_plan"));
 });
+
+test("Phase 4 material requisition Agent proposes work-order issue drafts and blocks shortages", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "SCREQ",
+      name: "Supply Chain Requisition Agent",
+      companyName: "Supply Chain Requisition Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 6
+    },
+    "agent-requisition-account"
+  );
+  const accountSetId = accountSet.body.id;
+  api.state.boms.set("bom:fg-req", {
+    id: "bom:fg-req",
+    accountSetId,
+    productItemId: "item:fg-req",
+    productItemCode: "FG-REQ",
+    productItemName: "Finished Requisition",
+    version: "V1",
+    yieldQuantity: 1,
+    status: "approved",
+    lines: [
+      {
+        id: "bom-line:mat-req",
+        bomId: "bom:fg-req",
+        componentItemId: "item:mat-req",
+        componentItemCode: "MAT-REQ",
+        componentItemName: "Material Requisition",
+        lineNo: 1,
+        quantity: 2,
+        scrapRate: 0
+      }
+    ]
+  });
+  api.state.workOrders.set("work-order:wo-req", {
+    id: "work-order:wo-req",
+    accountSetId,
+    workOrderNo: "WO-REQ",
+    productItemId: "item:fg-req",
+    productItemCode: "FG-REQ",
+    productItemName: "Finished Requisition",
+    bomId: "bom:fg-req",
+    plannedQuantity: 5,
+    status: "released",
+    fiscalYear: 2026,
+    periodNo: 6
+  });
+  api.state.inventoryBalances.set("balance:mat-req", {
+    id: "balance:mat-req",
+    accountSetId,
+    itemId: "item:mat-req",
+    itemCode: "MAT-REQ",
+    itemName: "Material Requisition",
+    warehouseCode: "MAIN",
+    quantity: 20,
+    lockedQuantity: 0,
+    amount: 100,
+    unitCost: 5
+  });
+
+  const enough = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_material_requisition/invoke",
+    { accountSetId, fiscalYear: 2026, periodNo: 6, dryRun: true, sourceObjectId: "work-order:wo-req", evidenceRefs: [] },
+    "agent-requisition-enough"
+  );
+  api.state.inventoryBalances.set("balance:mat-req", {
+    ...api.state.inventoryBalances.get("balance:mat-req"),
+    quantity: 4,
+    amount: 20
+  });
+  const shortage = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_material_requisition/invoke",
+    { accountSetId, fiscalYear: 2026, periodNo: 6, dryRun: true, sourceObjectId: "work-order:wo-req", evidenceRefs: [] },
+    "agent-requisition-shortage"
+  );
+
+  assert.equal(enough.status, 201);
+  assert.equal(enough.body.result.dryRunResult.draftPayload.materialRequisitionDraft.documentType, "material_requisition_draft");
+  assert.equal(enough.body.result.dryRunResult.draftPayload.materialRequisitionDraft.workOrderNo, "WO-REQ");
+  assert.equal(enough.body.result.dryRunResult.draftPayload.materialRequisitionDraft.lines[0].quantity, 10);
+  assert.deepEqual(enough.body.result.dryRunResult.blockingErrors, []);
+  assert.equal(shortage.status, 201);
+  assert.match(shortage.body.result.dryRunResult.blockingErrors.join(" / "), /库存不足|缺料/);
+});
+
+test("Phase 4 product receipt and cost Agents propose completion and costing dry-runs", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "SCCOST",
+      name: "Supply Chain Cost Agent",
+      companyName: "Supply Chain Cost Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 6
+    },
+    "agent-cost-account"
+  );
+  const accountSetId = accountSet.body.id;
+  api.state.boms.set("bom:fg-cost", {
+    id: "bom:fg-cost",
+    accountSetId,
+    productItemId: "item:fg-cost",
+    productItemCode: "FG-COST",
+    productItemName: "Finished Cost",
+    version: "V1",
+    yieldQuantity: 1,
+    status: "approved",
+    lines: [
+      {
+        id: "bom-line:mat-cost",
+        bomId: "bom:fg-cost",
+        componentItemId: "item:mat-cost",
+        componentItemCode: "MAT-COST",
+        componentItemName: "Material Cost",
+        lineNo: 1,
+        quantity: 2,
+        scrapRate: 0
+      }
+    ]
+  });
+  api.state.workOrders.set("work-order:wo-cost-agent", {
+    id: "work-order:wo-cost-agent",
+    accountSetId,
+    workOrderNo: "WO-COST-AGENT",
+    productItemId: "item:fg-cost",
+    productItemCode: "FG-COST",
+    productItemName: "Finished Cost",
+    bomId: "bom:fg-cost",
+    plannedQuantity: 4,
+    completedQuantity: 1,
+    status: "in_progress",
+    fiscalYear: 2026,
+    periodNo: 6
+  });
+  api.state.inventoryBalances.set("balance:mat-cost", {
+    id: "balance:mat-cost",
+    accountSetId,
+    itemId: "item:mat-cost",
+    itemCode: "MAT-COST",
+    itemName: "Material Cost",
+    warehouseCode: "MAIN",
+    quantity: 100,
+    lockedQuantity: 0,
+    amount: 500,
+    unitCost: 5
+  });
+
+  const receipt = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_product_receipt/invoke",
+    { accountSetId, fiscalYear: 2026, periodNo: 6, dryRun: true, sourceObjectId: "work-order:wo-cost-agent", evidenceRefs: [] },
+    "agent-product-receipt"
+  );
+  const cost = await request(
+    api,
+    "POST",
+    "/agent-tools/calculate_work_order_cost/invoke",
+    { accountSetId, fiscalYear: 2026, periodNo: 6, dryRun: true, sourceObjectId: "work-order:wo-cost-agent", evidenceRefs: [] },
+    "agent-work-order-cost"
+  );
+  const voucher = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_cost_voucher_draft/invoke",
+    { accountSetId, fiscalYear: 2026, periodNo: 6, dryRun: true, sourceObjectId: "work-order:wo-cost-agent", evidenceRefs: [] },
+    "agent-cost-voucher"
+  );
+
+  assert.equal(receipt.status, 201);
+  assert.equal(receipt.body.result.dryRunResult.draftPayload.productReceiptDraft.documentType, "product_receipt_draft");
+  assert.equal(receipt.body.result.dryRunResult.draftPayload.productReceiptDraft.quantity, 3);
+  assert.equal(cost.status, 201);
+  assert.equal(cost.body.result.dryRunResult.draftPayload.workOrderCostEstimate.totalMaterialCost, 40);
+  assert.equal(cost.body.result.dryRunResult.draftPayload.workOrderCostEstimate.estimatedUnitCost, 10);
+  assert.equal(voucher.status, 201);
+  assert.equal(voucher.body.result.riskLevel, "high");
+  assert.equal(voucher.body.result.dryRunResult.draftPayload.costVoucherDraftRecommendation.documentType, "cost_voucher_draft_recommendation");
+  assert.equal(voucher.body.result.dryRunResult.draftPayload.costVoucherDraftRecommendation.approvalRequired, true);
+});

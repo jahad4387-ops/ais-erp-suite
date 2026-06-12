@@ -9425,6 +9425,126 @@ function buildPurchaseSuggestionsFromShortages(materialShortages) {
   }));
 }
 
+function agentWorkOrdersForContext(state, accountSetId, fiscalYear, periodNo, sourceObjectId = null) {
+  const activeStatuses = new Set(["planned", "released", "in_progress"]);
+  const workOrders = rowsForAccountSet(state.workOrders, accountSetId).filter(
+    (workOrder) => activeStatuses.has(workOrder.status) && isInFiscalPeriod(workOrder, fiscalYear, periodNo)
+  );
+  if (!sourceObjectId) return workOrders;
+  const selected = workOrders.find((workOrder) => workOrder.id === sourceObjectId || workOrder.workOrderNo === sourceObjectId);
+  return selected ? [selected] : workOrders;
+}
+
+function bomMaterialLinesForWorkOrder(state, workOrder) {
+  const bom = state.boms.get(workOrder.bomId);
+  if (!bom) return [];
+  const yieldQuantity = Number(bom.yieldQuantity ?? 1) || 1;
+  return (bom.lines ?? []).map((line) => {
+    const grossQuantity = (Number(workOrder.plannedQuantity ?? 0) / yieldQuantity) * Number(line.quantity ?? 0);
+    const scrapRate = Number(line.scrapRate ?? 0);
+    return {
+      itemId: line.componentItemId,
+      itemCode: line.componentItemCode,
+      itemName: line.componentItemName,
+      quantity: roundQuantity(scrapRate > 0 && scrapRate < 1 ? grossQuantity / (1 - scrapRate) : grossQuantity)
+    };
+  });
+}
+
+function buildMaterialRequisitionDraft(state, accountSetId, fiscalYear, periodNo, sourceObjectId = null) {
+  const availability = inventoryAvailabilityByItem(state, accountSetId);
+  const workOrder = agentWorkOrdersForContext(state, accountSetId, fiscalYear, periodNo, sourceObjectId)[0] ?? null;
+  if (!workOrder) return null;
+  const lines = bomMaterialLinesForWorkOrder(state, workOrder).map((line, index) => {
+    const availableQuantity = availability.get(line.itemCode)?.availableQuantity ?? 0;
+    return {
+      lineNo: index + 1,
+      itemId: line.itemId,
+      itemCode: line.itemCode,
+      itemName: line.itemName,
+      quantity: line.quantity,
+      availableQuantity,
+      shortageQuantity: roundQuantity(Math.max(line.quantity - availableQuantity, 0))
+    };
+  });
+  return {
+    documentType: "material_requisition_draft",
+    workOrderId: workOrder.id,
+    workOrderNo: workOrder.workOrderNo,
+    productItemCode: workOrder.productItemCode,
+    status: "draft",
+    lines
+  };
+}
+
+function buildProductReceiptDraft(state, accountSetId, fiscalYear, periodNo, sourceObjectId = null) {
+  const workOrder = agentWorkOrdersForContext(state, accountSetId, fiscalYear, periodNo, sourceObjectId)[0] ?? null;
+  if (!workOrder) return null;
+  const quantity = roundQuantity(Math.max(Number(workOrder.plannedQuantity ?? 0) - Number(workOrder.completedQuantity ?? 0), 0));
+  return {
+    documentType: "product_receipt_draft",
+    workOrderId: workOrder.id,
+    workOrderNo: workOrder.workOrderNo,
+    productItemId: workOrder.productItemId,
+    productItemCode: workOrder.productItemCode,
+    itemName: workOrder.productItemName,
+    quantity,
+    status: "draft"
+  };
+}
+
+function unitCostForItem(state, accountSetId, itemCode) {
+  const balances = rowsForAccountSet(state.inventoryBalances, accountSetId).filter((balance) => balance.itemCode === itemCode);
+  const explicit = balances.find((balance) => Number(balance.unitCost ?? 0) > 0);
+  if (explicit) return Number(explicit.unitCost);
+  const quantity = balances.reduce((sum, balance) => sum + Number(balance.quantity ?? 0), 0);
+  const amount = balances.reduce((sum, balance) => sum + Number(balance.amount ?? 0), 0);
+  return quantity === 0 ? 0 : roundAmount(amount / quantity);
+}
+
+function buildWorkOrderCostEstimate(state, accountSetId, fiscalYear, periodNo, sourceObjectId = null) {
+  const workOrder = agentWorkOrdersForContext(state, accountSetId, fiscalYear, periodNo, sourceObjectId)[0] ?? null;
+  if (!workOrder) return null;
+  const materialLines = bomMaterialLinesForWorkOrder(state, workOrder).map((line) => {
+    const unitCost = unitCostForItem(state, accountSetId, line.itemCode);
+    return {
+      ...line,
+      unitCost,
+      amount: roundAmount(line.quantity * unitCost)
+    };
+  });
+  const totalMaterialCost = roundAmount(materialLines.reduce((sum, line) => sum + Number(line.amount ?? 0), 0));
+  const plannedQuantity = Number(workOrder.plannedQuantity ?? 0);
+  return {
+    workOrderId: workOrder.id,
+    workOrderNo: workOrder.workOrderNo,
+    productItemCode: workOrder.productItemCode,
+    plannedQuantity,
+    completedQuantity: Number(workOrder.completedQuantity ?? 0),
+    totalMaterialCost,
+    estimatedUnitCost: plannedQuantity === 0 ? 0 : roundAmount(totalMaterialCost / plannedQuantity),
+    materialLines
+  };
+}
+
+function buildCostVoucherDraftRecommendation(workOrderCostEstimate) {
+  if (!workOrderCostEstimate) return null;
+  return {
+    documentType: "cost_voucher_draft_recommendation",
+    approvalRequired: true,
+    sourceObjectType: "work_order",
+    sourceObjectId: workOrderCostEstimate.workOrderId,
+    workOrderNo: workOrderCostEstimate.workOrderNo,
+    estimatedAmount: workOrderCostEstimate.totalMaterialCost,
+    lines: [
+      {
+        summary: `结转工单 ${workOrderCostEstimate.workOrderNo} 生产成本`,
+        amount: workOrderCostEstimate.totalMaterialCost
+      }
+    ]
+  };
+}
+
 function supplyChainNextActions(toolName, dashboard, context = {}) {
   const materialShortageCount = context.materialShortages?.length ?? dashboard.summary.materialShortages.count;
   const inventoryExceptionCount = context.inventoryAnomalies?.length ?? dashboard.summary.inventoryExceptions.count;
@@ -9464,11 +9584,18 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
   const inventoryAnomalies = buildInventoryAnomalyAnalysis(state, body.accountSetId);
   const inventoryExceptions = inventoryAnomalies.length > 0 ? inventoryAnomalies : dashboard.queues.inventoryExceptions;
   const purchaseSuggestions = buildPurchaseSuggestionsFromShortages(materialShortages);
+  const materialRequisitionDraft = buildMaterialRequisitionDraft(state, body.accountSetId, body.fiscalYear, body.periodNo, body.sourceObjectId);
+  const productReceiptDraft = buildProductReceiptDraft(state, body.accountSetId, body.fiscalYear, body.periodNo, body.sourceObjectId);
+  const workOrderCostEstimate = buildWorkOrderCostEstimate(state, body.accountSetId, body.fiscalYear, body.periodNo, body.sourceObjectId);
+  const costVoucherDraftRecommendation = buildCostVoucherDraftRecommendation(workOrderCostEstimate);
   const pendingOrders = dashboard.queues.pendingOrders;
   const warnings = dashboard.agentSuggestions.map((suggestion) => suggestion.message);
   const blockingErrors = [];
   if (tool.name === "generate_material_requisition" && materialShortages.length > 0) {
     blockingErrors.push("存在缺料或负库存，正式领料草稿必须先完成人工复核。");
+  }
+  if (tool.name === "generate_material_requisition" && materialRequisitionDraft?.lines?.some((line) => line.shortageQuantity > 0)) {
+    blockingErrors.push("库存不足，领料草稿只能停留在 dry-run 建议。");
   }
   if (tool.name === "generate_cost_voucher_draft" && dashboard.summary.costPending.count > 0) {
     warnings.push("存在未锁定或待处理成本，成本凭证只能作为高风险 dry-run 建议。");
@@ -9488,6 +9615,10 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
       dashboardSummary: dashboard.summary,
       materialShortages,
       purchaseSuggestions,
+      materialRequisitionDraft,
+      productReceiptDraft,
+      workOrderCostEstimate,
+      costVoucherDraftRecommendation,
       inventoryExceptions,
       inventoryAnomalies,
       stockCountPlan: {
