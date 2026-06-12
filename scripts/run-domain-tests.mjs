@@ -63,3 +63,4 @@ import "../apps/web/tests/moduleChineseLocalization.test.mjs";
 import "../apps/web/tests/supplyChainDashboardPage.test.mjs";
 import "../apps/web/tests/advancedManufacturingPages.test.mjs";
 import "../apps/web/tests/businessFinanceWorkbenchPage.test.mjs";
+import "../docs/tests/phase7AcceptanceHardening.test.mjs";
