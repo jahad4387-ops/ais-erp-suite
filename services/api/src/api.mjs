@@ -7302,6 +7302,11 @@ async function invokeRegisteredAgentTool(state, toolName, body, actorId) {
       toolName: tool.name,
       dryRun: true,
       evidenceRefs: body.evidenceRefs ?? [],
+      fiscalYear: body.fiscalYear,
+      periodNo: body.periodNo,
+      asOfDate: body.asOfDate,
+      sourceObjectType: body.sourceObjectType,
+      sourceObjectId: body.sourceObjectId,
       payload: body.payload ?? {},
       requestedBy: body.requestedBy ?? actorId
     },
@@ -9278,9 +9283,151 @@ function genericAgentActionDryRunResult(tool) {
   };
 }
 
-function supplyChainNextActions(toolName, dashboard) {
-  const materialShortageCount = dashboard.summary.materialShortages.count;
-  const inventoryExceptionCount = dashboard.summary.inventoryExceptions.count;
+function inventoryAvailableQuantity(balance) {
+  return roundQuantity(Number(balance.quantity ?? 0) - Number(balance.lockedQuantity ?? 0));
+}
+
+function inventoryAvailabilityByItem(state, accountSetId) {
+  const availability = new Map();
+  for (const balance of rowsForAccountSet(state.inventoryBalances, accountSetId)) {
+    const itemCode = balance.itemCode;
+    if (!itemCode) continue;
+    const existing = availability.get(itemCode) ?? {
+      itemId: balance.itemId ?? null,
+      itemCode,
+      itemName: balance.itemName ?? itemCode,
+      availableQuantity: 0,
+      balances: []
+    };
+    existing.availableQuantity = roundQuantity(existing.availableQuantity + inventoryAvailableQuantity(balance));
+    existing.balances.push(balance);
+    availability.set(itemCode, existing);
+  }
+  return availability;
+}
+
+function workOrderMaterialDemandRows(state, accountSetId, fiscalYear, periodNo) {
+  const demandRows = [];
+  const activeStatuses = new Set(["planned", "released", "in_progress"]);
+  const workOrders = rowsForAccountSet(state.workOrders, accountSetId).filter(
+    (workOrder) => activeStatuses.has(workOrder.status) && isInFiscalPeriod(workOrder, fiscalYear, periodNo)
+  );
+  for (const workOrder of workOrders) {
+    const bom = state.boms.get(workOrder.bomId);
+    if (!bom || bom.accountSetId !== accountSetId) continue;
+    const yieldQuantity = Number(bom.yieldQuantity ?? 1) || 1;
+    for (const line of bom.lines ?? []) {
+      const grossQuantity = (Number(workOrder.plannedQuantity ?? 0) / yieldQuantity) * Number(line.quantity ?? 0);
+      const scrapRate = Number(line.scrapRate ?? 0);
+      const requiredQuantity = roundQuantity(scrapRate > 0 && scrapRate < 1 ? grossQuantity / (1 - scrapRate) : grossQuantity);
+      demandRows.push({
+        itemId: line.componentItemId,
+        itemCode: line.componentItemCode,
+        itemName: line.componentItemName,
+        requiredQuantity,
+        demandSource: {
+          sourceType: "work_order",
+          workOrderId: workOrder.id,
+          workOrderNo: workOrder.workOrderNo,
+          productItemCode: workOrder.productItemCode,
+          plannedQuantity: workOrder.plannedQuantity
+        }
+      });
+    }
+  }
+  return demandRows;
+}
+
+function buildMaterialShortageAnalysis(state, accountSetId, fiscalYear, periodNo) {
+  const availability = inventoryAvailabilityByItem(state, accountSetId);
+  const shortageByItem = new Map();
+  for (const demand of workOrderMaterialDemandRows(state, accountSetId, fiscalYear, periodNo)) {
+    const existing = shortageByItem.get(demand.itemCode) ?? {
+      itemId: demand.itemId,
+      itemCode: demand.itemCode,
+      itemName: demand.itemName,
+      requiredQuantity: 0,
+      availableQuantity: availability.get(demand.itemCode)?.availableQuantity ?? 0,
+      shortageQuantity: 0,
+      reasonCode: "work_order_bom_demand",
+      demandSources: []
+    };
+    existing.requiredQuantity = roundQuantity(existing.requiredQuantity + demand.requiredQuantity);
+    existing.demandSources.push(demand.demandSource);
+    shortageByItem.set(demand.itemCode, existing);
+  }
+
+  for (const shortage of shortageByItem.values()) {
+    shortage.shortageQuantity = roundQuantity(Math.max(shortage.requiredQuantity - shortage.availableQuantity, 0));
+  }
+
+  for (const balance of rowsForAccountSet(state.inventoryBalances, accountSetId)) {
+    const availableQuantity = inventoryAvailableQuantity(balance);
+    if (availableQuantity >= 0) continue;
+    const existing = shortageByItem.get(balance.itemCode);
+    if (existing) {
+      existing.availableQuantity = Math.min(existing.availableQuantity, availableQuantity);
+      existing.shortageQuantity = roundQuantity(Math.max(existing.shortageQuantity, Math.abs(availableQuantity)));
+      existing.reasonCode = "work_order_or_negative_inventory";
+      continue;
+    }
+    shortageByItem.set(balance.itemCode, {
+      itemId: balance.itemId ?? null,
+      itemCode: balance.itemCode,
+      itemName: balance.itemName ?? balance.itemCode,
+      requiredQuantity: 0,
+      availableQuantity,
+      shortageQuantity: roundQuantity(Math.abs(availableQuantity)),
+      reasonCode: "negative_inventory",
+      demandSources: []
+    });
+  }
+
+  return [...shortageByItem.values()]
+    .filter((shortage) => shortage.shortageQuantity > 0)
+    .sort((left, right) => right.shortageQuantity - left.shortageQuantity || left.itemCode.localeCompare(right.itemCode));
+}
+
+function buildInventoryAnomalyAnalysis(state, accountSetId) {
+  const anomalies = [];
+  for (const balance of rowsForAccountSet(state.inventoryBalances, accountSetId)) {
+    const quantity = Number(balance.quantity ?? 0);
+    const lockedQuantity = Number(balance.lockedQuantity ?? 0);
+    const amount = Number(balance.amount ?? 0);
+    if (quantity < 0) {
+      anomalies.push({ ...balance, anomalyType: "negative_stock", severity: "high", recommendedAction: "review_stock_movement_chain" });
+    }
+    if (lockedQuantity > quantity) {
+      anomalies.push({ ...balance, anomalyType: "locked_over_available", severity: "medium", recommendedAction: "release_or_correct_lock" });
+    }
+    if (quantity === 0 && amount !== 0) {
+      anomalies.push({ ...balance, anomalyType: "zero_quantity_amount_residual", severity: "medium", recommendedAction: "run_cost_reconciliation" });
+    }
+    if (amount < 0) {
+      anomalies.push({ ...balance, anomalyType: "negative_inventory_value", severity: "medium", recommendedAction: "review_cost_layer" });
+    }
+  }
+  return anomalies;
+}
+
+function buildPurchaseSuggestionsFromShortages(materialShortages) {
+  return materialShortages.map((shortage) => ({
+    documentType: "purchase_suggestion",
+    itemId: shortage.itemId ?? null,
+    itemCode: shortage.itemCode,
+    itemName: shortage.itemName,
+    suggestedQuantity: shortage.shortageQuantity,
+    reasonCode: "material_shortage",
+    sourceDemandQuantity: shortage.requiredQuantity,
+    availableQuantity: shortage.availableQuantity,
+    demandSources: shortage.demandSources,
+    requiresHumanConfirmation: true
+  }));
+}
+
+function supplyChainNextActions(toolName, dashboard, context = {}) {
+  const materialShortageCount = context.materialShortages?.length ?? dashboard.summary.materialShortages.count;
+  const inventoryExceptionCount = context.inventoryAnomalies?.length ?? dashboard.summary.inventoryExceptions.count;
   const pendingOrderCount = dashboard.summary.pendingOrders.count;
   const costPendingCount = dashboard.summary.costPending.count;
   const byTool = {
@@ -9313,8 +9460,10 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
     periodNo: body.periodNo,
     asOfDate
   });
-  const materialShortages = dashboard.queues.inventoryExceptions.filter((balance) => Number(balance.quantity ?? 0) < 0);
-  const inventoryExceptions = dashboard.queues.inventoryExceptions;
+  const materialShortages = buildMaterialShortageAnalysis(state, body.accountSetId, body.fiscalYear, body.periodNo);
+  const inventoryAnomalies = buildInventoryAnomalyAnalysis(state, body.accountSetId);
+  const inventoryExceptions = inventoryAnomalies.length > 0 ? inventoryAnomalies : dashboard.queues.inventoryExceptions;
+  const purchaseSuggestions = buildPurchaseSuggestionsFromShortages(materialShortages);
   const pendingOrders = dashboard.queues.pendingOrders;
   const warnings = dashboard.agentSuggestions.map((suggestion) => suggestion.message);
   const blockingErrors = [];
@@ -9338,7 +9487,20 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
     draftPayload: {
       dashboardSummary: dashboard.summary,
       materialShortages,
+      purchaseSuggestions,
       inventoryExceptions,
+      inventoryAnomalies,
+      stockCountPlan: {
+        documentType: "stock_count_plan",
+        reasonCode: "inventory_anomaly",
+        lines: inventoryAnomalies.map((anomaly) => ({
+          itemCode: anomaly.itemCode,
+          itemName: anomaly.itemName,
+          warehouseCode: anomaly.warehouseCode,
+          anomalyType: anomaly.anomalyType,
+          severity: anomaly.severity
+        }))
+      },
       pendingOrders,
       pendingAgentApprovals: dashboard.queues.pendingAgentApprovals,
       workOrderProgress: dashboard.workOrderProgress,
@@ -9351,7 +9513,7 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
     matchedMasterData: [],
     unmatchedItems: [],
     evidenceRefs: body.evidenceRefs ?? [],
-    nextActions: supplyChainNextActions(tool.name, dashboard)
+    nextActions: supplyChainNextActions(tool.name, dashboard, { materialShortages, inventoryAnomalies })
   };
 }
 
