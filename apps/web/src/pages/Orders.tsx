@@ -4,6 +4,7 @@ import { MinusCircleOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/i
 import { api } from '../api';
 import { useAppContext } from '../context/AppContext';
 import { zhActor, zhStatus } from '../i18n';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 
 type OrderType = 'purchase' | 'sales';
 type OrderStatus = 'draft' | 'submitted' | 'approved' | 'closed';
@@ -159,6 +160,13 @@ export const Orders: React.FC<{ orderType: OrderType }> = ({ orderType }) => {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center' }}>
         <h2 style={{ margin: 0 }}>{title}</h2>
         <Space wrap>
+          <AgentDraftEntryButton
+            draftType={orderType === 'purchase' ? 'purchase_order' : 'sales_order'}
+            sourceObjectType={`${orderType}_order_page`}
+            userInstruction={`根据上传附件或当前业务描述生成${title}候选草稿`}
+          >
+            Agent 生成订单草稿
+          </AgentDraftEntryButton>
           <Select
             allowClear
             placeholder="状态"
@@ -231,9 +239,18 @@ export const Orders: React.FC<{ orderType: OrderType }> = ({ orderType }) => {
           { title: '制单人', dataIndex: 'createdBy', width: 120, render: (value: string) => zhActor(value) },
           {
             title: '操作',
-            width: 170,
+            width: 260,
             render: (_: unknown, record: Order) => (
               <Space>
+                <AgentDraftEntryButton
+                  size="small"
+                  draftType={orderType === 'purchase' ? 'purchase_order' : 'sales_order'}
+                  sourceObjectType={`${orderType}_order`}
+                  sourceObjectId={record.id}
+                  userInstruction={`根据 ${record.orderNo} 生成${title}候选草稿`}
+                >
+                  Agent
+                </AgentDraftEntryButton>
                 <Button size="small" disabled={record.status !== 'draft'} onClick={() => runWorkflowAction(record, 'submit')}>
                   提交
                 </Button>

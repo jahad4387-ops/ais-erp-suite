@@ -21,6 +21,6 @@ test("Phase 5 report approval page wires review, cash-flow exceptions, and appro
   assert.match(source, /api\.post\(`\/report-runs\/\$\{values\.reportRunId\}\/submit-review`/);
   assert.match(source, /api\.post\(`\/report-approvals\/\$\{record\.id\}\/approve`/);
   assert.match(source, /未分配异常现金流/);
-  assert.match(source, /Approve \+ Lock/);
+  assert.match(source, /审批并锁定/);
   assert.match(source, /exceptionCount/);
 });

@@ -11,6 +11,18 @@ type Phase4CostPoolOption = Phase4CostPool & { sourceType: 'phase4_payroll_cost_
 type AllocationLine = { id: string; sourceType: string; costType: string; allocatedAmount: number };
 type Allocation = { id: string; dryRun: boolean; totalAllocatedAmount: number; warningCodes: string[]; lines: AllocationLine[] };
 
+const sourceTypeLabel: Record<string, string> = {
+  phase3_mock_cost_input: '模拟成本',
+  phase4_payroll_cost_pool: '薪资成本池',
+  phase4_depreciation_cost_pool: '折旧成本池',
+};
+
+const costTypeLabel: Record<string, string> = {
+  direct_labor: '直接人工',
+  depreciation: '折旧',
+  manufacturing_overhead: '制造费用',
+};
+
 export const CostAllocations: React.FC = () => {
   const [form] = Form.useForm();
   const { currentAccountSetId, currentPeriod, currentUser, currentYear } = useAppContext();
@@ -64,53 +76,53 @@ export const CostAllocations: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Cost Allocations</h2>
+        <h2 style={{ margin: 0 }}>成本分摊</h2>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={fetchData}>Refresh</Button>
-          <Button icon={<CalculatorOutlined />} onClick={dryRun}>Dry run</Button>
-          <Button type="primary" icon={<CheckOutlined />} onClick={commit}>Commit</Button>
+          <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
+          <Button icon={<CalculatorOutlined />} onClick={dryRun}>试算</Button>
+          <Button type="primary" icon={<CheckOutlined />} onClick={commit}>提交</Button>
         </Space>
       </div>
       <Alert
         style={{ marginBottom: 16 }}
         type="info"
         showIcon
-        description="Formal Phase 4 payroll and fixed asset depreciation cost pools can now be selected for month-end production costing."
+        description="月末生产成本分摊可选择薪资成本池、折旧成本池和模拟成本输入。"
       />
       <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
         <Form.Item name="workOrderId" rules={[{ required: true }]}>
-          <Select style={{ width: 220 }} placeholder="Work order" options={workOrders.map((row) => ({ value: row.id, label: row.workOrderNo }))} />
+          <Select style={{ width: 220 }} placeholder="工单" options={workOrders.map((row) => ({ value: row.id, label: row.workOrderNo }))} />
         </Form.Item>
         <Form.Item name="costInputIds">
           <Select
             mode="multiple"
             style={{ width: 320 }}
-            placeholder="Phase 3 self-test inputs"
-            options={inputs.map((input) => ({ value: input.id, label: `${input.workOrderNo} ${input.costType} ${input.amount}` }))}
+            placeholder="模拟成本输入"
+            options={inputs.map((input) => ({ value: input.id, label: `${input.workOrderNo} ${costTypeLabel[input.costType] ?? input.costType} ${input.amount}` }))}
           />
         </Form.Item>
         <Form.Item name="phase4CostPoolIds">
           <Select
             mode="multiple"
             style={{ width: 420 }}
-            placeholder="Phase 4 cost pools"
+            placeholder="正式成本池"
             options={phase4CostPools.map((pool) => ({
               value: pool.id,
-              label: `${pool.sourceType} ${pool.costType} ${pool.amount}`,
+              label: `${sourceTypeLabel[pool.sourceType] ?? pool.sourceType} ${costTypeLabel[pool.costType] ?? pool.costType} ${pool.amount}`,
             }))}
           />
         </Form.Item>
-        <Form.Item name="fiscalYear" rules={[{ required: true }]}><InputNumber placeholder="Year" /></Form.Item>
-        <Form.Item name="periodNo" rules={[{ required: true }]}><InputNumber min={1} max={12} placeholder="Period" /></Form.Item>
+        <Form.Item name="fiscalYear" rules={[{ required: true }]}><InputNumber placeholder="年度" /></Form.Item>
+        <Form.Item name="periodNo" rules={[{ required: true }]}><InputNumber min={1} max={12} placeholder="期间" /></Form.Item>
       </Form>
       <Table
         rowKey="id"
         dataSource={allocation?.lines ?? []}
-        title={() => `Allocated amount: ${allocation?.totalAllocatedAmount ?? 0}`}
+        title={() => `已分摊金额：${allocation?.totalAllocatedAmount ?? 0}`}
         columns={[
-          { title: 'Source', dataIndex: 'sourceType', render: (sourceType) => <Tag>{sourceType}</Tag> },
-          { title: 'Cost type', dataIndex: 'costType' },
-          { title: 'Allocated', dataIndex: 'allocatedAmount' },
+          { title: '来源', dataIndex: 'sourceType', render: (sourceType) => <Tag>{sourceTypeLabel[sourceType] ?? sourceType}</Tag> },
+          { title: '成本类型', render: (_, row) => costTypeLabel[row.costType] ?? row.costType },
+          { title: '分摊金额', dataIndex: 'allocatedAmount' },
         ]}
       />
     </div>

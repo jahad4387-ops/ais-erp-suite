@@ -62,13 +62,13 @@ export const Warehouses: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, gap: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Warehouses</h2>
+        <h2 style={{ margin: 0 }}>仓库档案</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchWarehouses}>
-            Refresh
+            刷新
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
-            New
+            新增
           </Button>
         </Space>
       </div>
@@ -77,11 +77,11 @@ export const Warehouses: React.FC = () => {
         loading={loading}
         dataSource={warehouses}
         columns={[
-          { title: 'Code', dataIndex: 'code', width: 140 },
-          { title: 'Name', dataIndex: 'name' },
-          { title: 'Manager', dataIndex: 'manager', width: 160 },
-          { title: 'Locations', width: 120, render: (_: unknown, record: Warehouse) => record.locations?.length ?? 0 },
-          { title: 'Status', dataIndex: 'isEnabled', width: 100, render: (value: boolean) => <Tag color={value === false ? 'default' : 'green'}>{value === false ? 'Disabled' : 'Enabled'}</Tag> },
+          { title: '编码', dataIndex: 'code', width: 140 },
+          { title: '名称', dataIndex: 'name' },
+          { title: '负责人', dataIndex: 'manager', width: 160 },
+          { title: '货位数', width: 120, render: (_: unknown, record: Warehouse) => record.locations?.length ?? 0 },
+          { title: '状态', dataIndex: 'isEnabled', width: 100, render: (value: boolean) => <Tag color={value === false ? 'default' : 'green'}>{value === false ? '停用' : '启用'}</Tag> },
         ]}
         expandable={{
           expandedRowRender: (record) => (
@@ -91,32 +91,32 @@ export const Warehouses: React.FC = () => {
               pagination={false}
               dataSource={record.locations}
               columns={[
-                { title: 'Location code', dataIndex: 'code' },
-                { title: 'Location name', dataIndex: 'name' },
-                { title: 'Capacity', dataIndex: 'capacity' },
+                { title: '货位编码', dataIndex: 'code' },
+                { title: '货位名称', dataIndex: 'name' },
+                { title: '容量', dataIndex: 'capacity' },
               ]}
             />
           ),
         }}
       />
-      <Modal title="New warehouse" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
-        <Form form={form} layout="vertical" initialValues={{ locationCode: 'A-01', locationName: 'Aisle A Bin 01' }}>
-          <Form.Item name="code" label="Code" rules={[{ required: true }]}>
+      <Modal title="新增仓库" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} okText="确定" cancelText="取消">
+        <Form form={form} layout="vertical" initialValues={{ locationCode: 'A-01', locationName: 'A区01货位' }}>
+          <Form.Item name="code" label="编码" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+          <Form.Item name="name" label="名称" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="manager" label="Manager">
+          <Form.Item name="manager" label="负责人">
             <Input />
           </Form.Item>
-          <Form.Item name="locationCode" label="First location code" rules={[{ required: true }]}>
+          <Form.Item name="locationCode" label="首个货位编码" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="locationName" label="First location name" rules={[{ required: true }]}>
+          <Form.Item name="locationName" label="首个货位名称" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="capacity" label="Capacity">
+          <Form.Item name="capacity" label="容量">
             <InputNumber min={0} precision={2} style={{ width: '100%' }} />
           </Form.Item>
         </Form>

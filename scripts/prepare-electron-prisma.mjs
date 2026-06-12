@@ -1,10 +1,21 @@
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const databaseSchemaPath = join(workspaceRoot, "packages", "database", "prisma", "schema.prisma");
+
+function generatePrismaClient() {
+  const npmCommand = process.platform === "win32" ? "cmd" : "npm";
+  const args =
+    process.platform === "win32"
+      ? ["/c", "npx", "prisma", "generate", "--schema", databaseSchemaPath]
+      : ["exec", "prisma", "generate", "--", "--schema", databaseSchemaPath];
+  execFileSync(npmCommand, args, { cwd: workspaceRoot, stdio: "inherit" });
+}
 
 function resolvePrismaClientDir() {
   const prismaClientEntry = require.resolve("@prisma/client", {
@@ -28,6 +39,8 @@ function resolveGeneratedClientDir(prismaClientDir) {
     `Prisma generated client was not found. Tried ${pnpmGeneratedDir} and ${rootGeneratedDir}. Run prisma generate first.`
   );
 }
+
+generatePrismaClient();
 
 const prismaClientDir = resolvePrismaClientDir();
 const sourceDir = resolveGeneratedClientDir(prismaClientDir);

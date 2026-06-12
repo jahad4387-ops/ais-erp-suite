@@ -3,6 +3,7 @@ import { Button, Form, Input, InputNumber, Select, Space, Table, message } from 
 import { CalculatorOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useAppContext } from '../context/AppContext';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 
 type OptionRow = { id: string; code: string; name: string };
 type StockCountLine = {
@@ -69,33 +70,40 @@ export const StockCounts: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Stock Counts</h2>
+        <h2 style={{ margin: 0 }}>存货盘点</h2>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={fetchMasters}>Refresh</Button>
-          <Button type="primary" icon={<CalculatorOutlined />} onClick={preview}>Preview</Button>
+          <AgentDraftEntryButton
+            draftType="stock_count"
+            sourceObjectType="stock_count_page"
+            userInstruction="根据盘点表、仓库库位和上传附件生成盘点候选草稿"
+          >
+            Agent 生成盘点草稿
+          </AgentDraftEntryButton>
+          <Button icon={<ReloadOutlined />} onClick={fetchMasters}>刷新</Button>
+          <Button type="primary" icon={<CalculatorOutlined />} onClick={preview}>预览</Button>
         </Space>
       </div>
       <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
         <Form.Item name="countNo" rules={[{ required: true }]}>
-          <Input placeholder="Count no." />
+          <Input placeholder="盘点单号" />
         </Form.Item>
         <Form.Item name="itemId" rules={[{ required: true }]}>
-          <Select style={{ width: 220 }} placeholder="Item" options={items.map((item) => ({ value: item.id, label: `${item.code} ${item.name}` }))} />
+          <Select style={{ width: 220 }} placeholder="存货" options={items.map((item) => ({ value: item.id, label: `${item.code} ${item.name}` }))} />
         </Form.Item>
         <Form.Item name="warehouseId" rules={[{ required: true }]}>
-          <Select style={{ width: 220 }} placeholder="Warehouse" options={warehouses.map((warehouse) => ({ value: warehouse.id, label: `${warehouse.code} ${warehouse.name}` }))} />
+          <Select style={{ width: 220 }} placeholder="仓库" options={warehouses.map((warehouse) => ({ value: warehouse.id, label: `${warehouse.code} ${warehouse.name}` }))} />
         </Form.Item>
         <Form.Item name="batchNo">
-          <Input placeholder="Batch" />
+          <Input placeholder="批次" />
         </Form.Item>
         <Form.Item name="actualQuantity" rules={[{ required: true }]}>
-          <InputNumber min={0} placeholder="Actual" />
+          <InputNumber min={0} placeholder="实盘数量" />
         </Form.Item>
         <Form.Item name="fiscalYear" rules={[{ required: true }]}>
-          <InputNumber placeholder="Year" />
+          <InputNumber placeholder="年度" />
         </Form.Item>
         <Form.Item name="periodNo" rules={[{ required: true }]}>
-          <InputNumber min={1} max={12} placeholder="Period" />
+          <InputNumber min={1} max={12} placeholder="期间" />
         </Form.Item>
       </Form>
       <Table
@@ -103,13 +111,13 @@ export const StockCounts: React.FC = () => {
         loading={loading}
         dataSource={lines}
         columns={[
-          { title: 'Item', dataIndex: 'itemCode' },
-          { title: 'Warehouse', dataIndex: 'warehouseCode' },
-          { title: 'Batch', dataIndex: 'batchNo' },
-          { title: 'Book', dataIndex: 'bookQuantity' },
-          { title: 'Actual', dataIndex: 'actualQuantity' },
-          { title: 'differenceQuantity', dataIndex: 'differenceQuantity' },
-          { title: 'Adjustment', dataIndex: 'adjustmentAmount' },
+          { title: '存货', dataIndex: 'itemCode' },
+          { title: '仓库', dataIndex: 'warehouseCode' },
+          { title: '批次', dataIndex: 'batchNo' },
+          { title: '账面数量', dataIndex: 'bookQuantity' },
+          { title: '实盘数量', dataIndex: 'actualQuantity' },
+          { title: '差异数量', dataIndex: 'differenceQuantity' },
+          { title: '调整金额', dataIndex: 'adjustmentAmount' },
         ]}
       />
     </div>

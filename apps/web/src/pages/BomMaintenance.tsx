@@ -15,6 +15,11 @@ type Bom = {
   lines: Array<{ componentItemCode?: string; componentItemName?: string; quantity: number; scrapRate: number }>;
 };
 
+const statusLabel: Record<string, string> = {
+  active: '启用',
+  inactive: '停用',
+};
+
 export const BomMaintenance: React.FC = () => {
   const [form] = Form.useForm();
   const { currentAccountSetId, currentUser } = useAppContext();
@@ -71,13 +76,13 @@ export const BomMaintenance: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, gap: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>BOM Maintenance</h2>
+        <h2 style={{ margin: 0 }}>BOM 维护</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchData}>
-            Refresh
+            刷新
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
-            New
+            新增
           </Button>
         </Space>
       </div>
@@ -86,31 +91,31 @@ export const BomMaintenance: React.FC = () => {
         loading={loading}
         dataSource={boms}
         columns={[
-          { title: 'Product', render: (_: unknown, record: Bom) => `${record.productItemCode ?? ''} ${record.productItemName ?? ''}` },
-          { title: 'Version', dataIndex: 'version', width: 110 },
-          { title: 'Status', dataIndex: 'status', width: 110 },
-          { title: 'Yield', dataIndex: 'yieldQuantity', width: 100 },
-          { title: 'Lines', width: 120, render: (_: unknown, record: Bom) => record.lines?.length ?? 0 },
+          { title: '产品', render: (_: unknown, record: Bom) => `${record.productItemCode ?? ''} ${record.productItemName ?? ''}` },
+          { title: '版本', dataIndex: 'version', width: 110 },
+          { title: '状态', render: (_: unknown, record: Bom) => statusLabel[record.status] ?? record.status, width: 110 },
+          { title: '产出数量', dataIndex: 'yieldQuantity', width: 100 },
+          { title: '明细行', width: 120, render: (_: unknown, record: Bom) => record.lines?.length ?? 0 },
         ]}
       />
-      <Modal title="New BOM" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
+      <Modal title="新增 BOM" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} okText="确定" cancelText="取消">
         <Form form={form} layout="vertical" initialValues={{ version: 'V1', yieldQuantity: 1, quantity: 1, scrapRate: 0 }}>
-          <Form.Item name="productItemId" label="Manufactured product" rules={[{ required: true }]}>
+          <Form.Item name="productItemId" label="产成品" rules={[{ required: true }]}>
             <Select options={items.filter((item) => item.isManufactured).map((item) => ({ value: item.id, label: `${item.code} ${item.name}` }))} />
           </Form.Item>
-          <Form.Item name="componentItemId" label="Component" rules={[{ required: true }]}>
+          <Form.Item name="componentItemId" label="组件物料" rules={[{ required: true }]}>
             <Select options={items.map((item) => ({ value: item.id, label: `${item.code} ${item.name}` }))} />
           </Form.Item>
-          <Form.Item name="version" label="Version" rules={[{ required: true }]}>
+          <Form.Item name="version" label="版本" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="yieldQuantity" label="Yield quantity">
+          <Form.Item name="yieldQuantity" label="产出数量">
             <InputNumber min={0.000001} precision={6} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="quantity" label="Component quantity">
+          <Form.Item name="quantity" label="组件用量">
             <InputNumber min={0.000001} precision={6} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="scrapRate" label="Scrap rate">
+          <Form.Item name="scrapRate" label="损耗率">
             <InputNumber min={0} max={0.99} step={0.01} precision={4} style={{ width: '100%' }} />
           </Form.Item>
         </Form>

@@ -83,52 +83,52 @@ export const InventoryOpeningBalances: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, gap: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Inventory Opening Balances</h2>
+        <h2 style={{ margin: 0 }}>存货期初余额</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchData}>
-            Refresh
+            刷新
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
-            New
+            新增
           </Button>
         </Space>
       </div>
       <div style={{ display: 'flex', gap: 24, marginBottom: 16, padding: '12px 0', borderTop: '1px solid #f0f0f0', borderBottom: '1px solid #f0f0f0' }}>
-        <Statistic title="Opening quantity" value={trial?.totalQuantity ?? 0} precision={2} />
-        <Statistic title="Opening amount" value={trial?.totalAmount ?? 0} precision={2} />
+        <Statistic title="期初数量" value={trial?.totalQuantity ?? 0} precision={2} />
+        <Statistic title="期初金额" value={trial?.totalAmount ?? 0} precision={2} />
       </div>
       <Table
         rowKey="id"
         loading={loading}
         dataSource={balances}
         columns={[
-          { title: 'Item', render: (_: unknown, record: OpeningBalance) => `${record.itemCode ?? ''} ${record.itemName ?? ''}` },
-          { title: 'Warehouse', dataIndex: 'warehouseCode', width: 130 },
-          { title: 'Location', dataIndex: 'locationCode', width: 130 },
-          { title: 'Batch', dataIndex: 'batchNo', width: 150 },
-          { title: 'Quantity', dataIndex: 'quantity', width: 120, align: 'right' },
-          { title: 'Amount', dataIndex: 'amount', width: 120, align: 'right' },
-          { title: 'Unit cost', dataIndex: 'unitCost', width: 120, align: 'right' },
+          { title: '存货', render: (_: unknown, record: OpeningBalance) => `${record.itemCode ?? ''} ${record.itemName ?? ''}` },
+          { title: '仓库', dataIndex: 'warehouseCode', width: 130 },
+          { title: '货位', dataIndex: 'locationCode', width: 130 },
+          { title: '批次', dataIndex: 'batchNo', width: 150 },
+          { title: '数量', dataIndex: 'quantity', width: 120, align: 'right' },
+          { title: '金额', dataIndex: 'amount', width: 120, align: 'right' },
+          { title: '单位成本', dataIndex: 'unitCost', width: 120, align: 'right' },
         ]}
       />
-      <Modal title="New opening balance" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
+      <Modal title="新增期初余额" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} okText="确定" cancelText="取消">
         <Form form={form} layout="vertical">
-          <Form.Item name="itemId" label="Item" rules={[{ required: true }]}>
+          <Form.Item name="itemId" label="存货" rules={[{ required: true }]}>
             <Select options={items.map((item) => ({ value: item.id, label: `${item.code} ${item.name}` }))} />
           </Form.Item>
-          <Form.Item name="warehouseId" label="Warehouse" rules={[{ required: true }]}>
+          <Form.Item name="warehouseId" label="仓库" rules={[{ required: true }]}>
             <Select options={warehouses.map((warehouse) => ({ value: warehouse.id, label: `${warehouse.code} ${warehouse.name}` }))} />
           </Form.Item>
-          <Form.Item name="locationId" label="Location">
+          <Form.Item name="locationId" label="货位">
             <Select allowClear options={(selectedWarehouse?.locations ?? []).map((location) => ({ value: location.id, label: `${location.code} ${location.name}` }))} />
           </Form.Item>
-          <Form.Item name="batchNo" label="Batch no">
+          <Form.Item name="batchNo" label="批次号">
             <Input />
           </Form.Item>
-          <Form.Item name="quantity" label="Quantity" rules={[{ required: true }]}>
+          <Form.Item name="quantity" label="数量" rules={[{ required: true }]}>
             <InputNumber min={0} precision={6} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="amount" label="Amount" rules={[{ required: true }]}>
+          <Form.Item name="amount" label="金额" rules={[{ required: true }]}>
             <InputNumber min={0} precision={2} style={{ width: '100%' }} />
           </Form.Item>
         </Form>

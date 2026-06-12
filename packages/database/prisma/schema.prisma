@@ -94,6 +94,13 @@ model AccountSet {
   reportExports    ReportExport[]
   aiReportInterpretations AiReportInterpretation[]
   reportApprovals  ReportApproval[]
+  migrationJobs    MigrationJob[]
+  backupJobs       BackupJob[]
+  restoreJobs      RestoreJob[]
+  llmDraftRuns     LlmDraftRun[]
+  agentDraftCandidates AgentDraftCandidate[]
+  agentActions     AgentAction[]
+  securityEvents   SecurityEvent[]
 }
 
 model User {
@@ -537,7 +544,7 @@ model Partner {
   apSettlements     ApSettlement[]    @relation("ApSettlementSupplier")
   arSettlements     ArSettlement[]    @relation("ArSettlementCustomer")
 
-  @@unique([accountSetId, code])
+  @@unique([accountSetId, partnerType, code])
   @@index([accountSetId, partnerType])
 }
 
@@ -2336,4 +2343,216 @@ model AiReportInterpretation {
 
   @@index([reportRunId])
   @@index([accountSetId, createdAt])
+}
+
+model MigrationJob {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  jobType          String
+  sourceType       String
+  targetObjectType String
+  status           String
+  dryRun           Boolean  @default(true)
+  businessMutation Boolean  @default(false)
+  requestedBy      String
+  createdAt        DateTime @default(now())
+  completedAt      DateTime?
+  sourceSummaryJson String  @default("{}")
+  fieldMappingJson String   @default("{}")
+  sourceRowsJson   String   @default("[]")
+  validationJson   String   @default("{}")
+  errorReportJson  String   @default("{}")
+  importSummaryJson String?
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+
+  @@index([accountSetId, status])
+  @@index([accountSetId, jobType])
+  @@index([createdAt])
+}
+
+model BackupJob {
+  id                             String   @id @default(uuid())
+  accountSetId                   String
+  backupType                     String
+  status                         String
+  dryRun                         Boolean  @default(false)
+  businessMutation               Boolean  @default(false)
+  includeAttachments             Boolean  @default(true)
+  retentionDays                  Int?
+  requestedBy                    String
+  createdAt                      DateTime @default(now())
+  completedAt                    DateTime?
+  snapshotRef                    String
+  checksum                       String
+  manifestJson                   String
+  attachmentHashVerificationJson String
+
+  accountSet  AccountSet   @relation(fields: [accountSetId], references: [id])
+  restoreJobs RestoreJob[]
+
+  @@index([accountSetId, createdAt])
+}
+
+model RestoreJob {
+  id                  String   @id @default(uuid())
+  accountSetId        String
+  sourceBackupJobId   String
+  status              String
+  dryRun              Boolean  @default(true)
+  restoreMode         String
+  targetEnvironment   String
+  restorePointLabel   String?
+  requestedBy         String
+  createdAt           DateTime @default(now())
+  completedAt         DateTime?
+  businessMutation    Boolean  @default(false)
+  outboundBlocked     Boolean  @default(false)
+  blockedChannelsJson String   @default("[]")
+  impactScopeJson     String
+  validationJson      String   @default("{}")
+
+  accountSet      AccountSet @relation(fields: [accountSetId], references: [id])
+  sourceBackupJob BackupJob  @relation(fields: [sourceBackupJobId], references: [id])
+
+  @@index([accountSetId, createdAt])
+  @@index([sourceBackupJobId])
+}
+
+model LlmDraftRun {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  provider         String
+  model            String
+  status           String
+  draftType        String
+  sourceObjectType String?
+  sourceObjectId   String?
+  inputSummaryJson String
+  outputSchema     String
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  candidates AgentDraftCandidate[]
+
+  @@index([accountSetId, status])
+  @@index([accountSetId, draftType])
+  @@index([createdAt])
+}
+
+model AgentDraftCandidate {
+  id                        String   @id @default(uuid())
+  accountSetId              String
+  fiscalPeriodId            String?
+  draftType                 String
+  sourceObjectType          String?
+  sourceObjectId            String?
+  userInstruction           String
+  status                    String
+  dryRun                    Boolean  @default(true)
+  riskLevel                 String
+  requiresHumanConfirmation Boolean  @default(true)
+  confidence                Float    @default(0)
+  sourceContextJson         String   @default("{}")
+  matchedMasterDataJson     String   @default("[]")
+  unmatchedItemsJson        String   @default("[]")
+  draftPayloadJson          String
+  ocrResultsJson            String   @default("[]")
+  dryRunResultJson          String   @default("{}")
+  warningsJson              String   @default("[]")
+  evidenceRefsJson          String   @default("[]")
+  llmDraftRunId             String?
+  createdBy                 String
+  createdAt                 DateTime @default(now())
+  reviewedBy                String?
+  reviewedAt                DateTime?
+  rejectedBy                String?
+  rejectedAt                DateTime?
+  rejectionReason           String?
+  convertedObjectType       String?
+  convertedObjectId         String?
+  resolvedUnmatchedItemsJson String  @default("[]")
+
+  accountSet   AccountSet   @relation(fields: [accountSetId], references: [id])
+  llmDraftRun  LlmDraftRun? @relation(fields: [llmDraftRunId], references: [id])
+
+  @@index([accountSetId, status])
+  @@index([accountSetId, draftType])
+  @@index([llmDraftRunId])
+}
+
+model AgentAction {
+  id                        String   @id @default(uuid())
+  accountSetId              String
+  toolName                  String
+  dryRun                    Boolean  @default(true)
+  riskLevel                 String
+  actionKind                String
+  status                    String
+  approvalRequired          Boolean  @default(false)
+  approvalPolicyJson        String   @default("{}")
+  evidenceRefsJson          String   @default("[]")
+  evidenceSnapshotsJson     String   @default("[]")
+  payloadJson               String   @default("{}")
+  requestedBy               String
+  createdAt                 DateTime @default(now())
+  dryRunResultJson          String   @default("{}")
+  approvalRequestJson       String?
+  approvalProgressJson      String   @default("{}")
+  executionResultJson       String?
+  reversalResultJson        String?
+
+  accountSet AccountSet @relation(fields: [accountSetId], references: [id])
+  approvals  AgentApproval[]
+  replayEvents AgentReplayEvent[]
+
+  @@index([accountSetId, status])
+  @@index([accountSetId, riskLevel])
+  @@index([toolName])
+}
+
+model AgentApproval {
+  id                 String   @id @default(uuid())
+  agentActionId      String
+  approvedBy         String
+  approvedAt         DateTime @default(now())
+  approvalComment    String?
+
+  agentAction AgentAction @relation(fields: [agentActionId], references: [id])
+
+  @@index([agentActionId, approvedBy])
+}
+
+model AgentReplayEvent {
+  id            String   @id @default(uuid())
+  agentActionId String
+  eventType     String
+  actorId       String
+  payloadJson   String   @default("{}")
+  createdAt     DateTime @default(now())
+
+  agentAction AgentAction @relation(fields: [agentActionId], references: [id])
+
+  @@index([agentActionId, createdAt])
+}
+
+model SecurityEvent {
+  id           String   @id @default(uuid())
+  accountSetId String?
+  eventType    String
+  severity     String
+  actorId      String?
+  source       String
+  objectType   String?
+  objectId     String?
+  message      String
+  payloadJson  String   @default("{}")
+  createdAt    DateTime @default(now())
+
+  accountSet AccountSet? @relation(fields: [accountSetId], references: [id], onDelete: SetNull)
+
+  @@index([accountSetId, createdAt])
+  @@index([eventType, severity])
+  @@index([actorId, createdAt])
 }

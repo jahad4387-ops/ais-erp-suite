@@ -28,6 +28,8 @@ import { fileURLToPath } from "node:url";
 
 const WRITE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 const SYSTEM_PERMISSIONS = new Set(["*"]);
+const DEFAULT_IDEMPOTENCY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const RESTORE_DRILL_BLOCKED_CHANNELS = ["webhook", "email", "bank_api"];
 
 function uniqueVoucherId() {
   return `voucher:${randomUUID()}`;
@@ -64,6 +66,14 @@ export const DEFAULT_PERMISSION_CODES = [
   "report_export.manage",
   "report_interpretation.manage",
   "report_approval.manage",
+  "agent_action.view",
+  "agent_action.create",
+  "agent_action.approve",
+  "agent_action.execute",
+  "agent_draft.convert",
+  "ops.migration.manage",
+  "ops.backup.manage",
+  "security_event.view",
   "attachment.upload",
   "attachment.delete",
   "bank_reconciliation.create",
@@ -154,6 +164,13 @@ function errorResponse(status, code, message, extras = {}) {
     traceId: "local-api",
     ...extras
   });
+}
+
+function codedError(code, message, status = 400) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  return error;
 }
 
 function base64Url(input) {
@@ -262,6 +279,44 @@ function databaseProviderFor(databaseUrl) {
   return "unknown";
 }
 
+function optionalPositiveInteger(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+function enabledFlag(value) {
+  if (value === true) return true;
+  if (typeof value !== "string") return false;
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function restoreDrillConfigFor(state) {
+  const configValue =
+    state.config.restoreDrill ??
+    state.config.restoreDrillEnabled ??
+    globalThis.process?.env?.RESTORE_DRILL ??
+    globalThis.process?.env?.AIS_RESTORE_DRILL ??
+    false;
+  const enabled = enabledFlag(configValue);
+  const envVar =
+    state.config.restoreDrillEnvVar ??
+    (globalThis.process?.env?.RESTORE_DRILL !== undefined
+      ? "RESTORE_DRILL"
+      : globalThis.process?.env?.AIS_RESTORE_DRILL !== undefined
+        ? "AIS_RESTORE_DRILL"
+        : null);
+  return {
+    enabled,
+    silentSandbox: enabled,
+    outboundBlocked: enabled,
+    blockedChannels: [...RESTORE_DRILL_BLOCKED_CHANNELS],
+    envVar
+  };
+}
+
 function deploymentConfigFor(state) {
   const databaseUrl = state.config.databaseUrl ?? globalThis.process?.env?.DATABASE_URL ?? null;
   const attachmentStorageProvider = attachmentStorageProviderFor(state);
@@ -280,6 +335,34 @@ function deploymentConfigFor(state) {
   );
   const tokenRotation = tokenRotationConfigFor(state);
   const previousSecretsPresent = tokenPreviousSecretsFor(state).length > 0;
+  const ocrProvider =
+    state.config.ocrAdapter?.provider ??
+    state.config.ocrProvider ??
+    globalThis.process?.env?.AIS_OCR_PROVIDER ??
+    "local-ocr-placeholder";
+  const ocrModel =
+    state.config.ocrAdapter?.model ?? state.config.ocrModel ?? globalThis.process?.env?.AIS_OCR_MODEL ?? "local-placeholder-v1";
+  const llmDraftProvider =
+    state.config.llmDraftAdapter?.provider ??
+    state.config.llmDraftProvider ??
+    globalThis.process?.env?.AIS_LLM_DRAFT_PROVIDER ??
+    "local-rule-based";
+  const llmDraftModel =
+    state.config.llmDraftAdapter?.model ??
+    state.config.llmDraftModel ??
+    globalThis.process?.env?.AIS_LLM_DRAFT_MODEL ??
+    "local-draft-rules-v1";
+  const llmDraftTimeoutMs = optionalPositiveInteger(
+    state.config.llmDraftTimeoutMs ?? globalThis.process?.env?.AIS_LLM_DRAFT_TIMEOUT_MS ?? null
+  );
+  const llmDraftMaxTokens = optionalPositiveInteger(
+    state.config.llmDraftMaxTokens ?? globalThis.process?.env?.AIS_LLM_DRAFT_MAX_TOKENS ?? null
+  );
+  const llmDraftBaseUrl = state.config.llmDraftBaseUrl ?? globalThis.process?.env?.AIS_LLM_DRAFT_BASE_URL ?? null;
+  const llmDraftApiKeyRef = state.config.llmDraftApiKeyRef ?? globalThis.process?.env?.AIS_LLM_DRAFT_API_KEY_REF ?? null;
+  const llmDraftRedaction = state.config.llmDraftRedaction ?? globalThis.process?.env?.AIS_LLM_DRAFT_REDACTION ?? "disabled";
+  const idempotencyTtlMs = idempotencyTtlMsFor(state);
+  const restoreDrill = restoreDrillConfigFor(state);
 
   return {
     deploymentMode: state.config.deploymentMode ?? globalThis.process?.env?.AIS_DEPLOYMENT_MODE ?? "local",
@@ -317,6 +400,38 @@ function deploymentConfigFor(state) {
         retentionDaysConfigured: Boolean(externalAttachmentStorage.retentionDays),
         retentionDays: externalAttachmentStorage.retentionDays
       }
+    },
+    ai: {
+      ocr: {
+        provider: ocrProvider,
+        model: ocrModel,
+        configured: Boolean(ocrProvider && ocrModel),
+        commandPresent: Boolean(state.config.ocrAdapter ?? state.config.ocrCommand ?? globalThis.process?.env?.AIS_OCR_COMMAND ?? null)
+      },
+      llmDraft: {
+        provider: llmDraftProvider,
+        model: llmDraftModel,
+        configured:
+          llmDraftProvider === "local-rule-based"
+            ? Boolean(llmDraftModel)
+            : Boolean(llmDraftProvider && llmDraftModel && llmDraftBaseUrl && llmDraftApiKeyRef),
+        timeoutMs: llmDraftTimeoutMs,
+        maxTokens: llmDraftMaxTokens,
+        baseUrlPresent: Boolean(llmDraftBaseUrl),
+        apiKeyRefPresent: Boolean(llmDraftApiKeyRef),
+        redaction: llmDraftRedaction
+      }
+    },
+    idempotency: {
+      ttlMs: idempotencyTtlMs,
+      ttlHours: idempotencyTtlMs / (60 * 60 * 1000)
+    },
+    restoreDrill: {
+      enabled: restoreDrill.enabled,
+      silentSandbox: restoreDrill.silentSandbox,
+      outboundBlocked: restoreDrill.outboundBlocked,
+      blockedChannels: restoreDrill.blockedChannels,
+      envVar: restoreDrill.envVar
     }
   };
 }
@@ -386,7 +501,7 @@ function verifyAccessTokenWithSecrets(token, tokenSecrets) {
   return null;
 }
 
-function createPasswordHash(username, password) {
+export function createPasswordHash(username, password) {
   const salt = base64Url(`${username}:phase-1`);
   const digest = createHmac("sha256", salt).update(password).digest("base64url");
   return `sha256:${salt}:${digest}`;
@@ -441,6 +556,44 @@ function requireIdempotencyKey(request) {
   }
 
   return null;
+}
+
+function idempotencyAccountSetScopeFor(request) {
+  if (typeof request.body?.accountSetId === "string" && request.body.accountSetId.trim() !== "") {
+    return request.body.accountSetId;
+  }
+  const segments = splitPath(request.path).map(decodeURIComponent);
+  if (segments[0] === "account-sets" && typeof segments[1] === "string") {
+    return segments[1];
+  }
+  return "global";
+}
+
+function accountSetIdFromRequest(request) {
+  const scope = idempotencyAccountSetScopeFor(request);
+  return scope === "global" ? null : scope;
+}
+
+function idempotencyTtlMsFor(state) {
+  const configuredMs = Number(state.config.idempotencyTtlMs ?? globalThis.process?.env?.AIS_IDEMPOTENCY_TTL_MS ?? null);
+  if (Number.isFinite(configuredMs) && configuredMs > 0) {
+    return configuredMs;
+  }
+  const configuredHours = Number(state.config.idempotencyTtlHours ?? globalThis.process?.env?.AIS_IDEMPOTENCY_TTL_HOURS ?? null);
+  if (Number.isFinite(configuredHours) && configuredHours > 0) {
+    return configuredHours * 60 * 60 * 1000;
+  }
+  return DEFAULT_IDEMPOTENCY_TTL_MS;
+}
+
+function nowMsFor(state) {
+  const current = typeof state.config.now === "function" ? state.config.now() : Date.now();
+  const value = current instanceof Date ? current.getTime() : Number(current);
+  return Number.isFinite(value) ? value : Date.now();
+}
+
+function idempotencyRecordExpired(record, nowMs) {
+  return typeof record?.expiresAt !== "number" || record.expiresAt <= nowMs;
 }
 
 function actorIdFor(request, state) {
@@ -611,6 +764,9 @@ function permissionFor(request) {
     return "bank_reconciliation.match";
   }
   if (request.method === "GET" && request.path === "/audit-logs") return "audit_log.view";
+  if (request.method === "GET" && segments.length === 2 && segments[0] === "security" && segments[1] === "events") {
+    return "security_event.view";
+  }
   if (segments[0] === "partners") {
     return "partner.manage";
   }
@@ -754,11 +910,49 @@ function permissionFor(request) {
   if (request.method === "POST" && (request.path === "/ai/voucher-suggestions" || request.path === "/ai/voucher-drafts")) {
     return "ai.generate_draft";
   }
+  if (["GET", "POST"].includes(request.method) && segments.length === 2 && segments[0] === "ai" && segments[1] === "llm-draft-runs") {
+    return "ai.generate_draft";
+  }
+  if (request.method === "GET" && segments.length === 3 && segments[0] === "ai" && segments[1] === "llm-draft-runs" && segments[2] === "metrics") {
+    return "ai.generate_draft";
+  }
+  if (request.method === "POST" && request.path === "/ai/ocr-preview") {
+    return "ai.generate_draft";
+  }
   if (
     request.method === "POST" &&
     ["/ai/reconciliation-suggestions", "/ai/collection-drafts", "/ai/exception-checks"].includes(request.path)
   ) {
     return "ai.generate_draft";
+  }
+  if (
+    request.method === "POST" &&
+    segments.length === 4 &&
+    segments[0] === "agent" &&
+    segments[1] === "draft-candidates" &&
+    ["convert", "reject"].includes(segments[3])
+  ) {
+    return "agent_draft.convert";
+  }
+  if (segments[0] === "agent" && segments[1] === "draft-candidates") {
+    return "ai.generate_draft";
+  }
+  if (segments[0] === "agent-tools") {
+    return "agent_action.view";
+  }
+  if (segments[0] === "agent-actions") {
+    if (request.method === "POST" && segments.length === 1) return "agent_action.create";
+    if (request.method === "GET") return "agent_action.view";
+    if (request.method === "POST" && segments.length === 3 && segments[2] === "submit") return "agent_action.create";
+    if (request.method === "POST" && segments.length === 3 && segments[2] === "approve") return "agent_action.approve";
+    if (request.method === "POST" && segments.length === 3 && segments[2] === "execute") return "agent_action.execute";
+    if (request.method === "POST" && segments.length === 3 && segments[2] === "reverse") return "agent_action.execute";
+  }
+  if (segments[0] === "ops" && segments[1] === "migrations") {
+    return "ops.migration.manage";
+  }
+  if (segments[0] === "ops" && (segments[1] === "backups" || segments[1] === "restores")) {
+    return "ops.backup.manage";
   }
   if (request.method === "GET" && segments.length === 3 && segments[0] === "ai" && segments[1] === "voucher-drafts") {
     return "ai.generate_draft";
@@ -807,6 +1001,21 @@ async function requirePermission(request, state) {
     return null;
   }
 
+  await recordSecurityEvent(state, {
+    accountSetId: accountSetIdFromRequest(request),
+    eventType: "permission_denied",
+    severity: "high",
+    actorId,
+    source: "api",
+    objectType: "permission",
+    objectId: permission,
+    message: `Actor ${actorId} lacks ${permission}.`,
+    payload: {
+      method: request.method,
+      path: request.path.split("?")[0],
+      permission
+    }
+  });
   return errorResponse(403, "PERMISSION_DENIED", `Actor ${actorId} lacks ${permission}.`);
 }
 
@@ -826,10 +1035,27 @@ function createState(options = {}) {
       attachmentExternalCredentialRef: options.attachmentExternalCredentialRef,
       attachmentRetentionDays: options.attachmentRetentionDays,
       externalAttachmentStore: options.externalAttachmentStore,
+      ocrAdapter: options.ocrAdapter,
+      ocrProvider: options.ocrProvider,
+      ocrModel: options.ocrModel,
+      llmDraftAdapter: options.llmDraftAdapter,
+      llmDraftProvider: options.llmDraftProvider,
+      llmDraftModel: options.llmDraftModel,
+      llmDraftTimeoutMs: options.llmDraftTimeoutMs,
+      llmDraftMaxTokens: options.llmDraftMaxTokens,
+      llmDraftBaseUrl: options.llmDraftBaseUrl,
+      llmDraftApiKeyRef: options.llmDraftApiKeyRef,
+      llmDraftRedaction: options.llmDraftRedaction,
       platformStore: options.platformStore,
       deploymentMode: options.deploymentMode,
       databaseUrl: options.databaseUrl,
-      platformStoreMode: options.platformStoreMode
+      platformStoreMode: options.platformStoreMode,
+      idempotencyTtlMs: options.idempotencyTtlMs,
+      idempotencyTtlHours: options.idempotencyTtlHours,
+      restoreDrill: options.restoreDrill,
+      restoreDrillEnabled: options.restoreDrillEnabled,
+      restoreDrillEnvVar: options.restoreDrillEnvVar,
+      now: options.now
     },
     accountSets: new Map(),
     periods: new Map(),
@@ -861,10 +1087,14 @@ function createState(options = {}) {
     apSettlements: new Map(),
     arSettlements: new Map(),
     inventoryItems: new Map(),
+    agentMasterDataDrafts: new Map(),
+    agentPayrollAllocationDrafts: new Map(),
+    agentAssetChangeDrafts: new Map(),
     boms: new Map(),
     warehouses: new Map(),
     inventoryOpeningBalances: new Map(),
     inventoryMovements: new Map(),
+    inventoryMovementDrafts: new Map(),
     inventoryBalances: new Map(),
     inventoryCostLayers: new Map(),
     inventoryTransfers: new Map(),
@@ -891,6 +1121,7 @@ function createState(options = {}) {
     fixedAssets: new Map(),
     assetTransfers: new Map(),
     assetValueChanges: new Map(),
+    agentDepreciationRunDrafts: new Map(),
     depreciationRuns: new Map(),
     depreciationRunLines: new Map(),
     assetDepreciationCostPools: new Map(),
@@ -905,7 +1136,16 @@ function createState(options = {}) {
     aiReportInterpretations: new Map(),
     reportApprovals: new Map(),
     auditLogs: [],
+    securityEvents: new Map(),
     aiVoucherSuggestions: new Map(),
+    agentActions: new Map(),
+    agentApprovals: [],
+    agentReplayEvents: [],
+    migrationJobs: new Map(),
+    backupJobs: new Map(),
+    restoreJobs: new Map(),
+    agentDraftCandidates: new Map(),
+    llmDraftRuns: new Map(),
     attachments: new Map(),
     attachmentLinks: [],
     accountSetAccessByActor: new Map(),
@@ -1126,6 +1366,10 @@ function findAccountByIdentifier(state, identifier) {
   return [...state.accounts.values()].find((account) => account.code === identifier || account.id === identifier);
 }
 
+async function findAccountByIdentifierWithStore(state, identifier) {
+  return findAccountByIdentifier(state, identifier) ?? (state.config.platformStore?.findAccount ? await state.config.platformStore.findAccount(identifier) : null);
+}
+
 async function accountHasVoucherUsage(state, account) {
   const vouchers = state.config.platformStore?.listVouchers
     ? await state.config.platformStore.listVouchers()
@@ -1203,6 +1447,536 @@ function findAccountSetByIdentifier(state, identifier) {
   return [...state.accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier);
 }
 
+const BACKUP_JOB_TYPES = new Set(["full", "incremental"]);
+const MIGRATION_JOB_TYPES = new Set(["master_data", "opening_balance", "voucher_history", "partner_master", "inventory_item_master"]);
+const MIGRATION_SOURCE_TYPES = new Set(["excel", "csv", "legacy_erp", "api"]);
+const MIGRATION_REQUIRED_FIELDS = {
+  master_data: ["code", "name"],
+  opening_balance: ["accountCode", "debit", "credit"],
+  voucher_history: ["voucherDate", "summary", "accountCode", "debit", "credit"],
+  partner_master: ["code", "name", "partnerType"],
+  inventory_item_master: ["code", "name", "unit"]
+};
+
+function normalizeSourceRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row) => (row && typeof row === "object" && !Array.isArray(row) ? cloneReportPayload(row) : {}));
+}
+
+function migrationSourceSummaryFor(rows) {
+  const fields = new Set();
+  for (const row of rows) {
+    for (const field of Object.keys(row)) {
+      fields.add(field);
+    }
+  }
+  return {
+    rowCount: rows.length,
+    fieldCount: fields.size,
+    fields: [...fields].sort()
+  };
+}
+
+function publicMigrationJob(job) {
+  const { sourceRows, ...publicJob } = job;
+  return cloneReportPayload(publicJob);
+}
+
+function createMigrationJobRecord(state, accountSet, body, actorId) {
+  const jobType = body.jobType ?? "master_data";
+  const sourceType = body.sourceType ?? "excel";
+  if (!MIGRATION_JOB_TYPES.has(jobType)) {
+    throw codedError("MIGRATION_JOB_TYPE_UNSUPPORTED", "jobType must be master_data, opening_balance, voucher_history, partner_master, or inventory_item_master.");
+  }
+  if (!MIGRATION_SOURCE_TYPES.has(sourceType)) {
+    throw codedError("MIGRATION_SOURCE_TYPE_UNSUPPORTED", "sourceType must be excel, csv, legacy_erp, or api.");
+  }
+  const sourceRows = normalizeSourceRows(body.sourceRows);
+  const job = {
+    id: `migration-job:${randomUUID()}`,
+    accountSetId: accountSet.id,
+    jobType,
+    sourceType,
+    targetObjectType: body.targetObjectType ?? jobType,
+    status: "draft",
+    dryRun: true,
+    businessMutation: false,
+    requestedBy: body.requestedBy ?? actorId,
+    createdAt: "now",
+    completedAt: null,
+    sourceSummary: migrationSourceSummaryFor(sourceRows),
+    fieldMapping: cloneReportPayload(body.fieldMapping ?? {}),
+    sourceRows,
+    validation: { status: "pending", rowCount: sourceRows.length, errorCount: 0, warningCount: 0 },
+    errorReport: { errors: [], warnings: [] },
+    importSummary: null
+  };
+  state.migrationJobs.set(job.id, job);
+  return job;
+}
+
+function readMappedMigrationValue(row, fieldMapping, logicalField) {
+  const sourceField = fieldMapping[logicalField] ?? logicalField;
+  return row[sourceField];
+}
+
+function migrationFieldMissing(value) {
+  return value === undefined || value === null || (typeof value === "string" && value.trim() === "");
+}
+
+function runMigrationDryRun(job, body = {}, actorId = "system") {
+  const fieldMapping = { ...job.fieldMapping, ...(body.fieldMapping ?? {}) };
+  const sourceRows = body.sourceRows ? normalizeSourceRows(body.sourceRows) : normalizeSourceRows(job.sourceRows);
+  const requiredFields = MIGRATION_REQUIRED_FIELDS[job.jobType] ?? [];
+  const errors = [];
+  const warnings = [];
+
+  sourceRows.forEach((row, index) => {
+    const rowNo = index + 1;
+    for (const field of requiredFields) {
+      const value = readMappedMigrationValue(row, fieldMapping, field);
+      if (migrationFieldMissing(value)) {
+        errors.push({
+          rowNo,
+          field,
+          code: "REQUIRED_FIELD_MISSING",
+          message: `${field} is required.`
+        });
+      }
+    }
+  });
+
+  let trialBalance = null;
+  if (["opening_balance", "voucher_history"].includes(job.jobType)) {
+    const debit = sourceRows.reduce((sum, row) => sum + Number(readMappedMigrationValue(row, fieldMapping, "debit") ?? 0), 0);
+    const credit = sourceRows.reduce((sum, row) => sum + Number(readMappedMigrationValue(row, fieldMapping, "credit") ?? 0), 0);
+    trialBalance = {
+      debit: Number(debit.toFixed(2)),
+      credit: Number(credit.toFixed(2)),
+      difference: Number((debit - credit).toFixed(2))
+    };
+    if (trialBalance.difference !== 0) {
+      errors.push({
+        rowNo: null,
+        field: "trialBalance",
+        code: "TRIAL_BALANCE_NOT_BALANCED",
+        message: "Debit and credit totals must be balanced before import."
+      });
+    }
+  }
+
+  const validationStatus = errors.length === 0 ? "passed" : "failed";
+  return {
+    ...job,
+    status: validationStatus === "passed" ? "dry_run_completed" : "dry_run_failed",
+    dryRun: true,
+    businessMutation: false,
+    requestedBy: body.requestedBy ?? job.requestedBy ?? actorId,
+    completedAt: "now",
+    sourceSummary: migrationSourceSummaryFor(sourceRows),
+    fieldMapping,
+    sourceRows,
+    validation: {
+      status: validationStatus,
+      rowCount: sourceRows.length,
+      errorCount: errors.length,
+      warningCount: warnings.length,
+      ...(trialBalance ? { trialBalance } : {})
+    },
+    errorReport: {
+      errors,
+      warnings
+    },
+    importSummary: null
+  };
+}
+
+async function importOpeningBalancesFromMigrationJob(state, job, body = {}, actorId = "system") {
+  if (job.status !== "dry_run_completed" || job.validation?.status !== "passed") {
+    throw codedError("MIGRATION_DRY_RUN_REQUIRED", "Migration job must pass dry-run before import.", 409);
+  }
+  if (job.jobType !== "opening_balance") {
+    throw codedError("MIGRATION_IMPORT_UNSUPPORTED", "Only opening_balance migration imports are supported in this phase.", 409);
+  }
+  const fiscalYear = body.fiscalYear;
+  const periodNo = body.periodNo;
+  if (!Number.isInteger(fiscalYear)) {
+    throw codedError("MIGRATION_IMPORT_PERIOD_REQUIRED", "fiscalYear is required.", 400);
+  }
+  if (!Number.isInteger(periodNo)) {
+    throw codedError("MIGRATION_IMPORT_PERIOD_REQUIRED", "periodNo is required.", 400);
+  }
+  const savedBalances = [];
+  for (const row of normalizeSourceRows(job.sourceRows)) {
+    const accountCode = readMappedMigrationValue(row, job.fieldMapping, "accountCode");
+    const account = findAccountByIdentifier(state, accountCode);
+    if (!account || account.accountSetId !== job.accountSetId) {
+      throw codedError("MIGRATION_ACCOUNT_NOT_FOUND", `Account ${accountCode} was not found in this account set.`, 404);
+    }
+    const openingDebit = Number(readMappedMigrationValue(row, job.fieldMapping, "debit") ?? 0);
+    const openingCredit = Number(readMappedMigrationValue(row, job.fieldMapping, "credit") ?? 0);
+    if (!Number.isFinite(openingDebit) || !Number.isFinite(openingCredit) || openingDebit < 0 || openingCredit < 0) {
+      throw codedError("MIGRATION_AMOUNT_INVALID", "Opening balance amounts must be non-negative numbers.", 400);
+    }
+    if (openingDebit > 0 && openingCredit > 0) {
+      throw codedError("MIGRATION_AMOUNT_INVALID", "Opening balance cannot contain both debit and credit.", 400);
+    }
+    const openingBalance = {
+      id: `opening-balance:${account.code}:${fiscalYear}:${periodNo}`,
+      accountCode: account.code,
+      accountName: account.name,
+      accountId: account.id,
+      normalBalance: account.normalBalance,
+      fiscalYear,
+      periodNo,
+      openingDebit,
+      openingCredit,
+      enteredBy: body.requestedBy ?? job.requestedBy ?? actorId,
+      enteredAt: "now"
+    };
+    const savedOpeningBalance = state.config.platformStore?.saveOpeningBalance
+      ? await state.config.platformStore.saveOpeningBalance(openingBalance)
+      : openingBalance;
+    state.openingBalances.set(`${account.code}:${fiscalYear}:${periodNo}`, savedOpeningBalance);
+    savedBalances.push(savedOpeningBalance);
+  }
+
+  return {
+    ...job,
+    status: "imported",
+    dryRun: false,
+    businessMutation: true,
+    requestedBy: body.requestedBy ?? job.requestedBy ?? actorId,
+    completedAt: "now",
+    importSummary: {
+      status: "imported",
+      targetObjectType: "opening_balance",
+      importedCount: savedBalances.length,
+      fiscalYear,
+      periodNo,
+      objectIds: savedBalances.map((balance) => balance.id)
+    }
+  };
+}
+
+async function importPartnerMasterFromMigrationJob(state, job, body = {}, actorId = "system") {
+  if (job.status !== "dry_run_completed" || job.validation?.status !== "passed") {
+    throw codedError("MIGRATION_DRY_RUN_REQUIRED", "Migration job must pass dry-run before import.", 409);
+  }
+  if (job.jobType !== "partner_master") {
+    throw codedError("MIGRATION_IMPORT_UNSUPPORTED", "Only partner_master jobs can use partner master import.", 409);
+  }
+  const requestedBy = body.requestedBy ?? job.requestedBy ?? actorId;
+  const savedPartners = [];
+  const existingPartners = await listPartners(state, job.accountSetId);
+  for (const row of normalizeSourceRows(job.sourceRows)) {
+    const validated = normalizePartnerInput({
+      partnerType: readMappedMigrationValue(row, job.fieldMapping, "partnerType"),
+      code: readMappedMigrationValue(row, job.fieldMapping, "code"),
+      name: readMappedMigrationValue(row, job.fieldMapping, "name"),
+      taxRate: readMappedMigrationValue(row, job.fieldMapping, "taxRate"),
+      creditLimit: readMappedMigrationValue(row, job.fieldMapping, "creditLimit"),
+      paymentTerms: readMappedMigrationValue(row, job.fieldMapping, "paymentTerms"),
+      settlementMethod: readMappedMigrationValue(row, job.fieldMapping, "settlementMethod"),
+      isEnabled: readMappedMigrationValue(row, job.fieldMapping, "isEnabled")
+    });
+    const duplicate = existingPartners.find((partner) => partnerCodeConflicts(partner, { accountSetId: job.accountSetId, ...validated }));
+    if (duplicate) {
+      throw codedError("MIGRATION_PARTNER_CODE_EXISTS", `Partner code ${validated.code} already exists in this account set.`, 409);
+    }
+    const partner = {
+      id: `partner:${randomUUID()}`,
+      accountSetId: job.accountSetId,
+      ...validated
+    };
+    const savedPartner = state.config.platformStore?.createPartner ? await state.config.platformStore.createPartner(partner) : partner;
+    state.partners.set(savedPartner.id, savedPartner);
+    existingPartners.push(savedPartner);
+    savedPartners.push(savedPartner);
+    appendAuditLog(state, {
+      actorId: requestedBy,
+      action: "migration.partner_master.import",
+      objectType: "partner",
+      objectId: savedPartner.id
+    });
+  }
+
+  return {
+    ...job,
+    status: "imported",
+    dryRun: false,
+    businessMutation: true,
+    requestedBy,
+    completedAt: "now",
+    importSummary: {
+      status: "imported",
+      targetObjectType: "partner",
+      importedCount: savedPartners.length,
+      objectIds: savedPartners.map((partner) => partner.id)
+    }
+  };
+}
+
+function readMigrationBoolean(row, fieldMapping, logicalField, fallback = false) {
+  const value = readMappedMigrationValue(row, fieldMapping, logicalField);
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    return ["true", "1", "yes", "y", "是", "启用"].includes(value.trim().toLowerCase());
+  }
+  return Boolean(value);
+}
+
+async function importInventoryItemMasterFromMigrationJob(state, job, body = {}, actorId = "system") {
+  if (job.status !== "dry_run_completed" || job.validation?.status !== "passed") {
+    throw codedError("MIGRATION_DRY_RUN_REQUIRED", "Migration job must pass dry-run before import.", 409);
+  }
+  if (job.jobType !== "inventory_item_master") {
+    throw codedError("MIGRATION_IMPORT_UNSUPPORTED", "Only inventory_item_master jobs can use inventory item master import.", 409);
+  }
+  const requestedBy = body.requestedBy ?? job.requestedBy ?? actorId;
+  const savedItems = [];
+  for (const row of normalizeSourceRows(job.sourceRows)) {
+    const itemInput = normalizeInventoryItemInput({
+      accountSetId: job.accountSetId,
+      code: readMappedMigrationValue(row, job.fieldMapping, "code"),
+      name: readMappedMigrationValue(row, job.fieldMapping, "name"),
+      category: readMappedMigrationValue(row, job.fieldMapping, "category"),
+      itemType: readMappedMigrationValue(row, job.fieldMapping, "itemType"),
+      unit: readMappedMigrationValue(row, job.fieldMapping, "unit"),
+      costMethod: readMappedMigrationValue(row, job.fieldMapping, "costMethod"),
+      isBatchManaged: readMigrationBoolean(row, job.fieldMapping, "isBatchManaged"),
+      isSerialManaged: readMigrationBoolean(row, job.fieldMapping, "isSerialManaged"),
+      isManufactured: readMigrationBoolean(row, job.fieldMapping, "isManufactured"),
+      shelfLifeDays: readMappedMigrationValue(row, job.fieldMapping, "shelfLifeDays"),
+      isEnabled: readMigrationBoolean(row, job.fieldMapping, "isEnabled", true),
+      createdBy: requestedBy
+    });
+    if (itemInput.isBatchManaged && itemInput.costMethod === "moving_average") {
+      throw codedError("BATCH_COST_METHOD_CONFLICT", "Batch-managed inventory items must use FIFO or specific identification costing.", 409);
+    }
+    const duplicate = (await listInventoryItemsWithPersistence(state, job.accountSetId)).find((item) => item.code === itemInput.code);
+    if (duplicate) {
+      throw codedError("MIGRATION_INVENTORY_ITEM_CODE_EXISTS", `Inventory item code ${itemInput.code} already exists in this account set.`, 409);
+    }
+    const item = {
+      id: `inventory-item:${randomUUID()}`,
+      accountSetId: job.accountSetId,
+      ...itemInput,
+      createdAt: "now",
+      updatedAt: "now"
+    };
+    const savedItem = state.config.platformStore?.createInventoryItem ? await state.config.platformStore.createInventoryItem(item) : item;
+    state.inventoryItems.set(savedItem.id, savedItem);
+    savedItems.push(savedItem);
+    appendAuditLog(state, {
+      actorId: requestedBy,
+      action: "migration.inventory_item_master.import",
+      objectType: "inventory_item",
+      objectId: savedItem.id
+    });
+  }
+
+  return {
+    ...job,
+    status: "imported",
+    dryRun: false,
+    businessMutation: true,
+    requestedBy,
+    completedAt: "now",
+    importSummary: {
+      status: "imported",
+      targetObjectType: "inventory_item",
+      importedCount: savedItems.length,
+      objectIds: savedItems.map((item) => item.id)
+    }
+  };
+}
+
+async function importMigrationJob(state, job, body = {}, actorId = "system") {
+  if (job.jobType === "opening_balance") {
+    return importOpeningBalancesFromMigrationJob(state, job, body, actorId);
+  }
+  if (job.jobType === "partner_master") {
+    return importPartnerMasterFromMigrationJob(state, job, body, actorId);
+  }
+  if (job.jobType === "inventory_item_master") {
+    return importInventoryItemMasterFromMigrationJob(state, job, body, actorId);
+  }
+  throw codedError("MIGRATION_IMPORT_UNSUPPORTED", "Only opening_balance, partner_master, and inventory_item_master migration imports are supported in this phase.", 409);
+}
+
+function listMigrationJobs(state, { accountSetId = null, status = null, jobType = null } = {}) {
+  return [...state.migrationJobs.values()]
+    .filter((job) => {
+      if (accountSetId && job.accountSetId !== accountSetId) return false;
+      if (status && job.status !== status) return false;
+      if (jobType && job.jobType !== jobType) return false;
+      return true;
+    })
+    .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)) || right.id.localeCompare(left.id));
+}
+
+function rowBelongsToAccountSet(row, accountSetId) {
+  return row?.accountSetId === accountSetId;
+}
+
+function countMapRowsByAccountSet(map, accountSetId) {
+  return [...map.values()].filter((row) => rowBelongsToAccountSet(row, accountSetId)).length;
+}
+
+function countArrayRowsByAccountSet(rows, accountSetId) {
+  return rows.filter((row) => rowBelongsToAccountSet(row, accountSetId)).length;
+}
+
+function backupTableCountsFor(state, accountSetId) {
+  return {
+    accountSets: findAccountSetByIdentifier(state, accountSetId) ? 1 : 0,
+    accounts: countMapRowsByAccountSet(state.accounts, accountSetId),
+    auxiliaryTypes: countMapRowsByAccountSet(state.auxiliaryTypes, accountSetId),
+    auxiliaryItems: countMapRowsByAccountSet(state.auxiliaryItems, accountSetId),
+    openingBalances: countMapRowsByAccountSet(state.openingBalances, accountSetId),
+    vouchers: countMapRowsByAccountSet(state.vouchers, accountSetId),
+    journalEntries: countArrayRowsByAccountSet(state.journalEntries, accountSetId),
+    attachments: countMapRowsByAccountSet(state.attachments, accountSetId),
+    partners: countMapRowsByAccountSet(state.partners, accountSetId),
+    purchaseOrders: countMapRowsByAccountSet(state.purchaseOrders, accountSetId),
+    salesOrders: countMapRowsByAccountSet(state.salesOrders, accountSetId),
+    inventoryItems: countMapRowsByAccountSet(state.inventoryItems, accountSetId),
+    inventoryMovements: countMapRowsByAccountSet(state.inventoryMovements, accountSetId),
+    inventoryTransfers: countMapRowsByAccountSet(state.inventoryTransfers, accountSetId),
+    stockCounts: countMapRowsByAccountSet(state.stockCounts, accountSetId),
+    workOrders: countMapRowsByAccountSet(state.workOrders, accountSetId),
+    materialRequisitions: countMapRowsByAccountSet(state.materialRequisitions, accountSetId),
+    productReceipts: countMapRowsByAccountSet(state.productReceipts, accountSetId),
+    payrollRuns: countMapRowsByAccountSet(state.payrollRuns, accountSetId),
+    payrollAllocations: countMapRowsByAccountSet(state.payrollAllocations, accountSetId),
+    fixedAssets: countMapRowsByAccountSet(state.fixedAssets, accountSetId),
+    depreciationRuns: countMapRowsByAccountSet(state.depreciationRuns, accountSetId),
+    assetDisposals: countMapRowsByAccountSet(state.assetDisposals, accountSetId),
+    reportRuns: countMapRowsByAccountSet(state.reportRuns, accountSetId)
+  };
+}
+
+function backupAttachmentHashVerificationFor(state, accountSetId, includeAttachments) {
+  if (!includeAttachments) {
+    return {
+      status: "skipped",
+      attachmentCount: 0,
+      verifiedCount: 0,
+      failedCount: 0
+    };
+  }
+  const attachments = [...state.attachments.values()].filter((attachment) => attachment.accountSetId === accountSetId);
+  const failed = attachments.filter((attachment) => typeof attachment.checksum !== "string" || !attachment.checksum.startsWith("sha256:"));
+  return {
+    status: attachments.length === 0 ? "completed_empty" : failed.length === 0 ? "completed" : "failed",
+    attachmentCount: attachments.length,
+    verifiedCount: attachments.length - failed.length,
+    failedCount: failed.length
+  };
+}
+
+function createBackupJobRecord(state, accountSet, body, actorId) {
+  const backupType = body.backupType ?? "full";
+  if (!BACKUP_JOB_TYPES.has(backupType)) {
+    throw codedError("BACKUP_TYPE_UNSUPPORTED", "backupType must be full or incremental.");
+  }
+  const includeAttachments = body.includeAttachments !== false;
+  const retentionDays = optionalPositiveInteger(body.retentionDays);
+  const manifest = {
+    accountSetId: accountSet.id,
+    accountSetCode: accountSet.code,
+    accountSetName: accountSet.name,
+    backupType,
+    includeAttachments,
+    tableCounts: backupTableCountsFor(state, accountSet.id),
+    generatedAt: "now"
+  };
+  const attachmentHashVerification = backupAttachmentHashVerificationFor(state, accountSet.id, includeAttachments);
+  const snapshotRef = `backup-snapshot:${accountSet.id}:${state.backupJobs.size + 1}`;
+  const checksum = sha256Checksum(
+    Buffer.from(JSON.stringify({ snapshotRef, manifest, attachmentHashVerification }), "utf8")
+  );
+  const job = {
+    id: `backup-job:${randomUUID()}`,
+    accountSetId: accountSet.id,
+    backupType,
+    status: body.dryRun === true ? "dry_run_completed" : "completed",
+    dryRun: body.dryRun === true,
+    businessMutation: false,
+    includeAttachments,
+    retentionDays,
+    requestedBy: body.requestedBy ?? actorId,
+    createdAt: "now",
+    completedAt: "now",
+    snapshotRef,
+    checksum,
+    manifest,
+    attachmentHashVerification
+  };
+  state.backupJobs.set(job.id, job);
+  return job;
+}
+
+function listBackupJobs(state, { accountSetId = null, status = null } = {}) {
+  return [...state.backupJobs.values()].filter(
+    (job) => (!accountSetId || job.accountSetId === accountSetId) && (!status || job.status === status)
+  );
+}
+
+function createRestoreJobRecord(state, accountSet, backupJob, body, actorId) {
+  if (body.dryRun !== true) {
+    throw codedError("RESTORE_DRY_RUN_REQUIRED", "Restore execution must use dryRun true in Phase 6.", 409);
+  }
+  if (body.targetEnvironment !== "restore_drill") {
+    throw codedError("RESTORE_TARGET_ENVIRONMENT_REQUIRED", "targetEnvironment must be restore_drill.", 409);
+  }
+  const restoreDrill = restoreDrillConfigFor(state);
+  if (!restoreDrill.enabled || !restoreDrill.silentSandbox || !restoreDrill.outboundBlocked) {
+    throw codedError(
+      "RESTORE_DRILL_REQUIRED",
+      "Restore dry-runs must run in a RESTORE_DRILL/AIS_RESTORE_DRILL silent sandbox.",
+      409
+    );
+  }
+  const job = {
+    id: `restore-job:${randomUUID()}`,
+    accountSetId: accountSet.id,
+    sourceBackupJobId: backupJob.id,
+    status: "dry_run_completed",
+    dryRun: true,
+    restoreMode: "silent_sandbox",
+    targetEnvironment: body.targetEnvironment,
+    restorePointLabel: body.restorePointLabel ?? null,
+    requestedBy: body.requestedBy ?? actorId,
+    createdAt: "now",
+    completedAt: "now",
+    businessMutation: false,
+    outboundBlocked: restoreDrill.outboundBlocked,
+    blockedChannels: [...restoreDrill.blockedChannels],
+    impactScope: {
+      accountSetId: accountSet.id,
+      accountSetCode: accountSet.code,
+      sourceBackupJobId: backupJob.id,
+      tableCounts: { ...backupJob.manifest.tableCounts }
+    },
+    validation: {
+      status: "passed",
+      backupChecksum: backupJob.checksum,
+      attachmentHashVerification: backupJob.attachmentHashVerification.status
+    }
+  };
+  state.restoreJobs.set(job.id, job);
+  return job;
+}
+
+function listRestoreJobs(state, { accountSetId = null, status = null } = {}) {
+  return [...state.restoreJobs.values()].filter(
+    (job) => (!accountSetId || job.accountSetId === accountSetId) && (!status || job.status === status)
+  );
+}
+
 const PARTNER_TYPES = new Set(["supplier", "customer", "both"]);
 
 function normalizePartnerInput(input, current = {}) {
@@ -1240,6 +2014,13 @@ function normalizePartnerInput(input, current = {}) {
 
 function partnerMatchesType(partner, partnerType) {
   return !partnerType || partner.partnerType === partnerType || partner.partnerType === "both";
+}
+
+function partnerCodeConflicts(existingPartner, incomingPartner) {
+  if (existingPartner.accountSetId !== incomingPartner.accountSetId || existingPartner.code !== incomingPartner.code) {
+    return false;
+  }
+  return existingPartner.partnerType === incomingPartner.partnerType || existingPartner.partnerType === "both" || incomingPartner.partnerType === "both";
 }
 
 async function listPartners(state, accountSetId, partnerType = null) {
@@ -1297,6 +2078,23 @@ function listInventoryItems(state, accountSetId) {
   return [...state.inventoryItems.values()]
     .filter((item) => item.accountSetId === accountSetId)
     .sort((left, right) => left.code.localeCompare(right.code));
+}
+
+async function listInventoryItemsWithPersistence(state, accountSetId) {
+  const persistedItems = state.config.platformStore?.listInventoryItems
+    ? await state.config.platformStore.listInventoryItems(accountSetId)
+    : [];
+  const itemsById = new Map();
+  for (const item of persistedItems) {
+    state.inventoryItems.set(item.id, item);
+    itemsById.set(item.id, item);
+  }
+  for (const item of state.inventoryItems.values()) {
+    if (item.accountSetId === accountSetId) {
+      itemsById.set(item.id, item);
+    }
+  }
+  return [...itemsById.values()].sort((left, right) => left.code.localeCompare(right.code));
 }
 
 function findInventoryItemByIdentifier(state, identifier) {
@@ -2438,12 +3236,9 @@ function buildAssetCount(state, body, actorId, { dryRun }) {
   return count;
 }
 
-function buildDepreciationRun(state, body, actorId, { dryRun }) {
-  const fiscalYear = Number(body.fiscalYear);
-  const periodNo = Number(body.periodNo);
-  const runId = `depreciation-run:${randomUUID()}`;
+function calculateDepreciationRunLines(state, { accountSetId, fiscalYear, periodNo, runId }) {
   const currentPeriodIndex = periodIndex(fiscalYear, periodNo);
-  const lines = listFixedAssets(state, body.accountSetId).map((asset) => {
+  return listFixedAssets(state, accountSetId).map((asset) => {
     const accumulatedBefore = roundAmount(asset.accumulatedDepreciation ?? 0);
     const depreciableAmount = roundAmount(Number(asset.originalValue ?? 0) - Number(asset.salvageValue ?? 0));
     const remainingDepreciable = roundAmount(Math.max(0, depreciableAmount - accumulatedBefore));
@@ -2489,8 +3284,19 @@ function buildDepreciationRun(state, body, actorId, { dryRun }) {
       depreciationDepartmentRule: "month_end_department"
     };
   });
+}
+
+function depreciationRunWarnings(lines = []) {
+  return [...new Set(lines.flatMap((line) => [line.skippedReason, line.brakeApplied ? "NET_VALUE_BRAKE_APPLIED" : null]).filter(Boolean))];
+}
+
+function buildDepreciationRun(state, body, actorId, { dryRun }) {
+  const fiscalYear = Number(body.fiscalYear);
+  const periodNo = Number(body.periodNo);
+  const runId = `depreciation-run:${randomUUID()}`;
+  const lines = calculateDepreciationRunLines(state, { accountSetId: body.accountSetId, fiscalYear, periodNo, runId });
   const totalDepreciationAmount = roundAmount(lines.reduce((sum, line) => sum + line.depreciationAmount, 0));
-  const warningCodes = [...new Set(lines.flatMap((line) => [line.skippedReason, line.brakeApplied ? "NET_VALUE_BRAKE_APPLIED" : null]).filter(Boolean))];
+  const warningCodes = depreciationRunWarnings(lines);
   const run = {
     id: runId,
     accountSetId: body.accountSetId,
@@ -3160,6 +3966,3490 @@ async function buildAiExceptionFindings(state, accountSetId, asOfDate) {
   return findings;
 }
 
+const SUPPORTED_AGENT_DRAFT_TYPES = new Set([
+  "master_data",
+  "purchase_order",
+  "sales_order",
+  "inventory_movement",
+  "material_requisition",
+  "product_receipt",
+  "stock_count",
+  "voucher",
+  "payroll_allocation",
+  "depreciation_run",
+  "asset_change",
+  "report_interpretation"
+]);
+
+function numbersFromText(text) {
+  return [...String(text ?? "").matchAll(/(\d+(?:\.\d+)?)/g)].map((match) => Number(match[1]));
+}
+
+function itemNameFromInstruction(instruction) {
+  const match = String(instruction ?? "").match(/([\p{Script=Han}A-Za-z0-9_-]+材料|[\p{Script=Han}A-Za-z0-9_-]+商品|[\p{Script=Han}A-Za-z0-9_-]+存货)/u);
+  return match?.[1] ?? "待匹配存货";
+}
+
+function orderSourceLinesToDraftLines(lines = []) {
+  return lines.map((line, index) => {
+    const quantity = Number(line.quantity ?? 0);
+    const unitPrice = Number(line.unitPrice ?? 0);
+    const taxRate = Number(line.taxRate ?? 0);
+    const netAmount = Number((quantity * unitPrice).toFixed(2));
+    const taxAmount = Number(line.taxAmount ?? Number((netAmount * taxRate).toFixed(2)));
+    const totalAmount = Number(line.totalAmount ?? Number((netAmount + taxAmount).toFixed(2)));
+    return {
+      lineNo: line.lineNo ?? index + 1,
+      itemId: line.itemId ?? null,
+      itemCode: line.itemCode ?? null,
+      itemName: line.itemName ?? null,
+      quantity,
+      unitPrice,
+      taxRate,
+      taxAmount,
+      totalAmount,
+      amount: totalAmount
+    };
+  });
+}
+
+function commonLineValue(lines, field) {
+  const values = [...new Set(lines.map((line) => line?.[field] ?? null).filter(Boolean))];
+  return values.length === 1 ? values[0] : null;
+}
+
+function inventoryMovementSourceLinesToDraftLines(lines = []) {
+  return lines.map((line, index) => ({
+    lineNo: line.lineNo ?? index + 1,
+    itemId: line.itemId ?? null,
+    itemCode: line.itemCode ?? null,
+    itemName: line.itemName ?? null,
+    warehouseId: line.warehouseId ?? null,
+    warehouseCode: line.warehouseCode ?? null,
+    locationId: line.locationId ?? null,
+    locationCode: line.locationCode ?? null,
+    batchNo: line.batchNo ?? null,
+    quantity: Number(line.quantity ?? 0),
+    unitCost: Number(line.unitCost ?? 0),
+    amount: Number(line.amount ?? 0)
+  }));
+}
+
+function stockCountSourceLinesToDraftLines(lines = []) {
+  return lines.map((line, index) => ({
+    lineNo: line.lineNo ?? index + 1,
+    itemId: line.itemId ?? null,
+    itemCode: line.itemCode ?? null,
+    itemName: line.itemName ?? null,
+    warehouseId: line.warehouseId ?? null,
+    warehouseCode: line.warehouseCode ?? null,
+    locationId: line.locationId ?? null,
+    locationCode: line.locationCode ?? null,
+    batchNo: line.batchNo ?? null,
+    bookQuantity: Number(line.bookQuantity ?? 0),
+    actualQuantity: Number(line.actualQuantity ?? line.bookQuantity ?? 0),
+    differenceQuantity: Number(line.differenceQuantity ?? 0),
+    unitCost: Number(line.unitCost ?? 0),
+    adjustmentAmount: Number(line.adjustmentAmount ?? 0),
+    reason: line.reason ?? null
+  }));
+}
+
+function voucherSourceLinesToDraftLines(lines = []) {
+  return lines.map((line, index) => ({
+    lineNo: line.lineNo ?? index + 1,
+    summary: line.summary ?? "",
+    accountCode: line.accountCode ?? null,
+    accountName: line.accountName ?? null,
+    debit: Number(line.debit ?? 0),
+    credit: Number(line.credit ?? 0),
+    auxiliaries: line.auxiliaries ? { ...line.auxiliaries } : {}
+  }));
+}
+
+function payrollRunSourceLinesToDraftRules(lines = [], totalCompanyCost = 0) {
+  const grouped = new Map();
+  for (const line of lines) {
+    const key = line.departmentId ?? "unassigned";
+    const current = grouped.get(key) ?? {
+      departmentId: line.departmentId ?? null,
+      targetType: "department",
+      workOrderId: null,
+      costType: "direct_labor",
+      amount: 0
+    };
+    current.amount = roundAmount(current.amount + Number(line.companyCost ?? 0));
+    grouped.set(key, current);
+  }
+  const total = Number(totalCompanyCost ?? 0);
+  return [...grouped.values()].map((rule, index) => ({
+    lineNo: index + 1,
+    ...rule,
+    allocationRate: total > 0 ? Number((rule.amount / total).toFixed(4)) : 0
+  }));
+}
+
+function guessAssetChangeKind(instruction) {
+  const text = String(instruction ?? "").toLowerCase();
+  if (text.includes("transfer") || text.includes("move") || text.includes("转移") || text.includes("调拨")) {
+    return "transfer";
+  }
+  if (text.includes("increase") || text.includes("improve") || text.includes("value") || text.includes("原值") || text.includes("改良")) {
+    return "value_change";
+  }
+  if (text.includes("dispose") || text.includes("scrap") || text.includes("处置") || text.includes("报废")) {
+    return "disposal";
+  }
+  return "change_request";
+}
+
+function buildDraftPayloadFromInstruction(draftType, instruction, sourceContext = {}, requestContext = {}) {
+  const numbers = numbersFromText(instruction);
+  const quantity = numbers[0] ?? 1;
+  const unitPrice = numbers[1] ?? 0;
+  const amount = Number((quantity * unitPrice).toFixed(2));
+  const sourceObject = sourceContext?.sourceObject;
+
+  if (draftType === "purchase_order" && sourceObject?.objectType === "purchase_order") {
+    return {
+      documentType: "purchase_order",
+      sourceOrderId: sourceObject.id,
+      sourceOrderNo: sourceObject.orderNo,
+      orderDate: sourceObject.orderDate ?? new Date().toISOString().slice(0, 10),
+      supplierId: sourceObject.supplierId ?? null,
+      currency: sourceObject.currency ?? "CNY",
+      exchangeRate: sourceObject.exchangeRate ?? 1,
+      lines: orderSourceLinesToDraftLines(sourceObject.lines)
+    };
+  }
+
+  if (draftType === "sales_order" && sourceObject?.objectType === "sales_order") {
+    return {
+      documentType: "sales_order",
+      sourceOrderId: sourceObject.id,
+      sourceOrderNo: sourceObject.orderNo,
+      orderDate: sourceObject.orderDate ?? new Date().toISOString().slice(0, 10),
+      customerId: sourceObject.customerId ?? null,
+      currency: sourceObject.currency ?? "CNY",
+      exchangeRate: sourceObject.exchangeRate ?? 1,
+      lines: orderSourceLinesToDraftLines(sourceObject.lines)
+    };
+  }
+
+  if (draftType === "purchase_order" || draftType === "sales_order") {
+    return {
+      documentType: draftType,
+      businessDate: new Date().toISOString().slice(0, 10),
+      counterpartyId: null,
+      lines: [
+        {
+          itemId: null,
+          itemName: itemNameFromInstruction(instruction),
+          quantity,
+          unitPrice,
+          amount
+        }
+      ]
+    };
+  }
+
+  if (draftType === "inventory_movement") {
+    if (sourceObject?.objectType === "inventory_movement") {
+      const lines = inventoryMovementSourceLinesToDraftLines(sourceObject.lines);
+      return {
+        documentType: "inventory_movement",
+        sourceMovementId: sourceObject.id,
+        sourceDocumentNo: sourceObject.documentNo,
+        movementType: sourceObject.movementType,
+        businessType: sourceObject.businessType ?? sourceObject.movementType,
+        fiscalYear: sourceObject.fiscalYear ?? null,
+        periodNo: sourceObject.periodNo ?? null,
+        movementDate: sourceObject.movementDate ?? new Date().toISOString().slice(0, 10),
+        warehouseId: commonLineValue(lines, "warehouseId"),
+        lines
+      };
+    }
+    return {
+      documentType: "inventory_movement",
+      movementType: String(instruction ?? "").includes("出库") ? "outbound" : "inbound",
+      warehouseId: null,
+      lines: [{ itemId: null, itemName: itemNameFromInstruction(instruction), quantity, unitCost: unitPrice, amount }]
+    };
+  }
+
+  if (draftType === "material_requisition") {
+    if (sourceObject?.objectType === "work_order") {
+      const yieldQuantity = Number(sourceObject.bomYieldQuantity ?? 1) || 1;
+      const lines = (sourceObject.bomLines ?? []).map((line) => {
+        const scrapRate = Number(line.scrapRate ?? 0);
+        const grossQuantity = (Number(sourceObject.plannedQuantity ?? 0) / yieldQuantity) * Number(line.quantity ?? 0);
+        return {
+          componentItemId: line.componentItemId,
+          componentItemCode: line.componentItemCode,
+          itemName: line.componentItemName,
+          warehouseId: null,
+          quantity: roundQuantity(scrapRate > 0 && scrapRate < 1 ? grossQuantity / (1 - scrapRate) : grossQuantity)
+        };
+      });
+      return {
+        documentType: "material_requisition",
+        workOrderId: sourceObject.id,
+        fiscalYear: sourceObject.fiscalYear ?? null,
+        periodNo: sourceObject.periodNo ?? null,
+        lines: lines.length > 0 ? lines : [{ componentItemId: null, itemName: itemNameFromInstruction(instruction), warehouseId: null, quantity }]
+      };
+    }
+    return {
+      documentType: "material_requisition",
+      workOrderId: null,
+      fiscalYear: null,
+      periodNo: null,
+      lines: [
+        {
+          componentItemId: null,
+          itemName: itemNameFromInstruction(instruction),
+          warehouseId: null,
+          quantity
+        }
+      ]
+    };
+  }
+
+  if (draftType === "product_receipt") {
+    if (sourceObject?.objectType === "work_order") {
+      return {
+        documentType: "product_receipt",
+        workOrderId: sourceObject.id,
+        fiscalYear: sourceObject.fiscalYear ?? null,
+        periodNo: sourceObject.periodNo ?? null,
+        lines: [
+          {
+            productItemId: sourceObject.productItemId,
+            productItemCode: sourceObject.productItemCode,
+            itemName: sourceObject.productItemName,
+            warehouseId: null,
+            quantity: roundQuantity(Math.max(Number(sourceObject.remainingQuantity ?? sourceObject.plannedQuantity ?? quantity), 0) || quantity)
+          }
+        ]
+      };
+    }
+    return {
+      documentType: "product_receipt",
+      workOrderId: null,
+      fiscalYear: null,
+      periodNo: null,
+      lines: [
+        {
+          productItemId: null,
+          itemName: itemNameFromInstruction(instruction),
+          warehouseId: null,
+          quantity
+        }
+      ]
+    };
+  }
+
+  if (draftType === "stock_count" && sourceObject?.objectType === "stock_count") {
+    return {
+      documentType: "stock_count",
+      sourceStockCountId: sourceObject.id,
+      sourceCountNo: sourceObject.countNo,
+      fiscalYear: sourceObject.fiscalYear ?? null,
+      periodNo: sourceObject.periodNo ?? null,
+      lines: stockCountSourceLinesToDraftLines(sourceObject.lines)
+    };
+  }
+
+  if (draftType === "voucher" && sourceObject?.objectType === "voucher") {
+    return {
+      documentType: "voucher",
+      sourceVoucherId: sourceObject.id,
+      sourceVoucherNo: sourceObject.voucherNo,
+      fiscalYear: sourceObject.fiscalYear ?? null,
+      periodNo: sourceObject.periodNo ?? null,
+      voucherDate: sourceObject.voucherDate ?? new Date().toISOString().slice(0, 10),
+      lines: voucherSourceLinesToDraftLines(sourceObject.lines)
+    };
+  }
+
+  if (draftType === "payroll_allocation" && sourceObject?.objectType === "payroll_run") {
+    return {
+      documentType: "payroll_allocation",
+      payrollRunId: sourceObject.id,
+      runNo: sourceObject.runNo,
+      fiscalYear: sourceObject.fiscalYear ?? null,
+      periodNo: sourceObject.periodNo ?? null,
+      rules: payrollRunSourceLinesToDraftRules(sourceObject.lines, sourceObject.totalCompanyCost)
+    };
+  }
+
+  if (draftType === "asset_change" && sourceObject?.objectType === "fixed_asset") {
+    const changeAmount = numbers[0] == null ? null : Number(numbers[0]);
+    return {
+      documentType: "asset_change",
+      changeKind: guessAssetChangeKind(instruction),
+      fixedAssetId: sourceObject.id,
+      assetNo: sourceObject.assetNo,
+      assetName: sourceObject.assetName,
+      changeDate: new Date().toISOString().slice(0, 10),
+      fromDepartmentId: sourceObject.currentDepartmentId ?? null,
+      fromDepartmentName: sourceObject.currentDepartmentName ?? null,
+      toDepartmentId: null,
+      toDepartmentName: null,
+      amount: Number.isFinite(changeAmount) ? changeAmount : null,
+      reason: String(instruction ?? "")
+    };
+  }
+
+  if (draftType === "depreciation_run") {
+    const fiscalYear = Number(requestContext.fiscalYear ?? new Date().getFullYear());
+    const periodNo = Number(requestContext.periodNo ?? 1);
+    return {
+      documentType: "depreciation_run",
+      runNo: `AGENT-DEP-${fiscalYear}${String(periodNo).padStart(2, "0")}`,
+      fiscalYear,
+      periodNo,
+      dryRun: true,
+      lines: []
+    };
+  }
+
+  if (draftType === "report_interpretation" && sourceObject?.objectType === "report_run") {
+    const evidenceRefs = (sourceObject.cells ?? []).map((cell) => cell.evidenceRef).filter(Boolean);
+    return {
+      documentType: "report_interpretation",
+      reportRunId: sourceObject.id,
+      fiscalYear: sourceObject.fiscalYear ?? null,
+      periodNo: sourceObject.periodNo ?? null,
+      snapshotHash: sourceObject.snapshotHash ?? null,
+      summary: String(instruction ?? ""),
+      keyFindings: [],
+      warnings: [],
+      evidenceRefs
+    };
+  }
+
+  if (draftType === "voucher") {
+    return {
+      documentType: "voucher",
+      lines: [
+        { summary: "Agent候选分录", accountCode: null, debit: amount, credit: 0 },
+        { summary: "Agent候选分录", accountCode: null, debit: 0, credit: amount }
+      ]
+    };
+  }
+
+  return {
+    documentType: draftType,
+    instruction: String(instruction ?? ""),
+    amount
+  };
+}
+
+function unmatchedItemsForDraft(draftType, draftPayload) {
+  const items = [];
+  if (draftType === "purchase_order" && !draftPayload.supplierId) {
+    items.push({ field: "supplierId", reason: "Supplier must be selected from matched master data before saving." });
+  }
+  if (draftType === "sales_order" && !draftPayload.customerId) {
+    items.push({ field: "customerId", reason: "Customer must be selected from matched master data before saving." });
+  }
+  if (["purchase_order", "sales_order", "inventory_movement", "stock_count"].includes(draftType)) {
+    for (const [index, line] of (draftPayload.lines ?? []).entries()) {
+      if (!line.itemId) {
+        items.push({ field: `lines[${index}].itemId`, reason: "Inventory item must be matched before saving." });
+      }
+    }
+  }
+  if (draftType === "inventory_movement" && !draftPayload.warehouseId) {
+    items.push({ field: "warehouseId", reason: "Warehouse must be selected before saving." });
+  }
+  if (draftType === "material_requisition") {
+    if (!draftPayload.workOrderId) {
+      items.push({ field: "workOrderId", reason: "Work order must be selected before saving the material requisition draft." });
+    }
+    for (const [index, line] of (draftPayload.lines ?? []).entries()) {
+      if (!line.componentItemId) {
+        items.push({ field: `lines[${index}].componentItemId`, reason: "Component item must be matched before saving." });
+      }
+      if (!line.warehouseId) {
+        items.push({ field: `lines[${index}].warehouseId`, reason: "Warehouse must be selected before saving." });
+      }
+    }
+  }
+  if (draftType === "product_receipt") {
+    if (!draftPayload.workOrderId) {
+      items.push({ field: "workOrderId", reason: "Work order must be selected before saving the product receipt draft." });
+    }
+    for (const [index, line] of (draftPayload.lines ?? []).entries()) {
+      if (!line.productItemId) {
+        items.push({ field: `lines[${index}].productItemId`, reason: "Finished good item must be matched before saving." });
+      }
+      if (!line.warehouseId) {
+        items.push({ field: `lines[${index}].warehouseId`, reason: "Warehouse must be selected before saving." });
+      }
+    }
+  }
+  if (draftType === "voucher") {
+    for (const [index, line] of (draftPayload.lines ?? []).entries()) {
+      if (!line.accountCode) {
+        items.push({ field: `lines[${index}].accountCode`, reason: "Accounts must be matched before saving the voucher draft." });
+      }
+    }
+  }
+  return items;
+}
+
+function validateLlmGeneratedDraftPayload(draftType, draftPayload) {
+  const errors = [];
+  if (!draftPayload || typeof draftPayload !== "object" || Array.isArray(draftPayload)) {
+    errors.push("draftPayload must be an object.");
+  }
+  if (draftPayload?.documentType && draftPayload.documentType !== draftType) {
+    errors.push(`draftPayload.documentType must equal ${draftType}.`);
+  }
+  if ([
+    "purchase_order",
+    "sales_order",
+    "inventory_movement",
+    "material_requisition",
+    "product_receipt",
+    "stock_count",
+    "voucher"
+  ].includes(draftType)) {
+    if (!Array.isArray(draftPayload?.lines) || draftPayload.lines.length === 0) {
+      errors.push("draftPayload.lines is required.");
+    }
+  }
+  if (["purchase_order", "sales_order"].includes(draftType) && Array.isArray(draftPayload?.lines)) {
+    for (const [index, line] of draftPayload.lines.entries()) {
+      if (typeof line !== "object" || line === null || Array.isArray(line)) {
+        errors.push(`draftPayload.lines[${index}] must be an object.`);
+        continue;
+      }
+      if (typeof line.quantity !== "number") {
+        errors.push(`draftPayload.lines[${index}].quantity must be a number.`);
+      }
+      if (typeof line.unitPrice !== "number") {
+        errors.push(`draftPayload.lines[${index}].unitPrice must be a number.`);
+      }
+    }
+  }
+  if (errors.length > 0) {
+    const error = new Error(`LLM draft output schema validation failed: ${errors.join(" ")}`);
+    error.code = "LLM_DRAFT_SCHEMA_INVALID";
+    throw error;
+  }
+}
+
+function orderLinesToSourceLines(lines = []) {
+  return lines.map((line, index) => ({
+    id: line.id ?? null,
+    lineNo: line.lineNo ?? index + 1,
+    itemId: line.itemId ?? null,
+    itemCode: line.itemCode ?? null,
+    itemName: line.itemName ?? null,
+    quantity: Number(line.quantity ?? 0),
+    unitPrice: Number(line.unitPrice ?? 0),
+    taxRate: Number(line.taxRate ?? 0),
+    taxAmount: Number(line.taxAmount ?? 0),
+    totalAmount: Number(line.totalAmount ?? 0),
+    receivedQuantity: Number(line.receivedQuantity ?? 0),
+    shippedQuantity: Number(line.shippedQuantity ?? 0),
+    invoicedQuantity: Number(line.invoicedQuantity ?? 0)
+  }));
+}
+
+async function buildPurchaseOrderSourceSnapshot(state, accountSetId, sourceObjectId) {
+  const order = await findPurchaseOrderByIdentifier(state, sourceObjectId);
+  if (!order || order.accountSetId !== accountSetId) {
+    throw new Error("Agent draft source purchase order was not found.");
+  }
+  return {
+    objectType: "purchase_order",
+    id: order.id,
+    orderNo: order.orderNo,
+    status: order.status,
+    supplierId: order.supplierId,
+    supplierName: order.supplierName,
+    orderDate: order.orderDate,
+    currency: order.currency,
+    exchangeRate: order.exchangeRate,
+    totalAmount: order.totalAmount,
+    lines: orderLinesToSourceLines(order.lines)
+  };
+}
+
+async function buildSalesOrderSourceSnapshot(state, accountSetId, sourceObjectId) {
+  const order = await findSalesOrderByIdentifier(state, sourceObjectId);
+  if (!order || order.accountSetId !== accountSetId) {
+    throw new Error("Agent draft source sales order was not found.");
+  }
+  return {
+    objectType: "sales_order",
+    id: order.id,
+    orderNo: order.orderNo,
+    status: order.status,
+    customerId: order.customerId,
+    customerName: order.customerName,
+    orderDate: order.orderDate,
+    currency: order.currency,
+    exchangeRate: order.exchangeRate,
+    totalAmount: order.totalAmount,
+    lines: orderLinesToSourceLines(order.lines)
+  };
+}
+
+function buildInventoryMovementSourceSnapshot(state, accountSetId, sourceObjectId) {
+  const movement =
+    [...state.inventoryMovements.values()].find((row) => row.id === sourceObjectId || row.documentNo === sourceObjectId) ?? null;
+  if (!movement || movement.accountSetId !== accountSetId) {
+    throw new Error("Agent draft source inventory movement was not found.");
+  }
+  return {
+    objectType: "inventory_movement",
+    id: movement.id,
+    documentNo: movement.documentNo,
+    movementType: movement.movementType,
+    businessType: movement.businessType,
+    sourceType: movement.sourceType,
+    sourceDocumentId: movement.sourceDocumentId,
+    fiscalYear: movement.fiscalYear,
+    periodNo: movement.periodNo,
+    movementDate: movement.movementDate,
+    costStatus: movement.costStatus,
+    totalQuantity: movement.totalQuantity,
+    totalAmount: movement.totalAmount,
+    lines: inventoryMovementSourceLinesToDraftLines(movement.lines)
+  };
+}
+
+function buildStockCountSourceSnapshot(state, accountSetId, sourceObjectId) {
+  const stockCount = [...state.stockCounts.values()].find((row) => row.id === sourceObjectId || row.countNo === sourceObjectId) ?? null;
+  if (!stockCount || stockCount.accountSetId !== accountSetId) {
+    throw new Error("Agent draft source stock count was not found.");
+  }
+  return {
+    objectType: "stock_count",
+    id: stockCount.id,
+    countNo: stockCount.countNo,
+    status: stockCount.status,
+    fiscalYear: stockCount.fiscalYear,
+    periodNo: stockCount.periodNo,
+    totalDifferenceQuantity: stockCount.totalDifferenceQuantity,
+    totalAdjustmentAmount: stockCount.totalAdjustmentAmount,
+    lines: stockCountSourceLinesToDraftLines(stockCount.lines)
+  };
+}
+
+async function buildVoucherSourceSnapshot(state, accountSetId, sourceObjectId) {
+  const voucher = await findVoucherByIdentifier(state, sourceObjectId);
+  if (!voucher || voucher.accountSetId !== accountSetId) {
+    throw new Error("Agent draft source voucher was not found.");
+  }
+  const accounts = await listVoucherAccounts(state, voucher);
+  const accountsByCode = new Map(accounts.map((account) => [account.code, account]));
+  return {
+    objectType: "voucher",
+    id: voucher.id,
+    voucherNo: voucher.voucherNo,
+    voucherDate: voucher.voucherDate,
+    status: voucher.status,
+    sourceType: voucher.sourceType ?? null,
+    fiscalYear: voucher.fiscalYear,
+    periodNo: voucher.periodNo,
+    attachmentCount: voucher.attachmentCount ?? 0,
+    attachmentIds: state.attachmentLinks
+      .filter((link) => link.objectType === "voucher" && link.objectId === voucher.id)
+      .map((link) => link.attachmentId),
+    lines: (voucher.lines ?? []).map((line, index) => ({
+      lineNo: line.lineNo ?? index + 1,
+      summary: line.summary ?? "",
+      accountCode: line.accountCode ?? null,
+      accountName: accountsByCode.get(line.accountCode)?.name ?? null,
+      debit: Number(line.debit ?? 0),
+      credit: Number(line.credit ?? 0),
+      auxiliaries: line.auxiliaries ? { ...line.auxiliaries } : {}
+    }))
+  };
+}
+
+function buildPayrollRunSourceSnapshot(state, accountSetId, sourceObjectId) {
+  const run = findPayrollRunByIdentifier(state, sourceObjectId);
+  if (!run || run.accountSetId !== accountSetId) {
+    throw new Error("Agent draft source payroll run was not found.");
+  }
+  return {
+    objectType: "payroll_run",
+    id: run.id,
+    runNo: run.runNo,
+    status: run.status,
+    payrollCategoryId: run.payrollCategoryId,
+    payrollCategoryCode: run.payrollCategoryCode,
+    variableImportId: run.variableImportId,
+    fiscalYear: run.fiscalYear,
+    periodNo: run.periodNo,
+    lineCount: run.lineCount,
+    totalGrossAmount: run.totalGrossAmount,
+    totalDeductionAmount: run.totalDeductionAmount,
+    totalTaxAmount: run.totalTaxAmount,
+    totalNetPay: run.totalNetPay,
+    totalCompanyCost: run.totalCompanyCost,
+    lines: (run.lines ?? []).map((line, index) => ({
+      id: line.id ?? null,
+      lineNo: line.lineNo ?? index + 1,
+      employeeProfileId: line.employeeProfileId,
+      employeeNo: line.employeeNo,
+      employeeName: line.employeeName,
+      departmentId: line.departmentId,
+      departmentName: line.departmentName ?? null,
+      grossAmount: line.grossAmount,
+      deductionAmount: line.deductionAmount,
+      taxableIncome: line.taxableIncome,
+      individualIncomeTax: line.individualIncomeTax,
+      netPay: line.netPay,
+      companyCost: line.companyCost
+    }))
+  };
+}
+
+function buildFixedAssetSourceSnapshot(state, accountSetId, sourceObjectId) {
+  const asset = findFixedAssetByIdentifier(state, sourceObjectId);
+  if (!asset || asset.accountSetId !== accountSetId) {
+    throw new Error("Agent draft source fixed asset was not found.");
+  }
+  const snapshot = createAssetSnapshot(asset);
+  return {
+    objectType: "fixed_asset",
+    id: snapshot.id,
+    assetNo: snapshot.assetNo,
+    assetName: snapshot.name,
+    categoryId: snapshot.categoryId ?? null,
+    categoryCode: snapshot.categoryCode ?? null,
+    depreciationMethodId: snapshot.depreciationMethodId ?? null,
+    depreciationMethodCode: snapshot.depreciationMethodCode ?? null,
+    acquisitionType: snapshot.acquisitionType ?? null,
+    acquisitionDate: snapshot.acquisitionDate ?? null,
+    originalValue: snapshot.originalValue,
+    accumulatedDepreciation: snapshot.accumulatedDepreciation,
+    netValue: snapshot.netValue,
+    salvageValue: snapshot.salvageValue,
+    usefulLifeMonths: snapshot.usefulLifeMonths,
+    serviceStartYear: snapshot.serviceStartYear,
+    serviceStartPeriod: snapshot.serviceStartPeriod,
+    currentDepartmentId: snapshot.currentDepartmentId,
+    currentDepartmentName: snapshot.currentDepartmentName ?? null,
+    responsiblePerson: snapshot.responsiblePerson ?? null,
+    usageStatus: snapshot.usageStatus,
+    depreciationTimelineRule: snapshot.depreciationTimelineRule,
+    depreciationDepartmentRule: snapshot.depreciationDepartmentRule,
+    isDepreciationStopped: snapshot.isDepreciationStopped ?? false
+  };
+}
+
+function buildReportRunSourceSnapshot(state, accountSetId, sourceObjectId) {
+  const run = findReportRunByIdentifier(state, sourceObjectId);
+  if (!run || run.accountSetId !== accountSetId) {
+    throw new Error("Agent draft source report run was not found.");
+  }
+  const template = findReportTemplateForRun(state, run);
+  const cells = (run.cells ?? []).map((cell) => ({
+    id: cell.id ?? null,
+    sheetCode: cell.sheetCode,
+    cellAddress: cell.cellAddress,
+    label: cell.label ?? null,
+    formulaText: cell.formulaText ?? null,
+    calculatedValue: Number(cell.calculatedValue ?? cell.value ?? 0),
+    displayFormat: cell.displayFormat ?? null,
+    traceId: cell.traceId ?? null,
+    evidenceRef: reportCellEvidenceRef(cell)
+  }));
+  return {
+    objectType: "report_run",
+    id: run.id,
+    templateVersionId: run.templateVersionId,
+    templateId: template?.id ?? null,
+    templateCode: template?.templateCode ?? null,
+    templateName: template?.templateName ?? null,
+    reportType: template?.reportType ?? null,
+    fiscalYear: run.fiscalYear,
+    periodNo: run.periodNo,
+    includeUnposted: run.includeUnposted,
+    runMode: run.runMode,
+    status: run.status,
+    renderMode: reportRunRenderMode(run),
+    snapshotHash: run.snapshotHash,
+    cellCount: cells.length,
+    traceLinkCount: (run.traceLinks ?? []).length,
+    cells,
+    traceLinks: (run.traceLinks ?? []).map((link) => ({
+      id: link.id ?? null,
+      traceId: link.traceId ?? null,
+      sourceType: link.sourceType ?? null,
+      accountCode: link.accountCode ?? null,
+      accountName: link.accountName ?? null,
+      amount: Number(link.amount ?? 0)
+    }))
+  };
+}
+
+function buildWorkOrderSourceSnapshot(state, accountSetId, sourceObjectId) {
+  const workOrder = findWorkOrderByIdentifier(state, sourceObjectId);
+  if (!workOrder || workOrder.accountSetId !== accountSetId) {
+    throw new Error("Agent draft source work order was not found.");
+  }
+  const bom = findBomByIdentifier(state, workOrder.bomId);
+  return {
+    objectType: "work_order",
+    id: workOrder.id,
+    workOrderNo: workOrder.workOrderNo,
+    status: workOrder.status,
+    productItemId: workOrder.productItemId,
+    productItemCode: workOrder.productItemCode,
+    productItemName: workOrder.productItemName,
+    bomId: workOrder.bomId,
+    bomVersion: workOrder.bomVersion,
+    bomYieldQuantity: bom?.yieldQuantity ?? 1,
+    plannedQuantity: workOrder.plannedQuantity,
+    completedQuantity: workOrder.completedQuantity,
+    remainingQuantity: roundQuantity(Math.max(Number(workOrder.plannedQuantity ?? 0) - Number(workOrder.completedQuantity ?? 0), 0)),
+    directMaterialCost: workOrder.directMaterialCost,
+    fiscalYear: workOrder.fiscalYear,
+    periodNo: workOrder.periodNo,
+    bomLines: (bom?.lines ?? []).map((line) => ({
+      componentItemId: line.componentItemId,
+      componentItemCode: line.componentItemCode,
+      componentItemName: line.componentItemName,
+      lineNo: line.lineNo,
+      quantity: line.quantity,
+      scrapRate: line.scrapRate
+    }))
+  };
+}
+
+async function resolveAgentDraftSourceContext(state, body) {
+  const sourceContext = {
+    sourceObjectType: body.sourceObjectType ?? null,
+    sourceObjectId: body.sourceObjectId ?? null,
+    userInstruction: body.userInstruction
+  };
+  if (!body.sourceObjectType || !body.sourceObjectId) {
+    return sourceContext;
+  }
+  if (body.sourceObjectType === "work_order") {
+    return {
+      ...sourceContext,
+      sourceObject: buildWorkOrderSourceSnapshot(state, body.accountSetId, body.sourceObjectId)
+    };
+  }
+  if (body.sourceObjectType === "purchase_order") {
+    return {
+      ...sourceContext,
+      sourceObject: await buildPurchaseOrderSourceSnapshot(state, body.accountSetId, body.sourceObjectId)
+    };
+  }
+  if (body.sourceObjectType === "sales_order") {
+    return {
+      ...sourceContext,
+      sourceObject: await buildSalesOrderSourceSnapshot(state, body.accountSetId, body.sourceObjectId)
+    };
+  }
+  if (body.sourceObjectType === "inventory_movement") {
+    return {
+      ...sourceContext,
+      sourceObject: buildInventoryMovementSourceSnapshot(state, body.accountSetId, body.sourceObjectId)
+    };
+  }
+  if (body.sourceObjectType === "stock_count") {
+    return {
+      ...sourceContext,
+      sourceObject: buildStockCountSourceSnapshot(state, body.accountSetId, body.sourceObjectId)
+    };
+  }
+  if (body.sourceObjectType === "voucher") {
+    return {
+      ...sourceContext,
+      sourceObject: await buildVoucherSourceSnapshot(state, body.accountSetId, body.sourceObjectId)
+    };
+  }
+  if (body.sourceObjectType === "payroll_run") {
+    return {
+      ...sourceContext,
+      sourceObject: buildPayrollRunSourceSnapshot(state, body.accountSetId, body.sourceObjectId)
+    };
+  }
+  if (body.sourceObjectType === "fixed_asset") {
+    return {
+      ...sourceContext,
+      sourceObject: buildFixedAssetSourceSnapshot(state, body.accountSetId, body.sourceObjectId)
+    };
+  }
+  if (body.sourceObjectType === "report_run") {
+    return {
+      ...sourceContext,
+      sourceObject: buildReportRunSourceSnapshot(state, body.accountSetId, body.sourceObjectId)
+    };
+  }
+  return sourceContext;
+}
+
+function llmDraftProviderModelFor(state) {
+  return {
+    provider:
+      state.config.llmDraftAdapter?.provider ??
+      state.config.llmDraftProvider ??
+      globalThis.process?.env?.AIS_LLM_DRAFT_PROVIDER ??
+      "local-rule-based",
+    model:
+      state.config.llmDraftAdapter?.model ??
+      state.config.llmDraftModel ??
+      globalThis.process?.env?.AIS_LLM_DRAFT_MODEL ??
+      "local-draft-rules-v1"
+  };
+}
+
+function createFailedLlmDraftRun(state, body, ocrResults, error) {
+  const { provider, model } = llmDraftProviderModelFor(state);
+  return {
+    id: `llm-draft-run:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    provider,
+    model,
+    status: "failed",
+    inputSummary: {
+      draftType: body.draftType,
+      sourceObjectType: body.sourceObjectType ?? null,
+      sourceObjectId: body.sourceObjectId ?? null,
+      sourceContext: body.sourceContext ?? null,
+      ocrText: (ocrResults ?? []).map((result) => result.extractedText).filter(Boolean).join("\n"),
+      evidenceRefs: Array.isArray(body.evidenceRefs) ? [...body.evidenceRefs] : []
+    },
+    outputSchema: body.draftType,
+    errorMessage: error.message,
+    createdAt: "now"
+  };
+}
+
+async function runLlmDraftAdapter(state, body) {
+  const adapter = state.config.llmDraftAdapter;
+  const { provider, model } = llmDraftProviderModelFor(state);
+  const ocrText = (body.ocrResults ?? []).map((result) => result.extractedText).filter(Boolean).join("\n");
+  const adapterInput = {
+    accountSetId: body.accountSetId,
+    fiscalYear: body.fiscalYear ?? null,
+    periodNo: body.periodNo ?? null,
+    fiscalPeriodId: body.fiscalPeriodId ?? null,
+    draftType: body.draftType,
+    sourceObjectType: body.sourceObjectType ?? null,
+    sourceObjectId: body.sourceObjectId ?? null,
+    sourceContext: body.sourceContext ?? {
+      sourceObjectType: body.sourceObjectType ?? null,
+      sourceObjectId: body.sourceObjectId ?? null,
+      userInstruction: body.userInstruction
+    },
+    userInstruction: body.userInstruction,
+    ocrText,
+    ocrResults: body.ocrResults ?? [],
+    evidenceRefs: Array.isArray(body.evidenceRefs) ? [...body.evidenceRefs] : [],
+    dryRun: true
+  };
+  const generated = adapter?.generateDraft ? await adapter.generateDraft(adapterInput) : null;
+  const instructionWithOcr = [body.userInstruction, ocrText].filter(Boolean).join("\n");
+  const draftPayload = generated?.draftPayload ?? buildDraftPayloadFromInstruction(body.draftType, instructionWithOcr, adapterInput.sourceContext, body);
+  if (generated?.draftPayload) {
+    validateLlmGeneratedDraftPayload(body.draftType, draftPayload);
+  }
+  const unmatchedItems = generated?.unmatchedItems ?? unmatchedItemsForDraft(body.draftType, draftPayload);
+  const llmDraftRun = {
+    id: `llm-draft-run:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    provider: generated?.provider ?? provider,
+    model: generated?.model ?? model,
+    status: generated?.status ?? "completed",
+    inputSummary: {
+      draftType: body.draftType,
+      sourceObjectType: body.sourceObjectType ?? null,
+      sourceObjectId: body.sourceObjectId ?? null,
+      sourceContext: adapterInput.sourceContext,
+      ocrText,
+      evidenceRefs: Array.isArray(body.evidenceRefs) ? [...body.evidenceRefs] : []
+    },
+    outputSchema: generated?.outputSchema ?? body.draftType,
+    createdAt: "now"
+  };
+  return { llmDraftRun, draftPayload, unmatchedItems };
+}
+
+async function runOcrForAttachment(state, attachment) {
+  if (attachment.storageProvider !== "local") {
+    return {
+      attachmentId: attachment.id,
+      provider: state.config.ocrAdapter?.provider ?? "local-ocr-placeholder",
+      model: state.config.ocrAdapter?.model ?? null,
+      status: "metadata_only",
+      extractedText: "",
+      confidence: 0,
+      warning: "Attachment content is not available in local storage for OCR."
+    };
+  }
+
+  const content = readFileSync(join(attachmentStorageRootFor(state), attachment.storageKey));
+  const adapter = state.config.ocrAdapter;
+  if (adapter?.extractText) {
+    const result = await adapter.extractText({ attachment, content, state });
+    return {
+      attachmentId: attachment.id,
+      provider: result.provider ?? adapter.provider ?? "configured-local-ocr",
+      model: result.model ?? adapter.model ?? null,
+      status: result.status ?? "completed",
+      extractedText: result.extractedText ?? "",
+      confidence: Number(result.confidence ?? 0),
+      warning: result.warning ?? null
+    };
+  }
+  const isText = attachment.contentType?.startsWith("text/") || /\.(txt|csv|tsv|json)$/i.test(attachment.filename ?? "");
+  const extractedText = isText ? content.toString("utf8") : `[local OCR placeholder extracted text from ${attachment.filename}]`;
+  return {
+    attachmentId: attachment.id,
+    provider: "local-ocr-placeholder",
+    model: "local-placeholder-v1",
+    status: "completed",
+    extractedText,
+    confidence: isText ? 0.99 : 0.55
+  };
+}
+
+async function buildOcrResultsForDraft(state, body) {
+  const attachmentIds = Array.isArray(body.attachmentIds) ? [...new Set(body.attachmentIds)] : [];
+  const results = [];
+  const reviewedByAttachmentId = new Map(
+    (Array.isArray(body.reviewedOcrResults) ? body.reviewedOcrResults : [])
+      .filter((result) => typeof result?.attachmentId === "string")
+      .map((result) => [result.attachmentId, result])
+  );
+  for (const attachmentId of attachmentIds) {
+    const attachment = state.attachments.get(attachmentId);
+    if (!attachment || attachment.status !== "available" || attachment.accountSetId !== body.accountSetId) {
+      throw new Error("Draft attachments must exist, belong to the account set, and be available.");
+    }
+    const ocrResult = await runOcrForAttachment(state, attachment);
+    const reviewed = reviewedByAttachmentId.get(attachmentId);
+    if (reviewed) {
+      if (typeof reviewed.extractedText !== "string" || reviewed.extractedText.trim() === "") {
+        throw new Error("reviewedOcrResults[].extractedText is required when overriding OCR text.");
+      }
+      results.push({
+        ...ocrResult,
+        status: "reviewed",
+        originalExtractedText: ocrResult.extractedText,
+        extractedText: reviewed.extractedText,
+        reviewedBy: reviewed.reviewedBy ?? body.requestedBy ?? body.createdBy ?? "system",
+        reviewedAt: "now"
+      });
+    } else {
+      results.push(ocrResult);
+    }
+  }
+  for (const attachmentId of reviewedByAttachmentId.keys()) {
+    if (!attachmentIds.includes(attachmentId)) {
+      throw new Error("reviewedOcrResults can only reference uploaded attachmentIds.");
+    }
+  }
+  return results;
+}
+
+async function createOcrPreview(state, body, actorId) {
+  if (body.dryRun !== true) {
+    throw new Error("OCR preview must use dryRun true.");
+  }
+  if (typeof body.accountSetId !== "string" || body.accountSetId.trim() === "") {
+    throw new Error("accountSetId is required.");
+  }
+  const results = await buildOcrResultsForDraft(state, body);
+  return {
+    id: `ocr-preview:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    dryRun: true,
+    attachmentIds: Array.isArray(body.attachmentIds) ? [...new Set(body.attachmentIds)] : [],
+    results,
+    requestedBy: body.requestedBy ?? actorId,
+    createdAt: "now"
+  };
+}
+
+async function createAgentDraftCandidate(state, body, actorId) {
+  if (body.dryRun !== true) {
+    throw new Error("Agent draft candidates must use dryRun true.");
+  }
+  if (typeof body.accountSetId !== "string" || body.accountSetId.trim() === "") {
+    throw new Error("accountSetId is required.");
+  }
+  if (!SUPPORTED_AGENT_DRAFT_TYPES.has(body.draftType)) {
+    throw new Error("draftType is not supported.");
+  }
+  if (typeof body.userInstruction !== "string" || body.userInstruction.trim() === "") {
+    throw new Error("userInstruction is required.");
+  }
+
+  const ocrResults = await buildOcrResultsForDraft(state, body);
+  const attachmentIds = Array.isArray(body.attachmentIds) ? [...new Set(body.attachmentIds)] : [];
+  const evidenceRefs = [...new Set([...(Array.isArray(body.evidenceRefs) ? body.evidenceRefs : []), ...attachmentIds])];
+  const sourceContext = await resolveAgentDraftSourceContext(state, body);
+  let llmDraftRun;
+  let draftPayload;
+  let unmatchedItems;
+  try {
+    ({ llmDraftRun, draftPayload, unmatchedItems } = await runLlmDraftAdapter(state, { ...body, sourceContext, ocrResults, evidenceRefs }));
+  } catch (error) {
+    const failedRun = createFailedLlmDraftRun(state, { ...body, sourceContext, evidenceRefs }, ocrResults, error);
+    state.llmDraftRuns.set(failedRun.id, failedRun);
+    throw error;
+  }
+  state.llmDraftRuns.set(llmDraftRun.id, llmDraftRun);
+  const candidate = {
+    id: `agent-draft-candidate:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    fiscalPeriodId: body.fiscalPeriodId ?? null,
+    draftType: body.draftType,
+    sourceObjectType: body.sourceObjectType ?? null,
+    sourceObjectId: body.sourceObjectId ?? null,
+    userInstruction: body.userInstruction,
+    status: "candidate",
+    dryRun: true,
+    riskLevel: "medium",
+    requiresHumanConfirmation: true,
+    sourceContext,
+    matchedMasterData: [],
+    unmatchedItems,
+    draftPayload,
+    ocrResults,
+    dryRunResult: {
+      status: unmatchedItems.length > 0 ? "review_required" : "ready_for_confirmation",
+      warnings: unmatchedItems.map((item) => item.reason)
+    },
+    warnings: unmatchedItems.length > 0 ? ["候选草稿存在未匹配主数据，需人工确认。"] : [],
+    confidence: unmatchedItems.length > 0 ? 0.68 : 0.82,
+    evidenceRefs,
+    llmDraftRun,
+    createdBy: actorId,
+    createdAt: "now"
+  };
+  state.agentDraftCandidates.set(candidate.id, candidate);
+  return candidate;
+}
+
+function summarizeAgentDraftCandidate(candidate) {
+  return {
+    id: candidate.id,
+    accountSetId: candidate.accountSetId,
+    draftType: candidate.draftType,
+    status: candidate.status,
+    riskLevel: candidate.riskLevel,
+    requiresHumanConfirmation: candidate.requiresHumanConfirmation,
+    confidence: candidate.confidence,
+    sourceObjectType: candidate.sourceObjectType,
+    sourceObjectId: candidate.sourceObjectId,
+    userInstruction: candidate.userInstruction,
+    dryRunStatus: candidate.dryRunResult?.status ?? null,
+    unmatchedCount: candidate.unmatchedItems?.length ?? 0,
+    warningCount: candidate.warnings?.length ?? 0,
+    evidenceCount: candidate.evidenceRefs?.length ?? 0,
+    convertedObjectType: candidate.convertedObjectType ?? null,
+    convertedObjectId: candidate.convertedObjectId ?? null,
+    reviewedBy: candidate.reviewedBy ?? null,
+    reviewedAt: candidate.reviewedAt ?? null,
+    rejectedBy: candidate.rejectedBy ?? null,
+    rejectedAt: candidate.rejectedAt ?? null,
+    rejectionReason: candidate.rejectionReason ?? null,
+    createdBy: candidate.createdBy,
+    createdAt: candidate.createdAt
+  };
+}
+
+function listAgentDraftCandidateQueue(state, { accountSetId, status = null, draftType = null } = {}) {
+  return [...state.agentDraftCandidates.values()]
+    .filter((candidate) => {
+      if (accountSetId && candidate.accountSetId !== accountSetId) return false;
+      if (status && candidate.status !== status) return false;
+      if (draftType && candidate.draftType !== draftType) return false;
+      return true;
+    })
+    .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)) || right.id.localeCompare(left.id))
+    .map(summarizeAgentDraftCandidate);
+}
+
+async function persistAgentDraftCandidateForRoute(state, candidate) {
+  const platformStore = state.config.platformStore;
+  let savedCandidate = candidate;
+  if (candidate.llmDraftRun && platformStore?.createLlmDraftRun) {
+    const savedRun = await platformStore.createLlmDraftRun(candidate.llmDraftRun);
+    state.llmDraftRuns.set(savedRun.id, savedRun);
+    savedCandidate = { ...candidate, llmDraftRun: savedRun };
+  }
+  if (platformStore?.createAgentDraftCandidate) {
+    savedCandidate = await platformStore.createAgentDraftCandidate(savedCandidate);
+    state.agentDraftCandidates.set(savedCandidate.id, savedCandidate);
+  }
+  return savedCandidate;
+}
+
+function rejectAgentDraftCandidate(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be rejected.");
+  }
+  const rejectedBy = typeof body.rejectedBy === "string" && body.rejectedBy.trim() !== "" ? body.rejectedBy : actorId;
+  if (typeof rejectedBy !== "string" || rejectedBy.trim() === "") {
+    throw new Error("rejectedBy is required.");
+  }
+  if (typeof body.rejectionReason !== "string" || body.rejectionReason.trim() === "") {
+    throw new Error("rejectionReason is required.");
+  }
+  const rejectedCandidate = {
+    ...candidate,
+    status: "rejected",
+    rejectedBy,
+    rejectedAt: "now",
+    rejectionReason: body.rejectionReason
+  };
+  state.agentDraftCandidates.set(candidate.id, rejectedCandidate);
+  appendAuditLog(state, {
+    actorId: rejectedBy,
+    action: "agent.draft_candidate.reject",
+    objectType: "agent_draft_candidate",
+    objectId: candidate.id
+  });
+  return rejectedCandidate;
+}
+
+function summarizeLlmDraftRun(run) {
+  return {
+    id: run.id,
+    accountSetId: run.accountSetId ?? null,
+    provider: run.provider,
+    model: run.model,
+    status: run.status,
+    draftType: run.inputSummary?.draftType ?? null,
+    sourceObjectType: run.inputSummary?.sourceObjectType ?? null,
+    sourceObjectId: run.inputSummary?.sourceObjectId ?? null,
+    evidenceCount: run.inputSummary?.evidenceRefs?.length ?? 0,
+    outputSchema: run.outputSchema,
+    errorMessage: run.errorMessage ?? null,
+    createdAt: run.createdAt
+  };
+}
+
+function listLlmDraftRuns(state, { accountSetId = null, status = null, draftType = null } = {}) {
+  return [...state.llmDraftRuns.values()]
+    .filter((run) => {
+      if (accountSetId && run.accountSetId !== accountSetId) return false;
+      if (status && run.status !== status) return false;
+      if (draftType && run.inputSummary?.draftType !== draftType) return false;
+      return true;
+    })
+    .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)) || right.id.localeCompare(left.id))
+    .map(summarizeLlmDraftRun);
+}
+
+function roundedRate(numerator, denominator) {
+  if (!denominator) {
+    return 0;
+  }
+  return Number((numerator / denominator).toFixed(2));
+}
+
+function buildLlmDraftMetrics(runs, candidates, { accountSetId = null, draftType = null } = {}) {
+  const runIds = new Set(runs.map((run) => run.id));
+  const candidateItems = candidates.filter((candidate) => {
+    if (accountSetId && candidate.accountSetId !== accountSetId) return false;
+    if (draftType && candidate.draftType !== draftType) return false;
+    return runIds.has(candidate.llmDraftRun?.id);
+  });
+  const completedRuns = runs.filter((run) => run.status === "completed").length;
+  const failedRuns = runs.filter((run) => run.status === "failed").length;
+  const convertedCandidates = candidateItems.filter((candidate) => candidate.status === "converted").length;
+  const rejectedCandidates = candidateItems.filter((candidate) => candidate.status === "rejected").length;
+  const pendingCandidates = candidateItems.filter((candidate) => candidate.status === "candidate").length;
+  const correctedCandidates = candidateItems.filter((candidate) => (candidate.resolvedUnmatchedItems?.length ?? 0) > 0).length;
+  const providerGroups = new Map();
+
+  for (const run of runs) {
+    const key = `${run.provider}\u0000${run.model}`;
+    const existing = providerGroups.get(key) ?? {
+      provider: run.provider,
+      model: run.model,
+      totalRuns: 0,
+      completedRuns: 0,
+      failedRuns: 0,
+      schemaSuccessRate: 0
+    };
+    existing.totalRuns += 1;
+    if (run.status === "completed") existing.completedRuns += 1;
+    if (run.status === "failed") existing.failedRuns += 1;
+    existing.schemaSuccessRate = roundedRate(existing.completedRuns, existing.totalRuns);
+    providerGroups.set(key, existing);
+  }
+
+  return {
+    accountSetId: accountSetId ?? null,
+    draftType: draftType ?? null,
+    totalRuns: runs.length,
+    completedRuns,
+    failedRuns,
+    schemaSuccessRate: roundedRate(completedRuns, runs.length),
+    candidateCount: candidateItems.length,
+    convertedCandidates,
+    rejectedCandidates,
+    pendingCandidates,
+    adoptionRate: roundedRate(convertedCandidates, candidateItems.length),
+    rejectionRate: roundedRate(rejectedCandidates, candidateItems.length),
+    humanCorrectionRate: roundedRate(correctedCandidates, candidateItems.length),
+    providerBreakdown: [...providerGroups.values()].sort(
+      (left, right) => right.totalRuns - left.totalRuns || `${left.provider}/${left.model}`.localeCompare(`${right.provider}/${right.model}`)
+    )
+  };
+}
+
+async function createLlmDraftRun(state, body) {
+  if (body.dryRun !== true) {
+    throw new Error("LLM draft runs must use dryRun true.");
+  }
+  if (typeof body.accountSetId !== "string" || body.accountSetId.trim() === "") {
+    throw new Error("accountSetId is required.");
+  }
+  if (!SUPPORTED_AGENT_DRAFT_TYPES.has(body.draftType)) {
+    throw new Error("draftType is not supported.");
+  }
+  if (typeof body.userInstruction !== "string" || body.userInstruction.trim() === "") {
+    throw new Error("userInstruction is required.");
+  }
+
+  const ocrResults = await buildOcrResultsForDraft(state, body);
+  let llmDraftRun;
+  try {
+    ({ llmDraftRun } = await runLlmDraftAdapter(state, { ...body, ocrResults }));
+  } catch (error) {
+    llmDraftRun = createFailedLlmDraftRun(state, body, ocrResults, error);
+  }
+  state.llmDraftRuns.set(llmDraftRun.id, llmDraftRun);
+  return llmDraftRun;
+}
+
+function decodedPathId(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function attachmentIdsForDraftCandidate(candidate) {
+  return [
+    ...new Set(
+      (candidate.ocrResults ?? [])
+        .map((result) => result.attachmentId)
+        .filter((attachmentId) => typeof attachmentId === "string" && attachmentId.trim() !== "")
+    )
+  ];
+}
+
+function assertDraftCandidateAttachmentsAvailable(state, candidate) {
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const attachment = state.attachments.get(attachmentId);
+    if (!attachment || attachment.status !== "available" || attachment.accountSetId !== candidate.accountSetId) {
+      throw new Error("Agent draft candidate attachments must still belong to the account set and be available before conversion.");
+    }
+  }
+}
+
+function assertAgentDraftUnmatchedItemsResolved(candidate, body) {
+  const unmatchedItems = Array.isArray(candidate.unmatchedItems) ? candidate.unmatchedItems : [];
+  if (unmatchedItems.length === 0) {
+    return [];
+  }
+  if (!Array.isArray(body.resolvedUnmatchedItems)) {
+    const error = new Error("Agent draft candidate has unmatchedItems; resolvedUnmatchedItems is required before conversion.");
+    error.code = "AGENT_DRAFT_UNMATCHED_ITEMS_UNRESOLVED";
+    throw error;
+  }
+  const normalized = body.resolvedUnmatchedItems.map((item) => ({
+    field: typeof item?.field === "string" ? item.field : "",
+    resolution: typeof item?.resolution === "string" ? item.resolution : "",
+    resolvedValue: Object.prototype.hasOwnProperty.call(item ?? {}, "resolvedValue") ? item.resolvedValue : null,
+    reviewedBy: body.reviewedBy ?? null,
+    reviewedAt: "now"
+  }));
+  const resolvedByField = new Map(normalized.map((item) => [item.field, item]));
+  const missing = unmatchedItems.filter((item) => !resolvedByField.has(item.field));
+  const invalid = normalized.filter((item) => item.field.trim() === "" || item.resolution.trim() === "" || item.resolvedValue == null);
+  if (missing.length > 0 || invalid.length > 0) {
+    const error = new Error("All unmatchedItems must include field, resolution, and resolvedValue before conversion.");
+    error.code = "AGENT_DRAFT_UNMATCHED_ITEMS_UNRESOLVED";
+    throw error;
+  }
+  return normalized;
+}
+
+async function convertAgentDraftCandidateToVoucher(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "voucher") {
+    throw new Error("Only voucher Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "voucher") {
+    throw new Error("reviewedDraftPayload.documentType must be voucher.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const attachmentIds = attachmentIdsForDraftCandidate(candidate);
+  const voucherInput = {
+    ...body.reviewedDraftPayload,
+    accountSetId: candidate.accountSetId,
+    createdBy: body.reviewedBy,
+    sourceType: "agent_draft",
+    aiDraftId: null,
+    attachmentCount: attachmentIds.length
+  };
+  const periodError = await voucherPeriodMutationError(state, voucherInput, "converting Agent draft candidates");
+  if (periodError) {
+    return { error: periodError };
+  }
+
+  const voucher = createVoucher({
+    ...voucherInput,
+    id: uniqueVoucherId(),
+    voucherNo: voucherInput.voucherNo ?? (await generateVoucherNo(state, voucherInput))
+  });
+  voucher.agentDraftCandidateId = candidate.id;
+  voucher.sourceObjectType = candidate.sourceObjectType ?? null;
+  voucher.sourceObjectId = candidate.sourceObjectId ?? null;
+
+  const savedVoucher = state.config.platformStore?.createVoucher ? await state.config.platformStore.createVoucher(voucher) : voucher;
+  state.vouchers.set(savedVoucher.id, savedVoucher);
+  for (const attachmentId of attachmentIds) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "voucher",
+      objectId: savedVoucher.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "voucher",
+      objectId: savedVoucher.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "voucher",
+    convertedObjectId: savedVoucher.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendVoucherStatusLog(state, {
+    voucherId: savedVoucher.id,
+    action: "create",
+    fromStatus: null,
+    toStatus: "draft",
+    actorId: body.reviewedBy,
+    reason: `Converted from ${candidate.id}`
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "voucher",
+    objectId: savedVoucher.id
+  });
+  return { voucher: savedVoucher };
+}
+
+async function convertAgentDraftCandidateToPurchaseOrder(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "purchase_order") {
+    throw new Error("Only purchase order Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "purchase_order") {
+    throw new Error("reviewedDraftPayload.documentType must be purchase_order.");
+  }
+  if (typeof body.reviewedDraftPayload.orderDate !== "string" || body.reviewedDraftPayload.orderDate.trim() === "") {
+    throw new Error("reviewedDraftPayload.orderDate is required.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const supplier = await findPartnerByIdentifier(state, body.reviewedDraftPayload.supplierId);
+  if (!supplier || supplier.accountSetId !== candidate.accountSetId || !["supplier", "both"].includes(supplier.partnerType)) {
+    throw new Error("Purchase order supplier must be an enabled supplier partner in the same account set.");
+  }
+  if (supplier.isEnabled === false) {
+    throw new Error("Purchase order supplier must be enabled.");
+  }
+
+  const lines = normalizeOrderLines(body.reviewedDraftPayload.lines);
+  const existingOrders = await listPurchaseOrders(state, candidate.accountSetId);
+  const orderId = body.reviewedDraftPayload.id ?? `purchase-order:${randomUUID()}`;
+  const order = {
+    id: orderId,
+    accountSetId: candidate.accountSetId,
+    supplierId: supplier.id,
+    supplierName: supplier.name,
+    orderNo: body.reviewedDraftPayload.orderNo ?? nextBusinessOrderNo("PO", candidate.accountSetId, body.reviewedDraftPayload.orderDate, existingOrders),
+    orderDate: body.reviewedDraftPayload.orderDate,
+    totalAmount: Number(lines.reduce((sum, line) => sum + line.totalAmount, 0).toFixed(2)),
+    status: "draft",
+    currency: body.reviewedDraftPayload.currency ?? "CNY",
+    exchangeRate: body.reviewedDraftPayload.exchangeRate ?? 1,
+    createdBy: body.reviewedBy,
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    lines: lines.map((line) => ({ ...line, id: `purchase-order-line:${orderId}:${line.lineNo}` }))
+  };
+
+  const savedOrder = state.config.platformStore?.createPurchaseOrder ? await state.config.platformStore.createPurchaseOrder(order) : order;
+  state.purchaseOrders.set(savedOrder.id, savedOrder);
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "purchase_order",
+      objectId: savedOrder.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "purchase_order",
+      objectId: savedOrder.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "purchase_order",
+    convertedObjectId: savedOrder.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "purchase_order.create",
+    objectType: "purchase_order",
+    objectId: savedOrder.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "purchase_order",
+    objectId: savedOrder.id
+  });
+  return { purchaseOrder: savedOrder };
+}
+
+async function convertAgentDraftCandidateToSalesOrder(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "sales_order") {
+    throw new Error("Only sales order Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "sales_order") {
+    throw new Error("reviewedDraftPayload.documentType must be sales_order.");
+  }
+  if (typeof body.reviewedDraftPayload.orderDate !== "string" || body.reviewedDraftPayload.orderDate.trim() === "") {
+    throw new Error("reviewedDraftPayload.orderDate is required.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const customer = await findPartnerByIdentifier(state, body.reviewedDraftPayload.customerId);
+  if (!customer || customer.accountSetId !== candidate.accountSetId || !["customer", "both"].includes(customer.partnerType)) {
+    throw new Error("Sales order customer must be an enabled customer partner in the same account set.");
+  }
+  if (customer.isEnabled === false) {
+    throw new Error("Sales order customer must be enabled.");
+  }
+
+  const lines = normalizeOrderLines(body.reviewedDraftPayload.lines);
+  const existingOrders = await listSalesOrders(state, candidate.accountSetId);
+  const orderId = body.reviewedDraftPayload.id ?? `sales-order:${randomUUID()}`;
+  const totalAmount = Number(lines.reduce((sum, line) => sum + line.totalAmount, 0).toFixed(2));
+  if (Number(customer.creditLimit ?? 0) > 0) {
+    const exposure = (await listCreditExposures(state, candidate.accountSetId)).find((item) => item.customerId === customer.id);
+    if (exposure && exposure.occupiedAmount + totalAmount > exposure.creditLimit) {
+      const error = new Error("Sales order exceeds customer available credit.");
+      error.code = "CREDIT_LIMIT_EXCEEDED";
+      throw error;
+    }
+  }
+
+  const order = {
+    id: orderId,
+    accountSetId: candidate.accountSetId,
+    customerId: customer.id,
+    customerName: customer.name,
+    orderNo: body.reviewedDraftPayload.orderNo ?? nextBusinessOrderNo("SO", candidate.accountSetId, body.reviewedDraftPayload.orderDate, existingOrders),
+    orderDate: body.reviewedDraftPayload.orderDate,
+    totalAmount,
+    status: "draft",
+    currency: body.reviewedDraftPayload.currency ?? "CNY",
+    exchangeRate: body.reviewedDraftPayload.exchangeRate ?? 1,
+    createdBy: body.reviewedBy,
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    lines: lines.map((line) => ({ ...line, id: `sales-order-line:${orderId}:${line.lineNo}` }))
+  };
+
+  const savedOrder = state.config.platformStore?.createSalesOrder ? await state.config.platformStore.createSalesOrder(order) : order;
+  state.salesOrders.set(savedOrder.id, savedOrder);
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "sales_order",
+      objectId: savedOrder.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "sales_order",
+      objectId: savedOrder.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "sales_order",
+    convertedObjectId: savedOrder.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "sales_order.create",
+    objectType: "sales_order",
+    objectId: savedOrder.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "sales_order",
+    objectId: savedOrder.id
+  });
+  return { salesOrder: savedOrder };
+}
+
+function convertAgentDraftCandidateToInventoryMovementDraft(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "inventory_movement") {
+    throw new Error("Only inventory movement Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "inventory_movement") {
+    throw new Error("reviewedDraftPayload.documentType must be inventory_movement.");
+  }
+  if (!["inbound", "outbound", "adjustment"].includes(body.reviewedDraftPayload.movementType)) {
+    throw new Error("movementType must be inbound, outbound, or adjustment.");
+  }
+  if (!Array.isArray(body.reviewedDraftPayload.lines) || body.reviewedDraftPayload.lines.length === 0) {
+    throw new Error("Inventory movement draft lines are required.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const movementType = body.reviewedDraftPayload.movementType;
+  const draftId = body.reviewedDraftPayload.id ?? `inventory-movement-draft:${randomUUID()}`;
+  const lines = body.reviewedDraftPayload.lines.map((line, index) => {
+    const item = findInventoryItemByIdentifier(state, line.itemId);
+    const warehouse = findWarehouseByIdentifier(state, line.warehouseId);
+    if (!item || item.accountSetId !== candidate.accountSetId || !warehouse || warehouse.accountSetId !== candidate.accountSetId) {
+      throw new Error("Inventory movement draft item or warehouse was not found.");
+    }
+    const location = line.locationId ? findWarehouseLocation(warehouse, line.locationId) : null;
+    if (line.locationId && !location) {
+      throw new Error("Inventory movement draft warehouse location was not found.");
+    }
+    const quantity = Number(line.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error("Inventory movement draft quantity must be greater than 0.");
+    }
+    const unitCost = Number(line.unitCost ?? 0);
+    const amount = Number(line.amount ?? (movementType === "inbound" || movementType === "adjustment" ? quantity * unitCost : 0));
+    if (!Number.isFinite(unitCost) || unitCost < 0 || !Number.isFinite(amount) || amount < 0) {
+      throw new Error("Inventory movement draft cost fields must be non-negative.");
+    }
+    return {
+      id: line.id ?? `inventory-movement-draft-line:${randomUUID()}`,
+      movementDraftId: draftId,
+      itemId: item.id,
+      itemCode: item.code,
+      itemName: item.name,
+      warehouseId: warehouse.id,
+      warehouseCode: warehouse.code,
+      locationId: location?.id ?? null,
+      locationCode: location?.code ?? null,
+      batchNo: line.batchNo ?? null,
+      lineNo: line.lineNo ?? index + 1,
+      quantity: roundQuantity(quantity),
+      unitCost: roundAmount(unitCost),
+      amount: roundAmount(amount),
+      dryRunWarnings: []
+    };
+  });
+
+  const draft = {
+    id: draftId,
+    accountSetId: candidate.accountSetId,
+    documentNo: body.reviewedDraftPayload.documentNo ?? `IMD-${state.inventoryMovementDrafts.size + 1}`,
+    movementType,
+    businessType: body.reviewedDraftPayload.businessType ?? movementType,
+    sourceType: "agent_draft",
+    sourceDocumentId: null,
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    fiscalYear: Number(body.reviewedDraftPayload.fiscalYear ?? candidate.fiscalYear ?? 0),
+    periodNo: Number(body.reviewedDraftPayload.periodNo ?? candidate.periodNo ?? 0),
+    movementDate: body.reviewedDraftPayload.movementDate ?? "now",
+    status: "draft",
+    costStatus: "not_calculated",
+    totalQuantity: roundQuantity(lines.reduce((sum, line) => sum + line.quantity, 0)),
+    totalAmount: roundAmount(lines.reduce((sum, line) => sum + line.amount, 0)),
+    createdBy: body.reviewedBy,
+    createdAt: "now",
+    reviewedDraftPayload: body.reviewedDraftPayload,
+    lines
+  };
+  state.inventoryMovementDrafts.set(draft.id, draft);
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "inventory_movement_draft",
+      objectId: draft.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "inventory_movement_draft",
+      objectId: draft.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "inventory_movement_draft",
+    convertedObjectId: draft.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "inventory_movement_draft",
+    objectId: draft.id
+  });
+  return { inventoryMovementDraft: draft };
+}
+
+function convertAgentDraftCandidateToMaterialRequisitionDraft(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "material_requisition") {
+    throw new Error("Only material requisition Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object" || Array.isArray(body.reviewedDraftPayload)) {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "material_requisition") {
+    throw new Error("reviewedDraftPayload.documentType must be material_requisition.");
+  }
+  if (!Array.isArray(body.reviewedDraftPayload.lines) || body.reviewedDraftPayload.lines.length === 0) {
+    throw new Error("Material requisition draft lines are required.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const workOrder = findWorkOrderByIdentifier(state, body.reviewedDraftPayload.workOrderId);
+  if (!workOrder || workOrder.accountSetId !== candidate.accountSetId) {
+    throw new Error("Work order was not found.");
+  }
+  if (workOrder.status === "closed") {
+    throw new Error("Closed work orders cannot receive new material requisition drafts.");
+  }
+  const requisitionId = body.reviewedDraftPayload.id ?? `material-requisition-draft:${randomUUID()}`;
+  const lines = body.reviewedDraftPayload.lines.map((line, index) => {
+    if (!line || typeof line !== "object" || Array.isArray(line)) {
+      throw new Error("Material requisition draft lines must be objects.");
+    }
+    const item = findInventoryItemByIdentifier(state, line.componentItemId);
+    const warehouse = findWarehouseByIdentifier(state, line.warehouseId);
+    if (!item || item.accountSetId !== candidate.accountSetId || !warehouse || warehouse.accountSetId !== candidate.accountSetId) {
+      throw new Error("Material requisition draft component item or warehouse was not found.");
+    }
+    const location = line.locationId ? findWarehouseLocation(warehouse, line.locationId) : null;
+    if (line.locationId && !location) {
+      throw new Error("Material requisition draft warehouse location was not found.");
+    }
+    const quantity = Number(line.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error("Material requisition draft quantity must be greater than 0.");
+    }
+    return {
+      id: line.id ?? `material-requisition-draft-line:${randomUUID()}`,
+      materialRequisitionId: requisitionId,
+      componentItemId: item.id,
+      componentItemCode: item.code,
+      componentItemName: item.name,
+      warehouseId: warehouse.id,
+      warehouseCode: warehouse.code,
+      locationId: location?.id ?? null,
+      batchNo: line.batchNo ?? null,
+      lineNo: line.lineNo ?? index + 1,
+      quantity: roundQuantity(quantity),
+      unitCost: null,
+      amount: null
+    };
+  });
+  const draft = {
+    id: requisitionId,
+    accountSetId: candidate.accountSetId,
+    requisitionNo: body.reviewedDraftPayload.requisitionNo ?? `MRD-${state.materialRequisitions.size + 1}`,
+    workOrderId: workOrder.id,
+    workOrderNo: workOrder.workOrderNo,
+    sourceMovementId: null,
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    fiscalYear: Number(body.reviewedDraftPayload.fiscalYear ?? candidate.fiscalYear ?? 0),
+    periodNo: Number(body.reviewedDraftPayload.periodNo ?? candidate.periodNo ?? 0),
+    status: "draft",
+    totalQuantity: roundQuantity(lines.reduce((sum, line) => sum + line.quantity, 0)),
+    totalAmount: 0,
+    createdBy: body.reviewedBy,
+    createdAt: "now",
+    reviewedDraftPayload: body.reviewedDraftPayload,
+    lines
+  };
+  state.materialRequisitions.set(draft.id, draft);
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "material_requisition_draft",
+      objectId: draft.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "material_requisition_draft",
+      objectId: draft.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "material_requisition_draft",
+    convertedObjectId: draft.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "material_requisition_draft.create",
+    objectType: "material_requisition_draft",
+    objectId: draft.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "material_requisition_draft",
+    objectId: draft.id
+  });
+  return { materialRequisitionDraft: draft };
+}
+
+function convertAgentDraftCandidateToProductReceiptDraft(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "product_receipt") {
+    throw new Error("Only product receipt Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object" || Array.isArray(body.reviewedDraftPayload)) {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "product_receipt") {
+    throw new Error("reviewedDraftPayload.documentType must be product_receipt.");
+  }
+  if (!Array.isArray(body.reviewedDraftPayload.lines) || body.reviewedDraftPayload.lines.length === 0) {
+    throw new Error("Product receipt draft lines are required.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const workOrder = findWorkOrderByIdentifier(state, body.reviewedDraftPayload.workOrderId);
+  if (!workOrder || workOrder.accountSetId !== candidate.accountSetId) {
+    throw new Error("Work order was not found.");
+  }
+  if (workOrder.status === "closed") {
+    throw new Error("Closed work orders cannot receive new product receipt drafts.");
+  }
+  const receiptId = body.reviewedDraftPayload.id ?? `product-receipt-draft:${randomUUID()}`;
+  const lines = body.reviewedDraftPayload.lines.map((line, index) => {
+    if (!line || typeof line !== "object" || Array.isArray(line)) {
+      throw new Error("Product receipt draft lines must be objects.");
+    }
+    const item = findInventoryItemByIdentifier(state, line.productItemId);
+    const warehouse = findWarehouseByIdentifier(state, line.warehouseId);
+    if (!item || item.accountSetId !== candidate.accountSetId || !warehouse || warehouse.accountSetId !== candidate.accountSetId) {
+      throw new Error("Product receipt draft finished good item or warehouse was not found.");
+    }
+    if (item.id !== workOrder.productItemId) {
+      throw new Error("Product receipt draft finished good item must match the work order product.");
+    }
+    const location = line.locationId ? findWarehouseLocation(warehouse, line.locationId) : null;
+    if (line.locationId && !location) {
+      throw new Error("Product receipt draft warehouse location was not found.");
+    }
+    const quantity = Number(line.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error("Product receipt draft quantity must be greater than 0.");
+    }
+    return {
+      id: line.id ?? `product-receipt-draft-line:${randomUUID()}`,
+      productReceiptId: receiptId,
+      productItemId: item.id,
+      productItemCode: item.code,
+      productItemName: item.name,
+      warehouseId: warehouse.id,
+      warehouseCode: warehouse.code,
+      locationId: location?.id ?? null,
+      batchNo: line.batchNo ?? null,
+      lineNo: line.lineNo ?? index + 1,
+      quantity: roundQuantity(quantity),
+      unitCost: null,
+      amount: null
+    };
+  });
+  const draft = {
+    id: receiptId,
+    accountSetId: candidate.accountSetId,
+    receiptNo: body.reviewedDraftPayload.receiptNo ?? `PRD-${state.productReceipts.size + 1}`,
+    workOrderId: workOrder.id,
+    workOrderNo: workOrder.workOrderNo,
+    sourceMovementId: null,
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    fiscalYear: Number(body.reviewedDraftPayload.fiscalYear ?? candidate.fiscalYear ?? 0),
+    periodNo: Number(body.reviewedDraftPayload.periodNo ?? candidate.periodNo ?? 0),
+    status: "draft",
+    costStatus: "draft_pending_cost",
+    totalQuantity: roundQuantity(lines.reduce((sum, line) => sum + line.quantity, 0)),
+    totalAmount: 0,
+    createdBy: body.reviewedBy,
+    createdAt: "now",
+    reviewedDraftPayload: body.reviewedDraftPayload,
+    lines
+  };
+  state.productReceipts.set(draft.id, draft);
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "product_receipt_draft",
+      objectId: draft.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "product_receipt_draft",
+      objectId: draft.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "product_receipt_draft",
+    convertedObjectId: draft.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "product_receipt_draft.create",
+    objectType: "product_receipt_draft",
+    objectId: draft.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "product_receipt_draft",
+    objectId: draft.id
+  });
+  return { productReceiptDraft: draft };
+}
+
+function convertAgentDraftCandidateToStockCountPreview(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "stock_count") {
+    throw new Error("Only stock count Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "stock_count") {
+    throw new Error("reviewedDraftPayload.documentType must be stock_count.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const preview = previewStockCount(
+    state,
+    {
+      ...body.reviewedDraftPayload,
+      accountSetId: candidate.accountSetId,
+      createdBy: body.reviewedBy
+    },
+    actorId
+  );
+  const stockCountPreview = {
+    ...preview,
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.stockCounts.set(stockCountPreview.id, stockCountPreview);
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "stock_count",
+      objectId: stockCountPreview.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "stock_count",
+      objectId: stockCountPreview.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "stock_count",
+    convertedObjectId: stockCountPreview.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "stock_count.preview",
+    objectType: "stock_count",
+    objectId: stockCountPreview.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "stock_count",
+    objectId: stockCountPreview.id
+  });
+  return { stockCountPreview };
+}
+
+function convertAgentDraftCandidateToMasterDataDraft(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "master_data") {
+    throw new Error("Only master data Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "master_data") {
+    throw new Error("reviewedDraftPayload.documentType must be master_data.");
+  }
+  if (typeof body.reviewedDraftPayload.masterDataType !== "string" || body.reviewedDraftPayload.masterDataType.trim() === "") {
+    throw new Error("reviewedDraftPayload.masterDataType is required.");
+  }
+  if (typeof body.reviewedDraftPayload.name !== "string" || body.reviewedDraftPayload.name.trim() === "") {
+    throw new Error("reviewedDraftPayload.name is required.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const draft = {
+    id: body.reviewedDraftPayload.id ?? `agent-master-data-draft:${randomUUID()}`,
+    accountSetId: candidate.accountSetId,
+    masterDataType: body.reviewedDraftPayload.masterDataType,
+    code: body.reviewedDraftPayload.code ?? null,
+    name: body.reviewedDraftPayload.name,
+    status: "draft",
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    fields: body.reviewedDraftPayload.fields && typeof body.reviewedDraftPayload.fields === "object" ? body.reviewedDraftPayload.fields : {},
+    reviewedDraftPayload: body.reviewedDraftPayload,
+    createdBy: body.reviewedBy,
+    createdAt: "now"
+  };
+  state.agentMasterDataDrafts.set(draft.id, draft);
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "master_data_draft",
+      objectId: draft.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "master_data_draft",
+      objectId: draft.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "master_data_draft",
+    convertedObjectId: draft.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "master_data_draft.create",
+    objectType: "master_data_draft",
+    objectId: draft.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "master_data_draft",
+    objectId: draft.id
+  });
+  return { masterDataDraft: draft };
+}
+
+function convertAgentDraftCandidateToPayrollAllocationDraft(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "payroll_allocation") {
+    throw new Error("Only payroll allocation Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "payroll_allocation") {
+    throw new Error("reviewedDraftPayload.documentType must be payroll_allocation.");
+  }
+  if (!Array.isArray(body.reviewedDraftPayload.rules) || body.reviewedDraftPayload.rules.length === 0) {
+    throw new Error("Payroll allocation draft rules are required.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const draftId = body.reviewedDraftPayload.id ?? `agent-payroll-allocation-draft:${randomUUID()}`;
+  const rules = body.reviewedDraftPayload.rules.map((rule, index) => {
+    const amount = roundAmount(Number(rule.amount ?? 0));
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new Error("Payroll allocation draft rule amount must be non-negative.");
+    }
+    return {
+      id: rule.id ?? `agent-payroll-allocation-draft-rule:${randomUUID()}`,
+      payrollAllocationDraftId: draftId,
+      lineNo: rule.lineNo ?? index + 1,
+      departmentId: rule.departmentId ?? null,
+      targetType: rule.targetType ?? "department",
+      workOrderId: rule.workOrderId ?? null,
+      costType: rule.costType ?? "direct_labor",
+      allocationRate: Number(rule.allocationRate ?? 0),
+      amount
+    };
+  });
+  const draft = {
+    id: draftId,
+    accountSetId: candidate.accountSetId,
+    documentType: "payroll_allocation",
+    payrollRunId: body.reviewedDraftPayload.payrollRunId ?? null,
+    runNo: body.reviewedDraftPayload.runNo ?? body.reviewedDraftPayload.payrollRunId ?? null,
+    fiscalYear: Number(body.reviewedDraftPayload.fiscalYear ?? candidate.fiscalYear ?? 0),
+    periodNo: Number(body.reviewedDraftPayload.periodNo ?? candidate.periodNo ?? 0),
+    status: "draft",
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    totalAllocatedAmount: roundAmount(rules.reduce((sum, rule) => sum + rule.amount, 0)),
+    approvalRequired: true,
+    rules,
+    reviewedDraftPayload: body.reviewedDraftPayload,
+    createdBy: body.reviewedBy,
+    createdAt: "now"
+  };
+  state.agentPayrollAllocationDrafts.set(draft.id, draft);
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "payroll_allocation_draft",
+      objectId: draft.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "payroll_allocation_draft",
+      objectId: draft.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "payroll_allocation_draft",
+    convertedObjectId: draft.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "payroll_allocation_draft.create",
+    objectType: "payroll_allocation_draft",
+    objectId: draft.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "payroll_allocation_draft",
+    objectId: draft.id
+  });
+  return { payrollAllocationDraft: draft };
+}
+
+function convertAgentDraftCandidateToDepreciationRunDraft(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "depreciation_run") {
+    throw new Error("Only depreciation-run Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "depreciation_run") {
+    throw new Error("reviewedDraftPayload.documentType must be depreciation_run.");
+  }
+  if (body.reviewedDraftPayload.dryRun !== true) {
+    throw new Error("Agent depreciation run drafts must remain dryRun true.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const fiscalYear = Number(body.reviewedDraftPayload.fiscalYear ?? candidate.fiscalYear);
+  const periodNo = Number(body.reviewedDraftPayload.periodNo ?? candidate.periodNo);
+  if (!Number.isInteger(fiscalYear) || !Number.isInteger(periodNo) || periodNo < 1 || periodNo > 12) {
+    throw new Error("Depreciation dry-run fiscalYear and periodNo are required.");
+  }
+  const draftId = body.reviewedDraftPayload.id ?? `agent-depreciation-run-draft:${randomUUID()}`;
+  const lines = calculateDepreciationRunLines(state, {
+    accountSetId: candidate.accountSetId,
+    fiscalYear,
+    periodNo,
+    runId: draftId
+  });
+  const totalDepreciationAmount = roundAmount(lines.reduce((sum, line) => sum + line.depreciationAmount, 0));
+  const draft = {
+    id: draftId,
+    accountSetId: candidate.accountSetId,
+    documentType: "depreciation_run",
+    runNo: body.reviewedDraftPayload.runNo ?? candidate.draftPayload?.runNo ?? `AGENT-DEP-${fiscalYear}${String(periodNo).padStart(2, "0")}`,
+    fiscalYear,
+    periodNo,
+    dryRun: true,
+    status: "draft",
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    totalDepreciationAmount,
+    lineCount: lines.length,
+    warningCodes: depreciationRunWarnings(lines),
+    lines,
+    reviewedDraftPayload: body.reviewedDraftPayload,
+    createdBy: body.reviewedBy,
+    createdAt: "now"
+  };
+  state.agentDepreciationRunDrafts.set(draft.id, draft);
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "depreciation_run_draft",
+      objectId: draft.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "depreciation_run_draft",
+      objectId: draft.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "depreciation_run_draft",
+    convertedObjectId: draft.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "depreciation_run_draft.create",
+    objectType: "depreciation_run_draft",
+    objectId: draft.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "depreciation_run_draft",
+    objectId: draft.id
+  });
+  return { depreciationRunDraft: draft };
+}
+
+function convertAgentDraftCandidateToAssetChangeDraft(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "asset_change") {
+    throw new Error("Only asset change Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "asset_change") {
+    throw new Error("reviewedDraftPayload.documentType must be asset_change.");
+  }
+  if (typeof body.reviewedDraftPayload.changeKind !== "string" || body.reviewedDraftPayload.changeKind.trim() === "") {
+    throw new Error("reviewedDraftPayload.changeKind is required.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const asset = body.reviewedDraftPayload.fixedAssetId ? findFixedAssetByIdentifier(state, body.reviewedDraftPayload.fixedAssetId) : null;
+  if (body.reviewedDraftPayload.fixedAssetId && (!asset || asset.accountSetId !== candidate.accountSetId)) {
+    throw new Error("Fixed asset for Agent asset change draft was not found.");
+  }
+  const amount = body.reviewedDraftPayload.amount == null ? null : roundAmount(Number(body.reviewedDraftPayload.amount));
+  if (amount != null && !Number.isFinite(amount)) {
+    throw new Error("Asset change draft amount must be numeric.");
+  }
+  const draft = {
+    id: body.reviewedDraftPayload.id ?? `agent-asset-change-draft:${randomUUID()}`,
+    accountSetId: candidate.accountSetId,
+    documentType: "asset_change",
+    changeKind: body.reviewedDraftPayload.changeKind,
+    fixedAssetId: asset?.id ?? body.reviewedDraftPayload.fixedAssetId ?? null,
+    assetNo: asset?.assetNo ?? body.reviewedDraftPayload.assetNo ?? null,
+    assetName: asset?.name ?? body.reviewedDraftPayload.assetName ?? null,
+    changeDate: body.reviewedDraftPayload.changeDate ?? "now",
+    fromDepartmentId: body.reviewedDraftPayload.fromDepartmentId ?? asset?.currentDepartmentId ?? null,
+    toDepartmentId: body.reviewedDraftPayload.toDepartmentId ?? null,
+    toDepartmentName: body.reviewedDraftPayload.toDepartmentName ?? null,
+    amount,
+    reason: body.reviewedDraftPayload.reason ?? null,
+    status: "draft",
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    reviewedDraftPayload: body.reviewedDraftPayload,
+    createdBy: body.reviewedBy,
+    createdAt: "now"
+  };
+  state.agentAssetChangeDrafts.set(draft.id, draft);
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "asset_change_draft",
+      objectId: draft.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "asset_change_draft",
+      objectId: draft.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "asset_change_draft",
+    convertedObjectId: draft.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "asset_change_draft.create",
+    objectType: "asset_change_draft",
+    objectId: draft.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "asset_change_draft",
+    objectId: draft.id
+  });
+  return { assetChangeDraft: draft };
+}
+
+function convertAgentDraftCandidateToReportInterpretationDraft(state, candidate, body, actorId) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (candidate.draftType !== "report_interpretation") {
+    throw new Error("Only report interpretation Agent draft candidates can be converted in this workflow.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object") {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== "report_interpretation") {
+    throw new Error("reviewedDraftPayload.documentType must be report_interpretation.");
+  }
+  if (typeof body.reviewedDraftPayload.summary !== "string" || body.reviewedDraftPayload.summary.trim() === "") {
+    throw new Error("summary is required.");
+  }
+  if (!Array.isArray(body.reviewedDraftPayload.evidenceRefs) || body.reviewedDraftPayload.evidenceRefs.length === 0) {
+    throw new Error("evidenceRefs are required.");
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const reportRunId = body.reviewedDraftPayload.reportRunId ?? candidate.sourceObjectId;
+  const run = findReportRunByIdentifier(state, reportRunId);
+  if (!run || run.accountSetId !== candidate.accountSetId) {
+    throw new Error("Report run for Agent report interpretation draft was not found.");
+  }
+  const validEvidenceRefs = new Set((run.cells ?? []).map((cell) => reportCellEvidenceRef(cell)));
+  for (const ref of body.reviewedDraftPayload.evidenceRefs) {
+    if (typeof ref !== "string" || !ref.startsWith("report_cell:")) {
+      throw new Error("evidenceRefs must point to report_cell references.");
+    }
+    if (!validEvidenceRefs.has(ref)) {
+      throw new Error("evidenceRefs must point to cells in the report run.");
+    }
+  }
+
+  const draft = {
+    id: body.reviewedDraftPayload.id ?? `ai-report-interpretation:${state.aiReportInterpretations.size + 1}`,
+    accountSetId: run.accountSetId,
+    reportRunId: run.id,
+    summary: body.reviewedDraftPayload.summary,
+    keyFindings: Array.isArray(body.reviewedDraftPayload.keyFindings) ? [...body.reviewedDraftPayload.keyFindings] : [],
+    warnings: Array.isArray(body.reviewedDraftPayload.warnings) ? [...body.reviewedDraftPayload.warnings] : [],
+    evidenceRefs: [...body.reviewedDraftPayload.evidenceRefs],
+    status: "draft",
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    interpretedBy: body.reviewedBy,
+    reviewedDraftPayload: body.reviewedDraftPayload,
+    createdAt: "now"
+  };
+  state.aiReportInterpretations.set(draft.id, draft);
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: "report_interpretation_draft",
+      objectId: draft.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: "report_interpretation_draft",
+      objectId: draft.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: "report_interpretation_draft",
+    convertedObjectId: draft.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: "report_interpretation_draft.create",
+    objectType: "report_interpretation_draft",
+    objectId: draft.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: "report_interpretation_draft",
+    objectId: draft.id
+  });
+  return { reportInterpretationDraft: publicAiReportInterpretation(draft) };
+}
+
+function unsupportedAgentDraftConversion(draftType) {
+  const error = new Error(`Agent draft conversion for ${draftType} is not supported yet without a non-mutating business draft model.`);
+  error.code = "AGENT_DRAFT_CONVERSION_UNSUPPORTED";
+  return error;
+}
+
+const AGENT_DRAFT_TOOL_INPUT_SCHEMA = {
+  type: "object",
+  required: ["accountSetId", "userInstruction"],
+  properties: {
+    accountSetId: { type: "string" },
+    userInstruction: { type: "string" },
+    sourceObjectType: { type: "string" },
+    sourceObjectId: { type: "string" },
+    evidenceRefs: { type: "array", items: { type: "string" } },
+    attachmentIds: { type: "array", items: { type: "string" } },
+    context: { type: "object", additionalProperties: true }
+  }
+};
+
+const AGENT_DRAFT_TOOL_OUTPUT_SCHEMA = {
+  type: "object",
+  required: [
+    "draftType",
+    "sourceContext",
+    "matchedMasterData",
+    "unmatchedItems",
+    "draftPayload",
+    "dryRunResult",
+    "warnings",
+    "confidence",
+    "evidenceRefs",
+    "requiresHumanConfirmation"
+  ],
+  properties: {
+    draftType: { type: "string" },
+    sourceContext: { type: "object", additionalProperties: true },
+    matchedMasterData: { type: "array", items: { type: "object", additionalProperties: true } },
+    unmatchedItems: { type: "array", items: { type: "object", additionalProperties: true } },
+    draftPayload: { type: "object", additionalProperties: true },
+    dryRunResult: { type: "object", additionalProperties: true },
+    warnings: { type: "array", items: { type: "string" } },
+    confidence: { type: "number" },
+    evidenceRefs: { type: "array", items: { type: "string" } },
+    requiresHumanConfirmation: { type: "boolean" }
+  }
+};
+
+const LOW_RISK_APPROVAL_POLICY = {
+  approvalRequired: false,
+  requiresHumanConfirmation: false,
+  minApprovals: 0,
+  executeRequiresUserToken: false
+};
+
+const DRAFT_APPROVAL_POLICY = {
+  approvalRequired: true,
+  requiresHumanConfirmation: true,
+  minApprovals: 1,
+  executeRequiresUserToken: true
+};
+
+const HIGH_RISK_APPROVAL_POLICY = {
+  approvalRequired: true,
+  requiresHumanConfirmation: true,
+  minApprovals: 2,
+  executeRequiresUserToken: true
+};
+
+function agentTool({
+  name,
+  title,
+  description,
+  riskLevel,
+  actionKind,
+  draftType = null,
+  agentTokenAllowed = true,
+  approvalPolicy,
+  inputSchema,
+  outputSchema
+}) {
+  return {
+    name,
+    title,
+    description,
+    riskLevel,
+    actionKind,
+    draftType,
+    agentTokenAllowed,
+    approvalPolicy,
+    inputSchema,
+    outputSchema
+  };
+}
+
+const AGENT_TOOL_REGISTRY = [
+  agentTool({
+    name: "search_vouchers",
+    title: "Search vouchers",
+    description: "Read voucher drafts and posted vouchers for analysis without mutation.",
+    riskLevel: "low",
+    actionKind: "query",
+    approvalPolicy: LOW_RISK_APPROVAL_POLICY,
+    inputSchema: { type: "object", required: ["accountSetId"], properties: { accountSetId: { type: "string" }, keyword: { type: "string" } } },
+    outputSchema: { type: "object", required: ["items"], properties: { items: { type: "array", items: { type: "object", additionalProperties: true } } } }
+  }),
+  agentTool({
+    name: "search_ledger",
+    title: "Search ledger",
+    description: "Read ledger balances, details, and traces for analysis without mutation.",
+    riskLevel: "low",
+    actionKind: "query",
+    approvalPolicy: LOW_RISK_APPROVAL_POLICY,
+    inputSchema: { type: "object", required: ["accountSetId"], properties: { accountSetId: { type: "string" }, accountCode: { type: "string" } } },
+    outputSchema: { type: "object", required: ["items"], properties: { items: { type: "array", items: { type: "object", additionalProperties: true } } } }
+  }),
+  agentTool({
+    name: "search_reports",
+    title: "Search reports",
+    description: "Read report runs, cells, and trace links for interpretation.",
+    riskLevel: "low",
+    actionKind: "query",
+    approvalPolicy: LOW_RISK_APPROVAL_POLICY,
+    inputSchema: { type: "object", required: ["accountSetId"], properties: { accountSetId: { type: "string" }, reportRunId: { type: "string" } } },
+    outputSchema: { type: "object", required: ["items"], properties: { items: { type: "array", items: { type: "object", additionalProperties: true } } } }
+  }),
+  agentTool({
+    name: "suggest_master_data_draft",
+    title: "Suggest master-data draft",
+    description: "Generate customer, supplier, item, employee, or asset-category candidate drafts from text and OCR evidence.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "master_data",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "suggest_purchase_order_draft",
+    title: "Suggest purchase order draft",
+    description: "Generate purchase request, purchase order, purchase invoice, or payment request candidate drafts.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "purchase_order",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "suggest_sales_order_draft",
+    title: "Suggest sales order draft",
+    description: "Generate sales quote, sales order, sales invoice, or collection plan candidate drafts.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "sales_order",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "suggest_inventory_movement_draft",
+    title: "Suggest inventory movement draft",
+    description: "Generate warehouse receipt, issue, transfer, or adjustment candidate drafts.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "inventory_movement",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "suggest_material_requisition_draft",
+    title: "Suggest material requisition draft",
+    description: "Generate non-mutating work-order material issue candidate drafts from text and OCR evidence.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "material_requisition",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "suggest_product_receipt_draft",
+    title: "Suggest product receipt draft",
+    description: "Generate non-mutating finished-goods receipt candidate drafts from text and OCR evidence.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "product_receipt",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "suggest_stock_count_draft",
+    title: "Suggest stock count draft",
+    description: "Generate stock count and inventory adjustment candidate drafts.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "stock_count",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "create_voucher_draft",
+    title: "Create voucher draft",
+    description: "Create a voucher draft from reviewed evidence and matched chart-of-account data.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "voucher",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "suggest_payroll_allocation_draft",
+    title: "Suggest payroll allocation draft",
+    description: "Generate payroll allocation and labor-cost-pool candidate drafts.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "payroll_allocation",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "run_depreciation_dry_run",
+    title: "Run depreciation dry-run",
+    description: "Run a depreciation simulation without locking depreciation or mutating asset ledgers.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "depreciation_run",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "suggest_asset_change_draft",
+    title: "Suggest asset change draft",
+    description: "Generate fixed-asset addition, transfer, value change, or disposal candidate drafts.",
+    riskLevel: "medium",
+    actionKind: "draft_generation",
+    draftType: "asset_change",
+    approvalPolicy: DRAFT_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "suggest_report_interpretation_draft",
+    title: "Suggest report interpretation draft",
+    description: "Generate report interpretation drafts from report cells, metrics, and trace links.",
+    riskLevel: "low",
+    actionKind: "draft_generation",
+    draftType: "report_interpretation",
+    approvalPolicy: LOW_RISK_APPROVAL_POLICY,
+    inputSchema: AGENT_DRAFT_TOOL_INPUT_SCHEMA,
+    outputSchema: AGENT_DRAFT_TOOL_OUTPUT_SCHEMA
+  }),
+  agentTool({
+    name: "run_close_checklist",
+    title: "Run close checklist",
+    description: "Run period close prerequisite checks and produce a risk report without closing the period.",
+    riskLevel: "high",
+    actionKind: "dry_run",
+    agentTokenAllowed: true,
+    approvalPolicy: HIGH_RISK_APPROVAL_POLICY,
+    inputSchema: { type: "object", required: ["accountSetId", "fiscalYear", "periodNo"], properties: { accountSetId: { type: "string" }, fiscalYear: { type: "integer" }, periodNo: { type: "integer" } } },
+    outputSchema: { type: "object", required: ["status", "warnings"], properties: { status: { type: "string" }, warnings: { type: "array", items: { type: "string" } } } }
+  }),
+  agentTool({
+    name: "post_approved_voucher",
+    title: "Post approved voucher",
+    description: "Post an already approved voucher only after high-risk approval gates are satisfied.",
+    riskLevel: "high",
+    actionKind: "posting_execution",
+    agentTokenAllowed: false,
+    approvalPolicy: HIGH_RISK_APPROVAL_POLICY,
+    inputSchema: { type: "object", required: ["accountSetId", "voucherId"], properties: { accountSetId: { type: "string" }, voucherId: { type: "string" } } },
+    outputSchema: { type: "object", required: ["status"], properties: { status: { type: "string" }, voucherId: { type: "string" } } }
+  }),
+  agentTool({
+    name: "execute_approved_payment",
+    title: "Execute approved payment",
+    description: "Reserve an explicit human-only boundary for payments that may leave the system.",
+    riskLevel: "high",
+    actionKind: "external_execution",
+    agentTokenAllowed: false,
+    approvalPolicy: HIGH_RISK_APPROVAL_POLICY,
+    inputSchema: { type: "object", required: ["accountSetId", "paymentId"], properties: { accountSetId: { type: "string" }, paymentId: { type: "string" } } },
+    outputSchema: { type: "object", required: ["status"], properties: { status: { type: "string" }, paymentId: { type: "string" } } }
+  }),
+  agentTool({
+    name: "close_approved_period",
+    title: "Close approved period",
+    description: "Close an accounting period only after high-risk approval gates are satisfied.",
+    riskLevel: "high",
+    actionKind: "period_execution",
+    agentTokenAllowed: false,
+    approvalPolicy: HIGH_RISK_APPROVAL_POLICY,
+    inputSchema: { type: "object", required: ["accountSetId", "periodId"], properties: { accountSetId: { type: "string" }, periodId: { type: "string" } } },
+    outputSchema: { type: "object", required: ["status"], properties: { status: { type: "string" }, periodId: { type: "string" } } }
+  })
+];
+
+const AGENT_TOOL_BY_NAME = new Map(AGENT_TOOL_REGISTRY.map((tool) => [tool.name, tool]));
+
+function registeredAgentTool(toolName) {
+  return AGENT_TOOL_BY_NAME.get(toolName);
+}
+
+function listAgentTools() {
+  return AGENT_TOOL_REGISTRY.map((tool) => ({
+    ...tool,
+    approvalPolicy: { ...tool.approvalPolicy },
+    inputSchema: structuredClone(tool.inputSchema),
+    outputSchema: structuredClone(tool.outputSchema)
+  }));
+}
+
+function schemaTypeOf(value) {
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "null";
+  if (Number.isInteger(value)) return "integer";
+  return typeof value;
+}
+
+function validateAgentToolSchemaValue(schema, value, path, errors) {
+  if (!schema) return;
+  if (schema.const !== undefined && value !== schema.const) {
+    errors.push(`${path} must equal ${JSON.stringify(schema.const)}.`);
+    return;
+  }
+  if (schema.enum && !schema.enum.includes(value)) {
+    errors.push(`${path} must be one of ${schema.enum.join(", ")}.`);
+    return;
+  }
+  if (schema.type) {
+    const actualType = schemaTypeOf(value);
+    const expectedTypes = Array.isArray(schema.type) ? schema.type : [schema.type];
+    const matches = expectedTypes.some((expectedType) => expectedType === actualType || (expectedType === "number" && actualType === "integer"));
+    if (!matches) {
+      errors.push(`${path} must be ${expectedTypes.join(" or ")} but got ${actualType}.`);
+      return;
+    }
+  }
+  if (schema.type === "object" && schema.properties && value && typeof value === "object" && !Array.isArray(value)) {
+    for (const key of schema.required ?? []) {
+      if (value[key] === undefined) {
+        errors.push(`${path}.${key} is required.`);
+      }
+    }
+    for (const [key, childSchema] of Object.entries(schema.properties)) {
+      if (value[key] !== undefined) {
+        validateAgentToolSchemaValue(childSchema, value[key], `${path}.${key}`, errors);
+      }
+    }
+  }
+  if (schema.type === "array" && Array.isArray(value) && schema.items) {
+    value.forEach((item, index) => validateAgentToolSchemaValue(schema.items, item, `${path}[${index}]`, errors));
+  }
+}
+
+function assertAgentToolInputSchema(tool, body) {
+  const errors = [];
+  validateAgentToolSchemaValue(tool.inputSchema, body, "input", errors);
+  if (errors.length > 0) {
+    const error = new Error(`Agent tool input schema validation failed: ${errors.join(" ")}`);
+    error.code = "AGENT_TOOL_SCHEMA_INVALID";
+    throw error;
+  }
+}
+
+function appendAgentReplayEvent(state, { agentActionId, eventType, actorId = "system", payload = {} }) {
+  const event = {
+    id: `agent-replay-event:${randomUUID()}`,
+    agentActionId,
+    eventType,
+    actorId,
+    payload,
+    createdAt: "now"
+  };
+  state.agentReplayEvents.push(event);
+  return event;
+}
+
+function captureAgentEvidenceSnapshots(state, accountSetId, evidenceRefs = []) {
+  return evidenceRefs
+    .map((ref) => {
+      const attachment = state.attachments.get(ref);
+      if (!attachment) return null;
+      if (attachment.accountSetId !== accountSetId) {
+        const error = new Error("Agent action evidence attachment must belong to the target account set.");
+        error.code = "AGENT_EVIDENCE_ACCOUNT_SET_MISMATCH";
+        throw error;
+      }
+      if (attachment.status !== "available") {
+        const error = new Error("Agent action evidence attachment must be available before dry-run.");
+        error.code = "AGENT_EVIDENCE_NOT_AVAILABLE";
+        throw error;
+      }
+      return {
+        attachmentId: attachment.id,
+        checksum: attachment.checksum,
+        byteSize: attachment.byteSize,
+        storageProvider: attachment.storageProvider,
+        storageKey: attachment.storageKey,
+        capturedAt: "now"
+      };
+    })
+    .filter(Boolean);
+}
+
+function verifyAgentEvidenceSnapshots(state, action, actorId) {
+  const mismatches = [];
+  for (const snapshot of action.evidenceSnapshots ?? []) {
+    const attachment = state.attachments.get(snapshot.attachmentId);
+    if (!attachment) {
+      mismatches.push({ attachmentId: snapshot.attachmentId, reason: "missing" });
+      continue;
+    }
+    if (attachment.status !== "available") {
+      mismatches.push({ attachmentId: snapshot.attachmentId, reason: "not_available", currentStatus: attachment.status });
+      continue;
+    }
+    if (attachment.checksum !== snapshot.checksum) {
+      mismatches.push({
+        attachmentId: snapshot.attachmentId,
+        reason: "checksum_mismatch",
+        expectedChecksum: snapshot.checksum,
+        actualChecksum: attachment.checksum
+      });
+    }
+  }
+  if (mismatches.length > 0) {
+    appendAgentReplayEvent(state, {
+      agentActionId: action.id,
+      eventType: "evidence_verification_failed",
+      actorId,
+      payload: { mismatches }
+    });
+    const error = new Error("Agent action evidence hash verification failed before execution.");
+    error.code = "AGENT_EVIDENCE_HASH_MISMATCH";
+    throw error;
+  }
+  appendAgentReplayEvent(state, {
+    agentActionId: action.id,
+    eventType: "evidence_verified",
+    actorId,
+    payload: { evidenceSnapshots: action.evidenceSnapshots ?? [] }
+  });
+}
+
+function createAgentActionRecord(state, body, actorId) {
+  if (body.dryRun !== true) {
+    throw new Error("Agent actions must start with dryRun true.");
+  }
+  if (typeof body.accountSetId !== "string" || body.accountSetId.trim() === "") {
+    throw new Error("accountSetId is required.");
+  }
+  if (typeof body.toolName !== "string" || body.toolName.trim() === "") {
+    throw new Error("toolName is required.");
+  }
+  const tool = registeredAgentTool(body.toolName);
+  if (!tool) {
+    const error = new Error(`Agent tool ${body.toolName} is not registered.`);
+    error.code = "AGENT_TOOL_NOT_REGISTERED";
+    throw error;
+  }
+  if (!Array.isArray(body.evidenceRefs)) {
+    throw new Error("evidenceRefs is required.");
+  }
+  const evidenceSnapshots = captureAgentEvidenceSnapshots(state, body.accountSetId, body.evidenceRefs);
+
+  const action = {
+    id: `agent-action:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    toolName: tool.name,
+    dryRun: true,
+    riskLevel: tool.riskLevel,
+    actionKind: tool.actionKind,
+    status: "dry_run_completed",
+    approvalRequired: tool.approvalPolicy.approvalRequired,
+    approvalPolicy: { ...tool.approvalPolicy },
+    evidenceRefs: [...body.evidenceRefs],
+    evidenceSnapshots,
+    payload: body.payload ?? {},
+    requestedBy: body.requestedBy ?? actorId,
+    createdAt: "now",
+    dryRunResult: {
+      status: tool.approvalPolicy.approvalRequired ? "ready_for_approval" : "ready_for_execution",
+      businessMutation: false,
+      toolName: tool.name,
+      actionKind: tool.actionKind,
+      approvalPolicy: tool.approvalPolicy,
+      impactSummary: "Agent action dry-run recorded. No business data was mutated."
+    },
+    approvalRequest: null,
+    approvalHistory: [],
+    approvalProgress: {
+      approvedCount: 0,
+      requiredCount: tool.approvalPolicy.minApprovals,
+      remainingCount: tool.approvalPolicy.minApprovals
+    },
+    executionResult: null,
+    reversalResult: null
+  };
+  state.agentActions.set(action.id, action);
+  appendAgentReplayEvent(state, {
+    agentActionId: action.id,
+    eventType: "input_received",
+    actorId: action.requestedBy,
+    payload: { toolName: action.toolName, evidenceRefs: action.evidenceRefs, payload: action.payload }
+  });
+  appendAgentReplayEvent(state, {
+    agentActionId: action.id,
+    eventType: "dry_run_completed",
+    actorId,
+    payload: action.dryRunResult
+  });
+  return action;
+}
+
+async function invokeRegisteredAgentTool(state, toolName, body, actorId) {
+  const tool = registeredAgentTool(toolName);
+  if (!tool) {
+    const error = new Error(`Agent tool ${toolName} is not registered.`);
+    error.code = "AGENT_TOOL_NOT_REGISTERED";
+    throw error;
+  }
+  if (tool.agentTokenAllowed === false) {
+    const error = new Error(`Agent tool ${toolName} does not allow direct Agent token invocation.`);
+    error.code = "AGENT_TOOL_NOT_AGENT_ALLOWED";
+    throw error;
+  }
+  if (body.dryRun !== true) {
+    throw new Error("Agent tool invocation must use dryRun true.");
+  }
+  assertAgentToolInputSchema(tool, body);
+  if (tool.actionKind === "draft_generation") {
+    if (!tool.draftType || !SUPPORTED_AGENT_DRAFT_TYPES.has(tool.draftType)) {
+      throw new Error(`Agent draft generation tool ${toolName} does not map to a supported draft type.`);
+    }
+    const candidate = await createAgentDraftCandidate(
+      state,
+      {
+        accountSetId: body.accountSetId,
+        fiscalYear: body.fiscalYear,
+        periodNo: body.periodNo,
+        draftType: tool.draftType,
+        sourceObjectType: body.sourceObjectType ?? "agent_tool",
+        sourceObjectId: body.sourceObjectId,
+        userInstruction: body.userInstruction,
+        evidenceRefs: body.evidenceRefs ?? [],
+        attachmentIds: body.attachmentIds ?? [],
+        reviewedOcrResults: body.reviewedOcrResults ?? [],
+        requestedBy: body.requestedBy ?? actorId,
+        dryRun: true
+      },
+      actorId
+    );
+    const savedCandidate = await persistAgentDraftCandidateForRoute(state, candidate);
+    appendAuditLog(state, {
+      actorId: body.requestedBy ?? actorId,
+      action: "agent_tool.invoke",
+      objectType: "agent_tool",
+      objectId: tool.name
+    });
+    return {
+      toolName: tool.name,
+      actionKind: tool.actionKind,
+      dryRun: true,
+      resultType: "agent_draft_candidate",
+      result: savedCandidate
+    };
+  }
+
+  const action = createAgentActionRecord(
+    state,
+    {
+      accountSetId: body.accountSetId,
+      toolName: tool.name,
+      dryRun: true,
+      evidenceRefs: body.evidenceRefs ?? [],
+      payload: body.payload ?? {},
+      requestedBy: body.requestedBy ?? actorId
+    },
+    actorId
+  );
+  const savedAction = await persistAgentActionForRoute(state, action, { create: true });
+  appendAuditLog(state, {
+    actorId: body.requestedBy ?? actorId,
+    action: "agent_tool.invoke",
+    objectType: "agent_tool",
+    objectId: tool.name
+  });
+  return {
+    toolName: tool.name,
+    actionKind: tool.actionKind,
+    dryRun: true,
+    resultType: "agent_action",
+    result: publicAgentAction(state, savedAction)
+  };
+}
+
+function submitAgentActionForApproval(state, action, body, actorId) {
+  if (action.status !== "dry_run_completed") {
+    throw new Error("Only dry-run completed Agent actions can be submitted for approval.");
+  }
+  const submittedBy = body.submittedBy ?? actorId;
+  const updated = {
+    ...action,
+    status: "submitted_for_approval",
+    approvalRequest: {
+      submittedBy,
+      submittedAt: "now",
+      approvalComment: body.approvalComment ?? null
+    }
+  };
+  state.agentActions.set(updated.id, updated);
+  appendAgentReplayEvent(state, {
+    agentActionId: updated.id,
+    eventType: "submitted_for_approval",
+    actorId: submittedBy,
+    payload: updated.approvalRequest
+  });
+  return updated;
+}
+
+function agentApprovalProgress(action, approvalHistory = action.approvalHistory ?? []) {
+  const requiredCount = Number(action.approvalPolicy?.minApprovals ?? 0);
+  const approvedCount = approvalHistory.length;
+  return {
+    approvedCount,
+    requiredCount,
+    remainingCount: Math.max(requiredCount - approvedCount, 0)
+  };
+}
+
+function approveAgentActionRecord(state, action, body, actorId) {
+  if (action.status !== "submitted_for_approval") {
+    throw new Error("Only submitted Agent actions can be approved.");
+  }
+  const approvedBy = body.approvedBy ?? actorId;
+  if ((action.approvalHistory ?? []).some((approval) => approval.approvedBy === approvedBy)) {
+    const error = new Error("The same approver cannot approve an Agent action more than once.");
+    error.code = "AGENT_APPROVAL_DUPLICATE_APPROVER";
+    throw error;
+  }
+  const approval = {
+    id: `agent-approval:${randomUUID()}`,
+    agentActionId: action.id,
+    approvedBy,
+    approvedAt: "now",
+    approvalComment: body.approvalComment ?? null
+  };
+  state.agentApprovals.push(approval);
+  const approvalHistory = [...(action.approvalHistory ?? []), approval];
+  const approvalProgress = agentApprovalProgress(action, approvalHistory);
+  const updated = {
+    ...action,
+    status: approvalProgress.remainingCount === 0 ? "approved" : "submitted_for_approval",
+    approvalHistory,
+    approvalProgress
+  };
+  state.agentActions.set(updated.id, updated);
+  appendAgentReplayEvent(state, {
+    agentActionId: updated.id,
+    eventType: "approved",
+    actorId: approvedBy,
+    payload: { ...approval, approvalProgress }
+  });
+  return updated;
+}
+
+function executeAgentActionRecord(state, action, body, actorId) {
+  if (action.status !== "approved") {
+    throw new Error("Only approved Agent actions can be executed.");
+  }
+  const executedBy = body.executedBy ?? actorId;
+  if (action.approvalPolicy?.executeRequiresUserToken && body.userTokenConfirmed !== true) {
+    const error = new Error("Agent action execution requires an explicit confirmed user token.");
+    error.code = "AGENT_ACTION_USER_TOKEN_REQUIRED";
+    throw error;
+  }
+  const restoreDrill = restoreDrillConfigFor(state);
+  if (restoreDrill.outboundBlocked && action.actionKind === "external_execution") {
+    appendAgentReplayEvent(state, {
+      agentActionId: action.id,
+      eventType: "restore_drill_outbound_blocked",
+      actorId: executedBy,
+      payload: {
+        toolName: action.toolName,
+        actionKind: action.actionKind,
+        blockedChannels: restoreDrill.blockedChannels,
+        restoreDrill: true
+      }
+    });
+    const error = new Error("Restore-drill silent sandbox blocks external Agent executions.");
+    error.code = "RESTORE_DRILL_OUTBOUND_BLOCKED";
+    throw error;
+  }
+  verifyAgentEvidenceSnapshots(state, action, executedBy);
+  const executionResult = {
+    status: "recorded_without_business_mutation",
+    executedBy,
+    executedAt: "now",
+    toolName: action.toolName,
+    businessMutation: false,
+    userTokenConfirmed: body.userTokenConfirmed === true
+  };
+  const updated = {
+    ...action,
+    status: "executed",
+    executionResult
+  };
+  state.agentActions.set(updated.id, updated);
+  appendAgentReplayEvent(state, {
+    agentActionId: updated.id,
+    eventType: "executed",
+    actorId: executedBy,
+    payload: executionResult
+  });
+  return updated;
+}
+
+function reverseAgentActionRecord(state, action, body, actorId) {
+  if (action.status !== "executed") {
+    throw new Error("Only executed Agent actions can be reversed.");
+  }
+  const reversedBy = body.reversedBy ?? actorId;
+  const reversalReason =
+    typeof body.reversalReason === "string" && body.reversalReason.trim() !== ""
+      ? body.reversalReason
+      : "Agent action reversed by user request.";
+  const reversalResult = {
+    status: "reversed_without_business_mutation",
+    reversedBy,
+    reversedAt: "now",
+    reversalReason,
+    originalExecutionResult: action.executionResult ?? null,
+    toolName: action.toolName,
+    businessMutation: false
+  };
+  const updated = {
+    ...action,
+    status: "reversed",
+    reversalResult
+  };
+  state.agentActions.set(updated.id, updated);
+  appendAgentReplayEvent(state, {
+    agentActionId: updated.id,
+    eventType: "reversed",
+    actorId: reversedBy,
+    payload: reversalResult
+  });
+  return updated;
+}
+
+function agentActionReplayEventsFor(state, agentActionId) {
+  return state.agentReplayEvents.filter((event) => event.agentActionId === agentActionId);
+}
+
+function agentActionNextActions(action) {
+  if (action.status === "dry_run_completed") {
+    return action.approvalRequired ? ["submit"] : [];
+  }
+  if (action.status === "submitted_for_approval") {
+    return ["approve"];
+  }
+  if (action.status === "approved") {
+    return ["execute"];
+  }
+  if (action.status === "executed") {
+    return ["reverse"];
+  }
+  return [];
+}
+
+function agentActionMutationState(action) {
+  if (action.reversalResult) {
+    return action.reversalResult.businessMutation === true ? "reversed_with_business_mutation" : "reversed_without_business_mutation";
+  }
+  if (action.executionResult) {
+    return action.executionResult.businessMutation === true ? "executed_with_business_mutation" : "executed_without_business_mutation";
+  }
+  return "dry_run_only";
+}
+
+function buildAgentActionAuditSummary(state, action) {
+  const events = agentActionReplayEventsFor(state, action.id);
+  const eventTypes = events.map((event) => event.eventType);
+  const failedEvidenceEvents = events.filter((event) => event.eventType === "evidence_verification_failed");
+  const failedCount = failedEvidenceEvents.reduce(
+    (count, event) => count + (Array.isArray(event.payload?.mismatches) ? event.payload.mismatches.length : 1),
+    0
+  );
+  const verificationStatus =
+    failedCount > 0 ? "failed" : eventTypes.includes("evidence_verified") ? "verified" : "pending";
+
+  return {
+    agentActionId: action.id,
+    accountSetId: action.accountSetId,
+    toolName: action.toolName,
+    actionKind: action.actionKind,
+    status: action.status,
+    riskLevel: action.riskLevel,
+    requestedBy: action.requestedBy,
+    approvalRequired: action.approvalRequired,
+    approvals: action.approvalProgress ?? agentApprovalProgress(action),
+    evidence: {
+      snapshotCount: action.evidenceSnapshots?.length ?? 0,
+      verificationStatus,
+      failedCount
+    },
+    replay: {
+      eventCount: events.length,
+      eventTypes,
+      lastEventType: eventTypes.at(-1) ?? null
+    },
+    dryRunStatus: action.dryRunResult?.status ?? null,
+    executionStatus: action.executionResult?.status ?? null,
+    reversalStatus: action.reversalResult?.status ?? null,
+    mutationState: agentActionMutationState(action),
+    nextActions: agentActionNextActions(action)
+  };
+}
+
+function publicAgentAction(state, action) {
+  return {
+    ...action,
+    auditSummary: buildAgentActionAuditSummary(state, action)
+  };
+}
+
+function summarizeAgentAction(action) {
+  return {
+    id: action.id,
+    accountSetId: action.accountSetId,
+    toolName: action.toolName,
+    actionKind: action.actionKind,
+    riskLevel: action.riskLevel,
+    status: action.status,
+    approvalRequired: action.approvalRequired,
+    approvalProgress: action.approvalProgress,
+    dryRunStatus: action.dryRunResult?.status ?? null,
+    evidenceCount: action.evidenceRefs?.length ?? 0,
+    requestedBy: action.requestedBy,
+    submittedBy: action.approvalRequest?.submittedBy ?? null,
+    submittedAt: action.approvalRequest?.submittedAt ?? null,
+    executedBy: action.executionResult?.executedBy ?? null,
+    executedAt: action.executionResult?.executedAt ?? null,
+    createdAt: action.createdAt
+  };
+}
+
+function listAgentActions(state, { accountSetId = null, status = null, riskLevel = null, toolName = null } = {}) {
+  return [...state.agentActions.values()]
+    .filter((action) => {
+      if (accountSetId && action.accountSetId !== accountSetId) return false;
+      if (status && action.status !== status) return false;
+      if (riskLevel && action.riskLevel !== riskLevel) return false;
+      if (toolName && action.toolName !== toolName) return false;
+      return true;
+    })
+    .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)) || right.id.localeCompare(left.id))
+    .map(summarizeAgentAction);
+}
+
+function hydrateAgentReplayEvents(state, agentActionId, events) {
+  state.agentReplayEvents = state.agentReplayEvents.filter((event) => event.agentActionId !== agentActionId);
+  state.agentReplayEvents.push(...events);
+}
+
+async function loadAgentActionForRoute(state, agentActionId) {
+  const action =
+    state.agentActions.get(agentActionId) ??
+    (state.config.platformStore?.findAgentAction ? await state.config.platformStore.findAgentAction(agentActionId) : null);
+  if (!action) {
+    return null;
+  }
+  state.agentActions.set(action.id, action);
+  if (state.config.platformStore?.listAgentReplayEvents) {
+    hydrateAgentReplayEvents(state, action.id, await state.config.platformStore.listAgentReplayEvents(action.id));
+  }
+  return action;
+}
+
+async function persistAgentActionForRoute(state, action, { create = false } = {}) {
+  const platformStore = state.config.platformStore;
+  if (!platformStore) {
+    return action;
+  }
+  const savedAction =
+    create && platformStore.createAgentAction
+      ? await platformStore.createAgentAction(action)
+      : platformStore.updateAgentAction
+        ? await platformStore.updateAgentAction(action)
+        : action;
+  state.agentActions.set(savedAction.id, savedAction);
+  if (platformStore.replaceAgentReplayEvents) {
+    const savedEvents = await platformStore.replaceAgentReplayEvents(savedAction.id, agentActionReplayEventsFor(state, savedAction.id));
+    hydrateAgentReplayEvents(state, savedAction.id, savedEvents);
+  }
+  return savedAction;
+}
+
 async function listCollectionPlans(state, accountSetId, filters = {}) {
   const persistedPlans = state.config.platformStore?.listCollectionPlans
     ? await state.config.platformStore.listCollectionPlans(accountSetId, filters)
@@ -3364,6 +7654,49 @@ function appendAuditLog(state, { actorId = "system", action, objectType, objectI
     objectId,
     occurredAt: "now"
   });
+}
+
+function createSecurityEventRecord(state, event) {
+  return {
+    id: event.id ?? `security-event:${randomUUID()}`,
+    accountSetId: event.accountSetId ?? null,
+    eventType: event.eventType,
+    severity: event.severity ?? "medium",
+    actorId: event.actorId ?? null,
+    source: event.source ?? "api",
+    objectType: event.objectType ?? null,
+    objectId: event.objectId ?? null,
+    message: event.message ?? "",
+    payload: event.payload ?? {},
+    createdAt: event.createdAt ?? new Date(nowMsFor(state)).toISOString()
+  };
+}
+
+async function recordSecurityEvent(state, event) {
+  const securityEvent = createSecurityEventRecord(state, event);
+  state.securityEvents.set(securityEvent.id, securityEvent);
+  if (!state.config.platformStore?.createSecurityEvent) {
+    return securityEvent;
+  }
+  try {
+    const saved = await state.config.platformStore.createSecurityEvent(securityEvent);
+    state.securityEvents.set(saved.id, saved);
+    return saved;
+  } catch {
+    return securityEvent;
+  }
+}
+
+function listSecurityEvents(state, { accountSetId = null, eventType = null, severity = null, actorId = null } = {}) {
+  return [...state.securityEvents.values()]
+    .filter((event) => {
+      if (accountSetId && event.accountSetId !== accountSetId) return false;
+      if (eventType && event.eventType !== eventType) return false;
+      if (severity && event.severity !== severity) return false;
+      if (actorId && event.actorId !== actorId) return false;
+      return true;
+    })
+    .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)) || right.id.localeCompare(left.id));
 }
 
 function appendVoucherStatusLog(state, { voucherId, action, fromStatus, toStatus, actorId = "system", reason = null }) {
@@ -4929,6 +9262,252 @@ async function route(request, state) {
     return jsonResponse(200, deploymentConfigFor(state));
   }
 
+  if (segments.length === 3 && segments[0] === "ops" && segments[1] === "migrations" && segments[2] === "jobs") {
+    const actorId = actorIdFor(request, state);
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      const status = query.get("status");
+      const jobType = query.get("jobType");
+      if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      const rawItems = platformStore?.listMigrationJobs
+        ? await platformStore.listMigrationJobs(accountSetId, { status, jobType })
+        : listMigrationJobs(state, { accountSetId, status, jobType });
+      const items = [];
+      for (const item of rawItems) {
+        if (!accountSetId && !(await canAccessAccountSet(state, actorId, item.accountSetId))) {
+          continue;
+        }
+        state.migrationJobs.set(item.id, item);
+        items.push(publicMigrationJob(item));
+      }
+      return jsonResponse(200, {
+        accountSetId: accountSetId ?? null,
+        status: status ?? null,
+        jobType: jobType ?? null,
+        total: items.length,
+        items
+      });
+    }
+
+    if (request.method === "POST") {
+      if (typeof body.accountSetId !== "string" || body.accountSetId.trim() === "") {
+        return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+      }
+      const accountSet =
+        findAccountSetByIdentifier(state, body.accountSetId) ?? (platformStore?.findAccountSet ? await platformStore.findAccountSet(body.accountSetId) : null);
+      if (!accountSet) {
+        return errorResponse(404, "ACCOUNT_SET_NOT_FOUND", "Account set was not found.");
+      }
+      if (!(await canAccessAccountSet(state, actorId, accountSet.id))) {
+        return accountSetAccessError(state, actorId, accountSet.id);
+      }
+      try {
+        const job = createMigrationJobRecord(state, accountSet, body, actorId);
+        const savedJob = platformStore?.createMigrationJob ? await platformStore.createMigrationJob(job) : job;
+        state.migrationJobs.set(savedJob.id, savedJob);
+        appendAuditLog(state, {
+          actorId: savedJob.requestedBy,
+          action: "migration_job.create",
+          objectType: "migration_job",
+          objectId: savedJob.id
+        });
+        return jsonResponse(201, publicMigrationJob(savedJob));
+      } catch (error) {
+        return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (
+    request.method === "POST" &&
+    segments.length === 5 &&
+    segments[0] === "ops" &&
+    segments[1] === "migrations" &&
+    segments[2] === "jobs" &&
+    segments[4] === "dry-run"
+  ) {
+    const actorId = actorIdFor(request, state);
+    const jobId = decodedPathId(segments[3]);
+    const job =
+      state.migrationJobs.get(jobId) ?? (platformStore?.findMigrationJob ? await platformStore.findMigrationJob(jobId) : null);
+    if (!job) {
+      return errorResponse(404, "MIGRATION_JOB_NOT_FOUND", "Migration job was not found.");
+    }
+    state.migrationJobs.set(job.id, job);
+    if (!(await canAccessAccountSet(state, actorId, job.accountSetId))) {
+      return accountSetAccessError(state, actorId, job.accountSetId);
+    }
+    const dryRunJob = runMigrationDryRun(job, body, actorId);
+    const savedJob = platformStore?.updateMigrationJob ? await platformStore.updateMigrationJob(dryRunJob) : dryRunJob;
+    state.migrationJobs.set(savedJob.id, savedJob);
+    appendAuditLog(state, {
+      actorId: savedJob.requestedBy,
+      action: "migration_job.dry_run",
+      objectType: "migration_job",
+      objectId: savedJob.id
+    });
+    return jsonResponse(200, publicMigrationJob(savedJob));
+  }
+
+  if (
+    request.method === "POST" &&
+    segments.length === 5 &&
+    segments[0] === "ops" &&
+    segments[1] === "migrations" &&
+    segments[2] === "jobs" &&
+    segments[4] === "import"
+  ) {
+    const actorId = actorIdFor(request, state);
+    const jobId = decodedPathId(segments[3]);
+    const job =
+      state.migrationJobs.get(jobId) ?? (platformStore?.findMigrationJob ? await platformStore.findMigrationJob(jobId) : null);
+    if (!job) {
+      return errorResponse(404, "MIGRATION_JOB_NOT_FOUND", "Migration job was not found.");
+    }
+    state.migrationJobs.set(job.id, job);
+    if (!(await canAccessAccountSet(state, actorId, job.accountSetId))) {
+      return accountSetAccessError(state, actorId, job.accountSetId);
+    }
+    try {
+      const importedJob = await importMigrationJob(state, job, body, actorId);
+      const savedJob = platformStore?.updateMigrationJob ? await platformStore.updateMigrationJob(importedJob) : importedJob;
+      state.migrationJobs.set(savedJob.id, savedJob);
+      appendAuditLog(state, {
+        actorId: savedJob.requestedBy,
+        action: "migration_job.import",
+        objectType: "migration_job",
+        objectId: savedJob.id
+      });
+      return jsonResponse(200, publicMigrationJob(savedJob));
+    } catch (error) {
+      return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+    }
+  }
+
+  if (segments.length === 2 && segments[0] === "ops" && segments[1] === "backups") {
+    const actorId = actorIdFor(request, state);
+    if (request.method === "GET") {
+      const query = queryParamsFor(request.path);
+      const accountSetId = query.get("accountSetId");
+      const status = query.get("status");
+      if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+        return accountSetAccessError(state, actorId, accountSetId);
+      }
+      const rawItems = platformStore?.listBackupJobs
+        ? await platformStore.listBackupJobs(accountSetId, { status })
+        : listBackupJobs(state, { accountSetId, status });
+      const items = [];
+      for (const item of rawItems) {
+        if (!accountSetId && !(await canAccessAccountSet(state, actorId, item.accountSetId))) {
+          continue;
+        }
+        items.push(item);
+      }
+      return jsonResponse(200, {
+        accountSetId: accountSetId ?? null,
+        status: status ?? null,
+        total: items.length,
+        items
+      });
+    }
+
+    if (request.method === "POST") {
+      if (typeof body.accountSetId !== "string" || body.accountSetId.trim() === "") {
+        return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+      }
+      const accountSet =
+        findAccountSetByIdentifier(state, body.accountSetId) ?? (platformStore?.findAccountSet ? await platformStore.findAccountSet(body.accountSetId) : null);
+      if (!accountSet) {
+        return errorResponse(404, "ACCOUNT_SET_NOT_FOUND", "Account set was not found.");
+      }
+      if (!(await canAccessAccountSet(state, actorId, accountSet.id))) {
+        return accountSetAccessError(state, actorId, accountSet.id);
+      }
+      try {
+        const job = createBackupJobRecord(state, accountSet, body, actorId);
+        const savedJob = platformStore?.createBackupJob ? await platformStore.createBackupJob(job) : job;
+        state.backupJobs.set(savedJob.id, savedJob);
+        appendAuditLog(state, {
+          actorId: savedJob.requestedBy,
+          action: "backup_job.create",
+          objectType: "backup_job",
+          objectId: savedJob.id
+        });
+        return jsonResponse(201, savedJob);
+      } catch (error) {
+        return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+      }
+    }
+  }
+
+  if (segments.length === 2 && segments[0] === "ops" && segments[1] === "restores" && request.method === "GET") {
+    const actorId = actorIdFor(request, state);
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const status = query.get("status");
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const rawItems = platformStore?.listRestoreJobs
+      ? await platformStore.listRestoreJobs(accountSetId, { status })
+      : listRestoreJobs(state, { accountSetId, status });
+    const items = [];
+    for (const item of rawItems) {
+      if (!accountSetId && !(await canAccessAccountSet(state, actorId, item.accountSetId))) {
+        continue;
+      }
+      items.push(item);
+    }
+    return jsonResponse(200, {
+      accountSetId: accountSetId ?? null,
+      status: status ?? null,
+      total: items.length,
+      items
+    });
+  }
+
+  if (segments.length === 3 && segments[0] === "ops" && segments[1] === "restores" && segments[2] === "execute" && request.method === "POST") {
+    const actorId = actorIdFor(request, state);
+    if (typeof body.accountSetId !== "string" || body.accountSetId.trim() === "") {
+      return errorResponse(400, "ACCOUNT_SET_ID_REQUIRED", "accountSetId is required.");
+    }
+    if (typeof body.backupJobId !== "string" || body.backupJobId.trim() === "") {
+      return errorResponse(400, "BACKUP_JOB_ID_REQUIRED", "backupJobId is required.");
+    }
+    const accountSet =
+      findAccountSetByIdentifier(state, body.accountSetId) ?? (platformStore?.findAccountSet ? await platformStore.findAccountSet(body.accountSetId) : null);
+    if (!accountSet) {
+      return errorResponse(404, "ACCOUNT_SET_NOT_FOUND", "Account set was not found.");
+    }
+    if (!(await canAccessAccountSet(state, actorId, accountSet.id))) {
+      return accountSetAccessError(state, actorId, accountSet.id);
+    }
+    const backupJob =
+      state.backupJobs.get(body.backupJobId) ??
+      (platformStore?.findBackupJob ? await platformStore.findBackupJob(body.backupJobId) : null);
+    if (!backupJob || backupJob.accountSetId !== accountSet.id) {
+      return errorResponse(404, "BACKUP_JOB_NOT_FOUND", "Backup job was not found for the account set.");
+    }
+    state.backupJobs.set(backupJob.id, backupJob);
+    try {
+      const job = createRestoreJobRecord(state, accountSet, backupJob, body, actorId);
+      const savedJob = platformStore?.createRestoreJob ? await platformStore.createRestoreJob(job) : job;
+      state.restoreJobs.set(savedJob.id, savedJob);
+      appendAuditLog(state, {
+        actorId: savedJob.requestedBy,
+        action: "restore_job.dry_run",
+        objectType: "restore_job",
+        objectId: savedJob.id
+      });
+      return jsonResponse(201, savedJob);
+    } catch (error) {
+      return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+    }
+  }
+
   if (request.method === "GET" && request.path === "/permissions") {
     if (platformStore) {
       return jsonResponse(200, await platformStore.listPermissions());
@@ -5355,7 +9934,7 @@ async function route(request, state) {
       if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
         return accountSetAccessError(state, actorId, accountSetId);
       }
-      return jsonResponse(200, listInventoryItems(state, accountSetId));
+      return jsonResponse(200, await listInventoryItemsWithPersistence(state, accountSetId));
     }
 
     if (request.method === "POST") {
@@ -5367,7 +9946,7 @@ async function route(request, state) {
       if (itemInput.isBatchManaged && itemInput.costMethod === "moving_average") {
         return errorResponse(409, "BATCH_COST_METHOD_CONFLICT", "Batch-managed inventory items must use FIFO or specific identification costing.");
       }
-      const duplicate = listInventoryItems(state, body.accountSetId).find((item) => item.code === itemInput.code);
+      const duplicate = (await listInventoryItemsWithPersistence(state, body.accountSetId)).find((item) => item.code === itemInput.code);
       if (duplicate) {
         return errorResponse(409, "INVENTORY_ITEM_CODE_EXISTS", "Inventory item code already exists in this account set.");
       }
@@ -5378,14 +9957,15 @@ async function route(request, state) {
         createdAt: "now",
         updatedAt: "now"
       };
-      state.inventoryItems.set(item.id, item);
+      const savedItem = platformStore?.createInventoryItem ? await platformStore.createInventoryItem(item) : item;
+      state.inventoryItems.set(savedItem.id, savedItem);
       appendAuditLog(state, {
-        actorId: item.createdBy,
+        actorId: savedItem.createdBy,
         action: "inventory_item.create",
         objectType: "inventory_item",
-        objectId: item.id
+        objectId: savedItem.id
       });
-      return jsonResponse(201, item);
+      return jsonResponse(201, savedItem);
     }
   }
 
@@ -6831,7 +11411,9 @@ async function route(request, state) {
         return accountSetAccessError(state, actorId, body.accountSetId);
       }
       const validated = normalizePartnerInput(body);
-      const duplicate = (await listPartners(state, body.accountSetId)).find((partner) => partner.code === validated.code);
+      const duplicate = (await listPartners(state, body.accountSetId)).find((partner) =>
+        partnerCodeConflicts(partner, { accountSetId: body.accountSetId, ...validated })
+      );
       if (duplicate) {
         return errorResponse(409, "PARTNER_CODE_EXISTS", "Partner code already exists in this account set.");
       }
@@ -8373,7 +12955,7 @@ async function route(request, state) {
   }
 
   if (segments.length === 3 && segments[0] === "accounts" && segments[2] === "auxiliary-requirements") {
-    const account = findAccountByIdentifier(state, segments[1]);
+    const account = await findAccountByIdentifierWithStore(state, segments[1]);
     if (!account) {
       return errorResponse(404, "ACCOUNT_NOT_FOUND", "Account was not found.");
     }
@@ -9402,6 +13984,36 @@ async function route(request, state) {
     return jsonResponse(200, state.auditLogs);
   }
 
+  if (request.method === "GET" && segments.length === 2 && segments[0] === "security" && segments[1] === "events") {
+    const actorId = actorIdFor(request, state);
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const eventType = query.get("eventType");
+    const severity = query.get("severity");
+    const filterActorId = query.get("actorId");
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const rawItems = platformStore?.listSecurityEvents
+      ? await platformStore.listSecurityEvents(accountSetId, { eventType, severity, actorId: filterActorId })
+      : listSecurityEvents(state, { accountSetId, eventType, severity, actorId: filterActorId });
+    const items = [];
+    for (const item of rawItems) {
+      if (item.accountSetId && !accountSetId && !(await canAccessAccountSet(state, actorId, item.accountSetId))) {
+        continue;
+      }
+      items.push(item);
+    }
+    return jsonResponse(200, {
+      accountSetId: accountSetId ?? null,
+      eventType: eventType ?? null,
+      severity: severity ?? null,
+      actorId: filterActorId ?? null,
+      total: items.length,
+      items
+    });
+  }
+
   if (request.method === "POST" && request.path === "/attachments/upload") {
     if (typeof body.filename !== "string" || body.filename.trim() === "") {
       throw new Error("filename is required.");
@@ -9660,6 +14272,445 @@ async function route(request, state) {
       objectId: deleted.id
     });
     return jsonResponse(200, deleted);
+  }
+
+  if (request.method === "POST" && request.path === "/agent/draft-candidates") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+      return accountSetAccessError(state, actorId, body.accountSetId);
+    }
+    const candidate = await createAgentDraftCandidate(state, body, actorId);
+    const savedCandidate = await persistAgentDraftCandidateForRoute(state, candidate);
+    appendAuditLog(state, {
+      actorId,
+      action: "agent.draft_candidate.create",
+      objectType: "agent_draft_candidate",
+      objectId: savedCandidate.id
+    });
+    return jsonResponse(201, savedCandidate);
+  }
+
+  if (request.method === "POST" && request.path === "/ai/ocr-preview") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+      return accountSetAccessError(state, actorId, body.accountSetId);
+    }
+    try {
+      const preview = await createOcrPreview(state, body, actorId);
+      appendAuditLog(state, {
+        actorId,
+        action: "ai.ocr_preview.create",
+        objectType: "ocr_preview",
+        objectId: preview.id
+      });
+      return jsonResponse(201, preview);
+    } catch (error) {
+      return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
+    }
+  }
+
+  if (request.method === "GET" && segments.length === 3 && segments[0] === "ai" && segments[1] === "llm-draft-runs" && segments[2] === "metrics") {
+    const actorId = actorIdFor(request, state);
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const draftType = query.get("draftType");
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const sourceRuns = platformStore?.listLlmDraftRuns
+      ? await platformStore.listLlmDraftRuns(accountSetId, { draftType })
+      : [...state.llmDraftRuns.values()];
+    const runs = [];
+    for (const run of sourceRuns) {
+      if (!run.accountSetId) continue;
+      if (accountSetId && run.accountSetId !== accountSetId) continue;
+      if (draftType && run.inputSummary?.draftType !== draftType) continue;
+      if (!accountSetId && !(await canAccessAccountSet(state, actorId, run.accountSetId))) continue;
+      runs.push(run);
+    }
+    const candidates = platformStore?.listAgentDraftCandidates
+      ? await platformStore.listAgentDraftCandidates(accountSetId, { draftType })
+      : [...state.agentDraftCandidates.values()];
+    return jsonResponse(
+      200,
+      buildLlmDraftMetrics(runs, candidates, {
+        accountSetId,
+        draftType
+      })
+    );
+  }
+
+  if (request.method === "GET" && segments.length === 2 && segments[0] === "ai" && segments[1] === "llm-draft-runs") {
+    const actorId = actorIdFor(request, state);
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const status = query.get("status");
+    const draftType = query.get("draftType");
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const rawItems = platformStore?.listLlmDraftRuns
+      ? (await platformStore.listLlmDraftRuns(accountSetId, { status, draftType })).map(summarizeLlmDraftRun)
+      : listLlmDraftRuns(state, { accountSetId, status, draftType });
+    const items = [];
+    for (const item of rawItems) {
+      if (!item.accountSetId) continue;
+      if (!accountSetId && !(await canAccessAccountSet(state, actorId, item.accountSetId))) {
+        continue;
+      }
+      items.push(item);
+    }
+    return jsonResponse(200, {
+      accountSetId: accountSetId ?? null,
+      status: status ?? null,
+      draftType: draftType ?? null,
+      total: items.length,
+      items
+    });
+  }
+
+  if (request.method === "GET" && segments.length === 2 && segments[0] === "agent" && segments[1] === "draft-candidates") {
+    const actorId = actorIdFor(request, state);
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const status = query.get("status");
+    const draftType = query.get("draftType");
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const rawItems = platformStore?.listAgentDraftCandidates
+      ? (await platformStore.listAgentDraftCandidates(accountSetId, { status, draftType })).map(summarizeAgentDraftCandidate)
+      : listAgentDraftCandidateQueue(state, { accountSetId, status, draftType });
+    const items = [];
+    for (const item of rawItems) {
+      if (!accountSetId && !(await canAccessAccountSet(state, actorId, item.accountSetId))) {
+        continue;
+      }
+      items.push(item);
+    }
+    return jsonResponse(200, {
+      accountSetId: accountSetId ?? null,
+      status: status ?? null,
+      draftType: draftType ?? null,
+      total: items.length,
+      items
+    });
+  }
+
+  if (request.method === "GET" && segments.length === 3 && segments[0] === "agent" && segments[1] === "draft-candidates") {
+    const candidateId = decodedPathId(segments[2]);
+    const candidate =
+      state.agentDraftCandidates.get(candidateId) ??
+      (platformStore?.findAgentDraftCandidate ? await platformStore.findAgentDraftCandidate(candidateId) : null);
+    if (!candidate) {
+      return errorResponse(404, "AGENT_DRAFT_CANDIDATE_NOT_FOUND", "Agent draft candidate was not found.");
+    }
+    state.agentDraftCandidates.set(candidate.id, candidate);
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, candidate.accountSetId))) {
+      return accountSetAccessError(state, actorId, candidate.accountSetId);
+    }
+    return jsonResponse(200, candidate);
+  }
+
+  if (
+    request.method === "POST" &&
+    segments.length === 4 &&
+    segments[0] === "agent" &&
+    segments[1] === "draft-candidates" &&
+    segments[3] === "reject"
+  ) {
+    const candidateId = decodedPathId(segments[2]);
+    const candidate =
+      state.agentDraftCandidates.get(candidateId) ??
+      (platformStore?.findAgentDraftCandidate ? await platformStore.findAgentDraftCandidate(candidateId) : null);
+    if (!candidate) {
+      return errorResponse(404, "AGENT_DRAFT_CANDIDATE_NOT_FOUND", "Agent draft candidate was not found.");
+    }
+    state.agentDraftCandidates.set(candidate.id, candidate);
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, candidate.accountSetId))) {
+      return accountSetAccessError(state, actorId, candidate.accountSetId);
+    }
+    try {
+      const rejectedCandidate = rejectAgentDraftCandidate(state, candidate, body, actorId);
+      const savedCandidate = platformStore?.updateAgentDraftCandidate
+        ? await platformStore.updateAgentDraftCandidate(rejectedCandidate)
+        : rejectedCandidate;
+      state.agentDraftCandidates.set(savedCandidate.id, savedCandidate);
+      return jsonResponse(200, savedCandidate);
+    } catch (error) {
+      return errorResponse(400, "BUSINESS_RULE_FAILED", error.message);
+    }
+  }
+
+  if (
+    request.method === "POST" &&
+    segments.length === 4 &&
+    segments[0] === "agent" &&
+    segments[1] === "draft-candidates" &&
+    segments[3] === "convert"
+  ) {
+    const candidateId = decodedPathId(segments[2]);
+    const candidate =
+      state.agentDraftCandidates.get(candidateId) ??
+      (platformStore?.findAgentDraftCandidate ? await platformStore.findAgentDraftCandidate(candidateId) : null);
+    if (!candidate) {
+      return errorResponse(404, "AGENT_DRAFT_CANDIDATE_NOT_FOUND", "Agent draft candidate was not found.");
+    }
+    state.agentDraftCandidates.set(candidate.id, candidate);
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, candidate.accountSetId))) {
+      return accountSetAccessError(state, actorId, candidate.accountSetId);
+    }
+    try {
+      const persistConvertedAgentDraftCandidate = async () => {
+        const convertedCandidate = state.agentDraftCandidates.get(candidate.id);
+        if (!convertedCandidate) return;
+        const savedCandidate = platformStore?.updateAgentDraftCandidate
+          ? await platformStore.updateAgentDraftCandidate(convertedCandidate)
+          : convertedCandidate;
+        state.agentDraftCandidates.set(savedCandidate.id, savedCandidate);
+      };
+      const conversionBody = {
+        ...body,
+        resolvedUnmatchedItems: assertAgentDraftUnmatchedItemsResolved(candidate, body)
+      };
+      if (candidate.draftType === "voucher") {
+        const result = await convertAgentDraftCandidateToVoucher(state, candidate, conversionBody, actorId);
+        if (result.error) {
+          return result.error;
+        }
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.voucher);
+      }
+      if (candidate.draftType === "purchase_order") {
+        const result = await convertAgentDraftCandidateToPurchaseOrder(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.purchaseOrder);
+      }
+      if (candidate.draftType === "sales_order") {
+        const result = await convertAgentDraftCandidateToSalesOrder(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.salesOrder);
+      }
+      if (candidate.draftType === "inventory_movement") {
+        const result = convertAgentDraftCandidateToInventoryMovementDraft(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.inventoryMovementDraft);
+      }
+      if (candidate.draftType === "material_requisition") {
+        const result = convertAgentDraftCandidateToMaterialRequisitionDraft(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.materialRequisitionDraft);
+      }
+      if (candidate.draftType === "product_receipt") {
+        const result = convertAgentDraftCandidateToProductReceiptDraft(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.productReceiptDraft);
+      }
+      if (candidate.draftType === "stock_count") {
+        const result = convertAgentDraftCandidateToStockCountPreview(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.stockCountPreview);
+      }
+      if (candidate.draftType === "master_data") {
+        const result = convertAgentDraftCandidateToMasterDataDraft(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.masterDataDraft);
+      }
+      if (candidate.draftType === "payroll_allocation") {
+        const result = convertAgentDraftCandidateToPayrollAllocationDraft(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.payrollAllocationDraft);
+      }
+      if (candidate.draftType === "depreciation_run") {
+        const result = convertAgentDraftCandidateToDepreciationRunDraft(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.depreciationRunDraft);
+      }
+      if (candidate.draftType === "asset_change") {
+        const result = convertAgentDraftCandidateToAssetChangeDraft(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.assetChangeDraft);
+      }
+      if (candidate.draftType === "report_interpretation") {
+        const result = convertAgentDraftCandidateToReportInterpretationDraft(state, candidate, conversionBody, actorId);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result.reportInterpretationDraft);
+      }
+      throw unsupportedAgentDraftConversion(candidate.draftType);
+    } catch (error) {
+      return errorResponse(
+        400,
+        ["AGENT_DRAFT_CONVERSION_UNSUPPORTED", "AGENT_DRAFT_UNMATCHED_ITEMS_UNRESOLVED"].includes(error.code)
+          ? error.code
+          : "BUSINESS_RULE_FAILED",
+        error.message
+      );
+    }
+  }
+
+  if (request.method === "POST" && request.path === "/ai/llm-draft-runs") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+      return accountSetAccessError(state, actorId, body.accountSetId);
+    }
+    const llmDraftRun = await createLlmDraftRun(state, body);
+    const savedRun = platformStore?.createLlmDraftRun ? await platformStore.createLlmDraftRun(llmDraftRun) : llmDraftRun;
+    state.llmDraftRuns.set(savedRun.id, savedRun);
+    appendAuditLog(state, {
+      actorId,
+      action: "ai.llm_draft_run.create",
+      objectType: "llm_draft_run",
+      objectId: savedRun.id
+    });
+    return jsonResponse(201, savedRun);
+  }
+
+  if (request.method === "GET" && request.path === "/agent-tools") {
+    return jsonResponse(200, { tools: listAgentTools() });
+  }
+
+  if (request.method === "POST" && segments.length === 3 && segments[0] === "agent-tools" && segments[2] === "invoke") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+      return accountSetAccessError(state, actorId, body.accountSetId);
+    }
+    try {
+      const result = await invokeRegisteredAgentTool(state, decodedPathId(segments[1]), body, actorId);
+      return jsonResponse(201, result);
+    } catch (error) {
+      if (error.code === "AGENT_TOOL_NOT_AGENT_ALLOWED") {
+        return errorResponse(403, error.code, error.message);
+      }
+      return errorResponse(
+        400,
+        ["AGENT_TOOL_NOT_REGISTERED", "AGENT_TOOL_SCHEMA_INVALID"].includes(error.code) ? error.code : "BUSINESS_RULE_FAILED",
+        error.message
+      );
+    }
+  }
+
+  if (request.method === "POST" && request.path === "/agent-actions") {
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
+      return accountSetAccessError(state, actorId, body.accountSetId);
+    }
+    try {
+      const action = createAgentActionRecord(state, body, actorId);
+      const savedAction = await persistAgentActionForRoute(state, action, { create: true });
+      appendAuditLog(state, {
+        actorId: savedAction.requestedBy,
+        action: "agent_action.create",
+        objectType: "agent_action",
+        objectId: savedAction.id
+      });
+      return jsonResponse(201, publicAgentAction(state, savedAction));
+    } catch (error) {
+      return errorResponse(400, error.code === "AGENT_TOOL_NOT_REGISTERED" ? error.code : "BUSINESS_RULE_FAILED", error.message);
+    }
+  }
+
+  if (request.method === "GET" && segments.length === 1 && segments[0] === "agent-actions") {
+    const actorId = actorIdFor(request, state);
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const status = query.get("status");
+    const riskLevel = query.get("riskLevel");
+    const toolName = query.get("toolName");
+    if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    const rawItems = platformStore?.listAgentActions
+      ? (await platformStore.listAgentActions(accountSetId, { status, riskLevel, toolName })).map(summarizeAgentAction)
+      : listAgentActions(state, { accountSetId, status, riskLevel, toolName });
+    const items = [];
+    for (const item of rawItems) {
+      if (!accountSetId && !(await canAccessAccountSet(state, actorId, item.accountSetId))) {
+        continue;
+      }
+      items.push(item);
+    }
+    return jsonResponse(200, {
+      accountSetId: accountSetId ?? null,
+      status: status ?? null,
+      riskLevel: riskLevel ?? null,
+      toolName: toolName ?? null,
+      total: items.length,
+      items
+    });
+  }
+
+  if (request.method === "GET" && segments.length === 2 && segments[0] === "agent-actions") {
+    const action = await loadAgentActionForRoute(state, decodedPathId(segments[1]));
+    if (!action) {
+      return errorResponse(404, "AGENT_ACTION_NOT_FOUND", "Agent action was not found.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, action.accountSetId))) {
+      return accountSetAccessError(state, actorId, action.accountSetId);
+    }
+    return jsonResponse(200, publicAgentAction(state, action));
+  }
+
+  if (request.method === "GET" && segments.length === 3 && segments[0] === "agent-actions" && segments[2] === "replay") {
+    const action = await loadAgentActionForRoute(state, decodedPathId(segments[1]));
+    if (!action) {
+      return errorResponse(404, "AGENT_ACTION_NOT_FOUND", "Agent action was not found.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, action.accountSetId))) {
+      return accountSetAccessError(state, actorId, action.accountSetId);
+    }
+    return jsonResponse(200, {
+      agentActionId: action.id,
+      auditSummary: buildAgentActionAuditSummary(state, action),
+      events: agentActionReplayEventsFor(state, action.id)
+    });
+  }
+
+  if (
+    request.method === "POST" &&
+    segments.length === 3 &&
+    segments[0] === "agent-actions" &&
+    ["submit", "approve", "execute", "reverse"].includes(segments[2])
+  ) {
+    const currentAction = await loadAgentActionForRoute(state, decodedPathId(segments[1]));
+    if (!currentAction) {
+      return errorResponse(404, "AGENT_ACTION_NOT_FOUND", "Agent action was not found.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, currentAction.accountSetId))) {
+      return accountSetAccessError(state, actorId, currentAction.accountSetId);
+    }
+    try {
+      const updated =
+        segments[2] === "submit"
+          ? submitAgentActionForApproval(state, currentAction, body, actorId)
+          : segments[2] === "approve"
+            ? approveAgentActionRecord(state, currentAction, body, actorId)
+            : segments[2] === "execute"
+              ? executeAgentActionRecord(state, currentAction, body, actorId)
+              : reverseAgentActionRecord(state, currentAction, body, actorId);
+      const savedAction = await persistAgentActionForRoute(state, updated);
+      appendAuditLog(state, {
+        actorId: body.submittedBy ?? body.approvedBy ?? body.executedBy ?? body.reversedBy ?? actorId,
+        action: `agent_action.${segments[2]}`,
+        objectType: "agent_action",
+        objectId: savedAction.id
+      });
+      return jsonResponse(200, publicAgentAction(state, savedAction));
+    } catch (error) {
+      if (platformStore?.replaceAgentReplayEvents) {
+        const savedEvents = await platformStore.replaceAgentReplayEvents(
+          currentAction.id,
+          agentActionReplayEventsFor(state, currentAction.id)
+        );
+        hydrateAgentReplayEvents(state, currentAction.id, savedEvents);
+      }
+      return errorResponse(409, error.code ?? "BUSINESS_RULE_FAILED", error.message);
+    }
   }
 
   if (request.method === "POST" && (request.path === "/ai/voucher-suggestions" || request.path === "/ai/voucher-drafts")) {
@@ -10077,15 +15128,54 @@ export function createApi(options = {}) {
         return permissionError;
       }
 
-      const idempotencyKey = request.headers?.["Idempotency-Key"] ?? request.headers?.["idempotency-key"];
+      const idempotencyKey = WRITE_METHODS.has(request.method)
+        ? request.headers?.["Idempotency-Key"] ?? request.headers?.["idempotency-key"]
+        : null;
+      const idempotencyAccountSetScope = idempotencyKey ? idempotencyAccountSetScopeFor(request) : null;
+      const nowMs = idempotencyKey ? nowMsFor(state) : null;
       if (idempotencyKey && state.idempotency.has(idempotencyKey)) {
-        return state.idempotency.get(idempotencyKey);
+        const cached = state.idempotency.get(idempotencyKey);
+        if (idempotencyRecordExpired(cached, nowMs)) {
+          state.idempotency.delete(idempotencyKey);
+        } else {
+          const cachedScope = cached?.accountSetScope ?? "global";
+          if (cachedScope !== idempotencyAccountSetScope) {
+            await recordSecurityEvent(state, {
+              accountSetId: idempotencyAccountSetScope === "global" ? null : idempotencyAccountSetScope,
+              eventType: "idempotency_scope_mismatch",
+              severity: "medium",
+              actorId: actorIdFor(request, state),
+              source: "api",
+              objectType: "idempotency_key",
+              objectId: idempotencyKey,
+              message: "Idempotency-Key cannot be reused across different account sets.",
+              payload: {
+                method: request.method,
+                path: request.path.split("?")[0],
+                cachedScope,
+                requestedScope: idempotencyAccountSetScope
+              }
+            });
+            return errorResponse(
+              409,
+              "IDEMPOTENCY_SCOPE_MISMATCH",
+              "Idempotency-Key cannot be reused across different account sets."
+            );
+          }
+          return cached.response ?? cached;
+        }
       }
 
       try {
         const response = await route(request, state);
         if (idempotencyKey && response.status < 500) {
-          state.idempotency.set(idempotencyKey, response);
+          const ttlMs = idempotencyTtlMsFor(state);
+          state.idempotency.set(idempotencyKey, {
+            accountSetScope: idempotencyAccountSetScope,
+            createdAt: nowMs,
+            expiresAt: nowMs + ttlMs,
+            response
+          });
         }
         return response;
       } catch (error) {

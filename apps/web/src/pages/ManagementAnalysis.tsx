@@ -68,6 +68,17 @@ const expectedMetricKeys: ManagementMetricKey[] = [
 
 const formatAmount = (value?: number) => Number(value ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+const metricLabel: Record<ManagementMetricKey, string> = {
+  purchaseTrend: '采购趋势',
+  salesGrossMargin: '销售毛利',
+  inventoryTurnover: '存货周转',
+  counterpartyAging: '往来账龄',
+  cashFlow: '现金流',
+  laborCost: '人工成本',
+  depreciationCost: '折旧成本',
+  operatingOverview: '经营概览',
+};
+
 export const ManagementAnalysis: React.FC = () => {
   const { currentAccountSetId, currentPeriod, currentYear } = useAppContext();
   const [analysis, setAnalysis] = useState<ManagementAnalysisPayload | null>(null);
@@ -103,17 +114,17 @@ export const ManagementAnalysis: React.FC = () => {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
         <div>
-          <Title level={3} style={{ margin: 0 }}>Management Analysis</Title>
-          <Text type="secondary">Purchase, sales gross margin, inventory, aging, cash-flow, labor, depreciation, and operating drilldowns.</Text>
+          <Title level={3} style={{ margin: 0 }}>经营分析</Title>
+          <Text type="secondary">汇总采购、销售毛利、存货、账龄、现金流、人工、折旧与经营指标，并支持穿透查看来源。</Text>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={fetchAnalysis} loading={loading}>Refresh</Button>
+        <Button icon={<ReloadOutlined />} onClick={fetchAnalysis} loading={loading}>刷新</Button>
       </div>
 
       {analysis?.warnings?.length ? (
         <Alert
           type="warning"
           showIcon
-          title="Warnings"
+          title="风险提示"
           style={{ marginBottom: 16 }}
           description={analysis.warnings.map((warning) => `${warning.code}: ${warning.message}`).join(' / ')}
         />
@@ -127,19 +138,19 @@ export const ManagementAnalysis: React.FC = () => {
         onRow={(record) => ({ onClick: () => setSelectedMetricKey(record.key) })}
         columns={[
           {
-            title: 'Metric',
+            title: '指标',
             dataIndex: 'label',
-            render: (label: string, record) => (
+            render: (_label: string, record) => (
               <Space>
-                <Text strong={record.key === selectedMetricKey}>{label}</Text>
+                <Text strong={record.key === selectedMetricKey}>{metricLabel[record.key] ?? record.key}</Text>
                 <Tag>{record.key}</Tag>
               </Space>
             ),
           },
-          { title: 'Amount', dataIndex: 'amount', align: 'right', render: (value: number) => formatAmount(value) },
-          { title: 'Count', dataIndex: 'count', align: 'right' },
-          { title: 'Ratio', dataIndex: 'ratio', align: 'right', render: (value?: number) => (value == null ? '-' : formatAmount(value)) },
-          { title: 'Drilldown', dataIndex: ['drilldown', 'path'] },
+          { title: '金额', dataIndex: 'amount', align: 'right', render: (value: number) => formatAmount(value) },
+          { title: '数量', dataIndex: 'count', align: 'right' },
+          { title: '比率', dataIndex: 'ratio', align: 'right', render: (value?: number) => (value == null ? '-' : formatAmount(value)) },
+          { title: '穿透路径', dataIndex: ['drilldown', 'path'] },
         ]}
       />
 
@@ -149,16 +160,16 @@ export const ManagementAnalysis: React.FC = () => {
         pagination={false}
         size="small"
         style={{ marginTop: 16 }}
-        title={() => `Drilldowns - ${selectedMetricKey}`}
+        title={() => `穿透明细 - ${metricLabel[selectedMetricKey] ?? selectedMetricKey}`}
         columns={[
-          { title: 'Source', dataIndex: 'sourceType' },
-          { title: 'No', dataIndex: 'sourceNo' },
-          { title: 'Partner / Item', render: (_, record) => record.partnerName ?? record.itemName ?? '-' },
-          { title: 'Amount', dataIndex: 'amount', align: 'right', render: (value?: number) => (value == null ? '-' : formatAmount(value)) },
-          { title: 'Remaining', dataIndex: 'remainingAmount', align: 'right', render: (value?: number) => (value == null ? '-' : formatAmount(value)) },
-          { title: 'Quantity', dataIndex: 'quantity', align: 'right' },
-          { title: 'Date', render: (_, record) => record.documentDate ?? record.dueDate ?? '-' },
-          { title: 'Days past due', dataIndex: 'daysPastDue', align: 'right' },
+          { title: '来源', dataIndex: 'sourceType' },
+          { title: '单号', dataIndex: 'sourceNo' },
+          { title: '往来单位/存货', render: (_, record) => record.partnerName ?? record.itemName ?? '-' },
+          { title: '金额', dataIndex: 'amount', align: 'right', render: (value?: number) => (value == null ? '-' : formatAmount(value)) },
+          { title: '剩余金额', dataIndex: 'remainingAmount', align: 'right', render: (value?: number) => (value == null ? '-' : formatAmount(value)) },
+          { title: '数量', dataIndex: 'quantity', align: 'right' },
+          { title: '日期', render: (_, record) => record.documentDate ?? record.dueDate ?? '-' },
+          { title: '逾期天数', dataIndex: 'daysPastDue', align: 'right' },
         ]}
       />
     </div>

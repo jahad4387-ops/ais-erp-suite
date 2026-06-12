@@ -23,6 +23,12 @@ test("api errors shown to users are localized to Chinese", () => {
   }
 
   assert.match(source, /errorCodeText/);
+  assert.match(source, /RESTORE_DRILL_REQUIRED/);
+  assert.match(source, /恢复演练必须在静默沙箱环境中执行/);
+  assert.match(source, /PARTNER_CODE_EXISTS/);
+  assert.match(source, /往来单位编码已存在/);
+  assert.match(source, /BATCH_COST_METHOD_CONFLICT/);
+  assert.match(source, /批次管理的存货不能使用移动平均计价/);
   assert.match(source, /errorMessagePatterns/);
   assert.match(source, /code === 'BUSINESS_RULE_FAILED'/);
   assert.match(source, /catch \(error\)/);

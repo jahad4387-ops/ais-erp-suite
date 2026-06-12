@@ -47,26 +47,26 @@ export const FixedAssetReconciliation: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Fixed Asset Reconciliation</h2>
-        <Button icon={<ReloadOutlined />} onClick={fetchData}>Refresh</Button>
+        <h2 style={{ margin: 0 }}>固定资产对账</h2>
+        <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
       </div>
       <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
-        <Form.Item name="fiscalYear"><InputNumber placeholder="Year" /></Form.Item>
-        <Form.Item name="periodNo"><InputNumber min={1} max={12} placeholder="Period" /></Form.Item>
+        <Form.Item name="fiscalYear"><InputNumber placeholder="年度" /></Form.Item>
+        <Form.Item name="periodNo"><InputNumber min={1} max={12} placeholder="期间" /></Form.Item>
       </Form>
       <Descriptions bordered size="small" style={{ marginBottom: 16 }} column={3}>
-        <Descriptions.Item label="ledgerNetValue">{reconciliation?.ledgerNetValue ?? 0}</Descriptions.Item>
-        <Descriptions.Item label="glNetValue">{reconciliation?.glNetValue ?? 0}</Descriptions.Item>
-        <Descriptions.Item label="differenceAmount">
+        <Descriptions.Item label="资产台账净值">{reconciliation?.ledgerNetValue ?? 0}</Descriptions.Item>
+        <Descriptions.Item label="总账净值">{reconciliation?.glNetValue ?? 0}</Descriptions.Item>
+        <Descriptions.Item label="差异金额">
           <Tag color={(reconciliation?.differenceAmount ?? 0) === 0 ? 'green' : 'red'}>{reconciliation?.differenceAmount ?? 0}</Tag>
         </Descriptions.Item>
       </Descriptions>
       <Table rowKey="id" dataSource={ledgerRows} columns={[
-        { title: 'Asset', dataIndex: 'assetNo' },
-        { title: 'Source', dataIndex: 'sourceType' },
-        { title: 'Year', dataIndex: 'fiscalYear' },
-        { title: 'Period', dataIndex: 'periodNo' },
-        { title: 'Amount', dataIndex: 'amount' },
+        { title: '资产', dataIndex: 'assetNo' },
+        { title: '来源', dataIndex: 'sourceType' },
+        { title: '年度', dataIndex: 'fiscalYear' },
+        { title: '期间', dataIndex: 'periodNo' },
+        { title: '金额', dataIndex: 'amount' },
       ]} />
     </div>
   );

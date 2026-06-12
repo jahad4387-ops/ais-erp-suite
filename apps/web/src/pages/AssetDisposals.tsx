@@ -17,6 +17,12 @@ type AssetDisposal = {
   fixedAsset: { depreciationStopPeriod: number };
 };
 
+const disposalTypeLabel: Record<string, string> = {
+  sale: '出售',
+  scrap: '报废',
+  inventory_loss: '盘亏',
+};
+
 export const AssetDisposals: React.FC = () => {
   const [form] = Form.useForm();
   const { currentAccountSetId, currentUser } = useAppContext();
@@ -44,36 +50,36 @@ export const AssetDisposals: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Asset Disposals</h2>
-        <Button icon={<ReloadOutlined />} onClick={fetchData}>Refresh</Button>
+        <h2 style={{ margin: 0 }}>资产处置</h2>
+        <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
       </div>
-      <Alert style={{ marginBottom: 16 }} type="info" showIcon description="phase4_asset_disposal / depreciationStopPeriod" />
+      <Alert style={{ marginBottom: 16 }} type="info" showIcon description="资产处置会停止后续折旧，并生成处置凭证草稿。" />
       <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
         <Form.Item name="fixedAssetId" rules={[{ required: true }]}>
-          <Select style={{ width: 240 }} placeholder="Asset" options={assets.map((row) => ({ value: row.id, label: `${row.assetNo} ${row.name}` }))} />
+          <Select style={{ width: 240 }} placeholder="资产" options={assets.map((row) => ({ value: row.id, label: `${row.assetNo} ${row.name}` }))} />
         </Form.Item>
         <Form.Item name="disposalDate" rules={[{ required: true }]}><Input placeholder="YYYY-MM-DD" /></Form.Item>
         <Form.Item name="disposalType" rules={[{ required: true }]}>
           <Select style={{ width: 140 }} options={[
-            { value: 'sale', label: 'Sale' },
-            { value: 'scrap', label: 'Scrap' },
-            { value: 'inventory_loss', label: 'Loss' },
+            { value: 'sale', label: '出售' },
+            { value: 'scrap', label: '报废' },
+            { value: 'inventory_loss', label: '盘亏' },
           ]} />
         </Form.Item>
-        <Form.Item name="proceedsAmount"><InputNumber min={0} placeholder="Proceeds" /></Form.Item>
-        <Form.Item name="clearingAccountCode"><Input placeholder="Clearing account" /></Form.Item>
-        <Form.Item name="gainLossAccountCode"><Input placeholder="Gain/loss account" /></Form.Item>
-        <Button type="primary" icon={<DeleteOutlined />} onClick={createDisposal}>Create draft</Button>
+        <Form.Item name="proceedsAmount"><InputNumber min={0} placeholder="处置收入" /></Form.Item>
+        <Form.Item name="clearingAccountCode"><Input placeholder="清理科目" /></Form.Item>
+        <Form.Item name="gainLossAccountCode"><Input placeholder="损益科目" /></Form.Item>
+        <Button type="primary" icon={<DeleteOutlined />} onClick={createDisposal}>生成草稿</Button>
       </Form>
       <Table rowKey="id" dataSource={disposals} columns={[
-        { title: 'Asset', dataIndex: 'assetNo' },
-        { title: 'Date', dataIndex: 'disposalDate' },
-        { title: 'Type', dataIndex: 'disposalType' },
-        { title: 'Proceeds', dataIndex: 'proceedsAmount' },
-        { title: 'Net value', dataIndex: 'netValueAtDisposal' },
-        { title: 'Gain/loss', dataIndex: 'gainLossAmount' },
-        { title: 'Stop period', render: (_, row) => row.fixedAsset?.depreciationStopPeriod },
-        { title: 'Voucher', render: (_, row) => <Tag>{row.voucherDraft?.sourceType}</Tag> },
+        { title: '资产', dataIndex: 'assetNo' },
+        { title: '日期', dataIndex: 'disposalDate' },
+        { title: '类型', render: (_, row) => disposalTypeLabel[row.disposalType] ?? row.disposalType },
+        { title: '处置收入', dataIndex: 'proceedsAmount' },
+        { title: '处置净值', dataIndex: 'netValueAtDisposal' },
+        { title: '处置损益', dataIndex: 'gainLossAmount' },
+        { title: '停止期间', render: (_, row) => row.fixedAsset?.depreciationStopPeriod },
+        { title: '凭证', render: (_, row) => <Tag>{row.voucherDraft?.approvalRequired ? '待审核' : '草稿'}</Tag> },
       ]} />
     </div>
   );

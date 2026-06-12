@@ -3,6 +3,7 @@ import { Alert, Button, Form, Input, InputNumber, Select, Table, Tabs, Tag } fro
 import { SwapOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useAppContext } from '../context/AppContext';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 
 type AssetCategory = { id: string; code: string; name: string; depreciationMethodId?: string | null; defaultUsefulLifeMonths: number; defaultSalvageRate: number };
 type DepreciationMethod = { id: string; code: string; name: string };
@@ -22,6 +23,14 @@ type FixedAsset = {
   depreciationTimelineRule: 'new_asset_next_month';
   depreciationDepartmentRule: 'month_end_department';
   lastTransferAt?: string | null;
+};
+
+const timelineRuleLabel: Record<string, string> = {
+  new_asset_next_month: '新增次月计提',
+};
+
+const departmentRuleLabel: Record<string, string> = {
+  month_end_department: '按月末使用部门',
 };
 
 export const FixedAssets: React.FC = () => {
@@ -94,86 +103,108 @@ export const FixedAssets: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Fixed Assets</h2>
-        <Button icon={<ReloadOutlined />} onClick={fetchData}>Refresh</Button>
+        <h2 style={{ margin: 0 }}>固定资产卡片</h2>
+        <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
       </div>
       <Alert
         style={{ marginBottom: 16 }}
         type="info"
         showIcon
-        description="new_asset_next_month / month_end_department"
+        description="固定资产默认按新增次月开始计提折旧，并按月末使用部门归集折旧费用。"
       />
       <Tabs
         items={[
           {
             key: 'cards',
-            label: 'Cards',
+            label: '资产卡片',
             children: (
               <>
                 <Form form={assetForm} layout="inline" style={{ marginBottom: 16 }}>
-                  <Form.Item name="assetNo" rules={[{ required: true }]}><Input placeholder="Asset no" /></Form.Item>
-                  <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="Name" /></Form.Item>
+                  <Form.Item name="assetNo" rules={[{ required: true }]}><Input placeholder="资产编号" /></Form.Item>
+                  <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="资产名称" /></Form.Item>
                   <Form.Item name="categoryId" rules={[{ required: true }]}>
-                    <Select style={{ width: 200 }} placeholder="Category" options={categories.map((row) => ({ value: row.id, label: `${row.code} ${row.name}` }))} />
+                    <Select style={{ width: 200 }} placeholder="资产类别" options={categories.map((row) => ({ value: row.id, label: `${row.code} ${row.name}` }))} />
                   </Form.Item>
                   <Form.Item name="depreciationMethodId">
-                    <Select style={{ width: 180 }} placeholder="Method" options={methods.map((row) => ({ value: row.id, label: row.name }))} />
+                    <Select style={{ width: 180 }} placeholder="折旧方法" options={methods.map((row) => ({ value: row.id, label: row.name }))} />
                   </Form.Item>
                   <Form.Item name="acquisitionType"><Select style={{ width: 160 }} options={[
-                    { value: 'purchase', label: 'Purchase' },
-                    { value: 'construction_transfer', label: 'Construction' },
-                    { value: 'inventory_surplus', label: 'Surplus' },
-                    { value: 'other', label: 'Other' },
+                    { value: 'purchase', label: '购入' },
+                    { value: 'construction_transfer', label: '在建转入' },
+                    { value: 'inventory_surplus', label: '盘盈' },
+                    { value: 'other', label: '其他' },
                   ]} /></Form.Item>
                   <Form.Item name="acquisitionDate" rules={[{ required: true }]}><Input placeholder="YYYY-MM-DD" /></Form.Item>
-                  <Form.Item name="originalValue" rules={[{ required: true }]}><InputNumber min={0} placeholder="Original value" /></Form.Item>
-                  <Form.Item name="accumulatedDepreciation"><InputNumber min={0} placeholder="Accum depreciation" /></Form.Item>
-                  <Form.Item name="salvageValue"><InputNumber min={0} placeholder="Salvage value" /></Form.Item>
-                  <Form.Item name="usefulLifeMonths" rules={[{ required: true }]}><InputNumber min={1} placeholder="Life months" /></Form.Item>
-                  <Form.Item name="departmentId" rules={[{ required: true }]}><Input placeholder="Department id" /></Form.Item>
-                  <Form.Item name="departmentName"><Input placeholder="Department" /></Form.Item>
-                  <Form.Item name="responsiblePerson"><Input placeholder="Owner" /></Form.Item>
-                  <Button type="primary" icon={<PlusOutlined />} onClick={createAsset}>Add</Button>
+                  <Form.Item name="originalValue" rules={[{ required: true }]}><InputNumber min={0} placeholder="原值" /></Form.Item>
+                  <Form.Item name="accumulatedDepreciation"><InputNumber min={0} placeholder="累计折旧" /></Form.Item>
+                  <Form.Item name="salvageValue"><InputNumber min={0} placeholder="残值" /></Form.Item>
+                  <Form.Item name="usefulLifeMonths" rules={[{ required: true }]}><InputNumber min={1} placeholder="使用月限" /></Form.Item>
+                  <Form.Item name="departmentId" rules={[{ required: true }]}><Input placeholder="部门编码" /></Form.Item>
+                  <Form.Item name="departmentName"><Input placeholder="部门名称" /></Form.Item>
+                  <Form.Item name="responsiblePerson"><Input placeholder="责任人" /></Form.Item>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={createAsset}>新增</Button>
                 </Form>
                 <Table rowKey="id" dataSource={assets} columns={[
-                  { title: 'Asset no', dataIndex: 'assetNo' },
-                  { title: 'Name', dataIndex: 'name' },
-                  { title: 'Original', dataIndex: 'originalValue' },
-                  { title: 'Accum dep', dataIndex: 'accumulatedDepreciation' },
-                  { title: 'Net', dataIndex: 'netValue' },
-                  { title: 'Salvage', dataIndex: 'salvageValue' },
-                  { title: 'Start period', render: (_, row) => `${row.serviceStartYear}-${String(row.serviceStartPeriod).padStart(2, '0')}` },
-                  { title: 'Department', dataIndex: 'currentDepartmentId' },
-                  { title: 'Rules', render: (_, row) => <><Tag>{row.depreciationTimelineRule}</Tag><Tag>{row.depreciationDepartmentRule}</Tag></> },
+                  { title: '资产编号', dataIndex: 'assetNo' },
+                  { title: '资产名称', dataIndex: 'name' },
+                  { title: '原值', dataIndex: 'originalValue' },
+                  { title: '累计折旧', dataIndex: 'accumulatedDepreciation' },
+                  { title: '净值', dataIndex: 'netValue' },
+                  { title: '残值', dataIndex: 'salvageValue' },
+                  { title: '开始期间', render: (_, row) => `${row.serviceStartYear}-${String(row.serviceStartPeriod).padStart(2, '0')}` },
+                  { title: '使用部门', dataIndex: 'currentDepartmentId' },
+                  {
+                    title: '折旧规则',
+                    render: (_, row) => (
+                      <>
+                        <Tag>{timelineRuleLabel[row.depreciationTimelineRule] ?? row.depreciationTimelineRule}</Tag>
+                        <Tag>{departmentRuleLabel[row.depreciationDepartmentRule] ?? row.depreciationDepartmentRule}</Tag>
+                      </>
+                    ),
+                  },
+                  {
+                    title: 'Agent',
+                    render: (_, row) => (
+                      <AgentDraftEntryButton
+                        size="small"
+                        draftType="asset_change"
+                        sourceObjectType="fixed_asset"
+                        sourceObjectId={row.id}
+                        userInstruction={`Generate asset change draft from ${row.assetNo}.`}
+                      >
+                        Agent
+                      </AgentDraftEntryButton>
+                    ),
+                  },
                 ]} />
               </>
             ),
           },
           {
             key: 'changes',
-            label: 'Transfers and value changes',
+            label: '转移与原值变动',
             children: (
               <>
                 <Form form={transferForm} layout="inline" style={{ marginBottom: 16 }}>
                   <Form.Item name="fixedAssetId" rules={[{ required: true }]}>
-                    <Select style={{ width: 220 }} placeholder="Asset" options={assets.map((row) => ({ value: row.id, label: `${row.assetNo} ${row.name}` }))} />
+                    <Select style={{ width: 220 }} placeholder="资产" options={assets.map((row) => ({ value: row.id, label: `${row.assetNo} ${row.name}` }))} />
                   </Form.Item>
                   <Form.Item name="transferDate" rules={[{ required: true }]}><Input placeholder="YYYY-MM-DD" /></Form.Item>
-                  <Form.Item name="fromDepartmentId"><Input placeholder="From dept" /></Form.Item>
-                  <Form.Item name="toDepartmentId" rules={[{ required: true }]}><Input placeholder="To dept" /></Form.Item>
-                  <Form.Item name="toDepartmentName"><Input placeholder="To dept name" /></Form.Item>
-                  <Form.Item name="responsiblePerson"><Input placeholder="Owner" /></Form.Item>
-                  <Button type="primary" icon={<SwapOutlined />} onClick={transferAsset}>Transfer</Button>
+                  <Form.Item name="fromDepartmentId"><Input placeholder="转出部门" /></Form.Item>
+                  <Form.Item name="toDepartmentId" rules={[{ required: true }]}><Input placeholder="转入部门" /></Form.Item>
+                  <Form.Item name="toDepartmentName"><Input placeholder="转入部门名称" /></Form.Item>
+                  <Form.Item name="responsiblePerson"><Input placeholder="责任人" /></Form.Item>
+                  <Button type="primary" icon={<SwapOutlined />} onClick={transferAsset}>转移</Button>
                 </Form>
                 <Form form={changeForm} layout="inline" style={{ marginBottom: 16 }}>
                   <Form.Item name="fixedAssetId" rules={[{ required: true }]}>
-                    <Select style={{ width: 220 }} placeholder="Asset" options={assets.map((row) => ({ value: row.id, label: `${row.assetNo} ${row.name}` }))} />
+                    <Select style={{ width: 220 }} placeholder="资产" options={assets.map((row) => ({ value: row.id, label: `${row.assetNo} ${row.name}` }))} />
                   </Form.Item>
                   <Form.Item name="changeDate" rules={[{ required: true }]}><Input placeholder="YYYY-MM-DD" /></Form.Item>
-                  <Form.Item name="changeType" rules={[{ required: true }]}><Input placeholder="Change type" /></Form.Item>
-                  <Form.Item name="amount" rules={[{ required: true }]}><InputNumber placeholder="Amount" /></Form.Item>
-                  <Form.Item name="reason"><Input placeholder="Reason" /></Form.Item>
-                  <Button icon={<PlusOutlined />} onClick={changeAssetValue}>Change value</Button>
+                  <Form.Item name="changeType" rules={[{ required: true }]}><Input placeholder="变动类型" /></Form.Item>
+                  <Form.Item name="amount" rules={[{ required: true }]}><InputNumber placeholder="金额" /></Form.Item>
+                  <Form.Item name="reason"><Input placeholder="原因" /></Form.Item>
+                  <Button icon={<PlusOutlined />} onClick={changeAssetValue}>登记变动</Button>
                 </Form>
               </>
             ),

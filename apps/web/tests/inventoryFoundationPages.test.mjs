@@ -27,6 +27,8 @@ test("web app exposes Phase 3 inventory foundation pages and API wiring", () => 
   assert.match(itemsSource, /api\.get\(`\/inventory-items\?/, "Inventory item page should list items.");
   assert.match(itemsSource, /api\.post\('\/inventory-items'/, "Inventory item page should create items.");
   assert.match(itemsSource, /BATCH_COST_METHOD_CONFLICT/, "Inventory page should surface the batch/cost-method guardrail.");
+  assert.match(itemsSource, /onValuesChange/, "Inventory item form should guard conflicting batch and cost method choices before submit.");
+  assert.match(itemsSource, /setFieldValue\('costMethod', 'fifo'\)/, "Batch-managed items should switch away from moving-average costing.");
   assert.match(bomSource, /api\.get\(`\/boms\?/, "BOM page should list BOMs.");
   assert.match(bomSource, /api\.post\('\/boms'/, "BOM page should create BOMs.");
   assert.match(warehouseSource, /api\.get\(`\/warehouses\?/, "Warehouse page should list warehouses.");

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Form, Input, InputNumber, Space, Table, Tag } from 'antd';
 import { CalculatorOutlined, CheckOutlined, LockOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 import { useAppContext } from '../context/AppContext';
 
 type DepreciationRunLine = {
@@ -34,6 +35,23 @@ type DepreciationCostPool = {
   costType: string;
   amount: number;
   lockedAt: string;
+};
+
+const statusLabel: Record<string, string> = {
+  calculated: '已计算',
+  approved: '已审核',
+  locked: '已锁定',
+};
+
+const skipReasonLabel: Record<string, string> = {
+  NEW_ASSET_NOT_STARTED: '新增资产未开始计提',
+  FULLY_DEPRECIATED: '已提足折旧',
+  DEPRECIATION_STOPPED: '已停止折旧',
+};
+
+const costTypeLabel: Record<string, string> = {
+  depreciation: '折旧',
+  manufacturing_overhead: '制造费用',
 };
 
 export const DepreciationRuns: React.FC = () => {
@@ -90,22 +108,31 @@ export const DepreciationRuns: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Depreciation Runs</h2>
-        <Button icon={<ReloadOutlined />} onClick={fetchData}>Refresh</Button>
+        <h2 style={{ margin: 0 }}>折旧计提</h2>
+        <Space>
+          <AgentDraftEntryButton
+            draftType="depreciation_run"
+            sourceObjectType="depreciation_run_page"
+            userInstruction={`Generate depreciation dry-run candidate for ${currentYear}-${String(currentPeriod).padStart(2, '0')}.`}
+          >
+            Agent
+          </AgentDraftEntryButton>
+          <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
+        </Space>
       </div>
       <Alert
         style={{ marginBottom: 16 }}
         type="info"
         showIcon
-        description="NEW_ASSET_NOT_STARTED / brakeApplied / month_end_department"
+        description="折旧试算不会写入正式成本池；正式计提审核并锁定后才生成折旧成本。"
       />
       <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
-        <Form.Item name="runNo" rules={[{ required: true }]}><Input placeholder="Run no" /></Form.Item>
-        <Form.Item name="fiscalYear" rules={[{ required: true }]}><InputNumber placeholder="Year" /></Form.Item>
-        <Form.Item name="periodNo" rules={[{ required: true }]}><InputNumber min={1} max={12} placeholder="Period" /></Form.Item>
+        <Form.Item name="runNo" rules={[{ required: true }]}><Input placeholder="计提单号" /></Form.Item>
+        <Form.Item name="fiscalYear" rules={[{ required: true }]}><InputNumber placeholder="年度" /></Form.Item>
+        <Form.Item name="periodNo" rules={[{ required: true }]}><InputNumber min={1} max={12} placeholder="期间" /></Form.Item>
         <Space>
-          <Button icon={<CalculatorOutlined />} onClick={createDryRun}>Dry-run</Button>
-          <Button type="primary" icon={<CalculatorOutlined />} onClick={createFormalRun}>Create run</Button>
+          <Button icon={<CalculatorOutlined />} onClick={createDryRun}>试算</Button>
+          <Button type="primary" icon={<CalculatorOutlined />} onClick={createFormalRun}>正式计提</Button>
         </Space>
       </Form>
       <Table
@@ -118,30 +145,30 @@ export const DepreciationRuns: React.FC = () => {
               pagination={false}
               dataSource={run.lines}
               columns={[
-                { title: 'Asset', dataIndex: 'assetNo' },
-                { title: 'Department', dataIndex: 'departmentId' },
-                { title: 'Amount', dataIndex: 'depreciationAmount' },
-                { title: 'Net after', dataIndex: 'netValueAfter' },
-                { title: 'Brake', render: (_, line) => line.brakeApplied ? <Tag color="red">brakeApplied</Tag> : <Tag>normal</Tag> },
-                { title: 'Skip', dataIndex: 'skippedReason' },
-                { title: 'Rule', dataIndex: 'depreciationDepartmentRule' },
+                { title: '资产', dataIndex: 'assetNo' },
+                { title: '部门', dataIndex: 'departmentId' },
+                { title: '折旧额', dataIndex: 'depreciationAmount' },
+                { title: '折后净值', dataIndex: 'netValueAfter' },
+                { title: '刹车规则', render: (_, line) => line.brakeApplied ? <Tag color="red">已触发</Tag> : <Tag>正常</Tag> },
+                { title: '跳过原因', render: (_, line) => line.skippedReason ? (skipReasonLabel[line.skippedReason] ?? line.skippedReason) : '-' },
+                { title: '部门规则', render: () => '按月末使用部门' },
               ]}
             />
           ),
         }}
         columns={[
-          { title: 'Run no', dataIndex: 'runNo' },
-          { title: 'Period', render: (_, row) => `${row.fiscalYear}-${String(row.periodNo).padStart(2, '0')}` },
-          { title: 'Mode', render: (_, row) => row.dryRun ? <Tag>dry-run</Tag> : <Tag color="blue">formal</Tag> },
-          { title: 'Status', dataIndex: 'status' },
-          { title: 'Total', dataIndex: 'totalDepreciationAmount' },
-          { title: 'Warnings', render: (_, row) => (row.warningCodes ?? []).map((code) => <Tag key={code}>{code}</Tag>) },
+          { title: '计提单号', dataIndex: 'runNo' },
+          { title: '期间', render: (_, row) => `${row.fiscalYear}-${String(row.periodNo).padStart(2, '0')}` },
+          { title: '模式', render: (_, row) => row.dryRun ? <Tag>试算</Tag> : <Tag color="blue">正式</Tag> },
+          { title: '状态', render: (_, row) => statusLabel[row.status] ?? row.status },
+          { title: '折旧合计', dataIndex: 'totalDepreciationAmount' },
+          { title: '提示', render: (_, row) => (row.warningCodes ?? []).map((code) => <Tag key={code}>{skipReasonLabel[code] ?? code}</Tag>) },
           {
-            title: 'Actions',
+            title: '操作',
             render: (_, row) => (
               <Space>
-                <Button size="small" icon={<CheckOutlined />} disabled={row.dryRun || row.status !== 'calculated'} onClick={() => approveRun(row)}>Approve</Button>
-                <Button size="small" icon={<LockOutlined />} disabled={row.dryRun || row.status !== 'approved'} onClick={() => lockRun(row)}>Lock</Button>
+                <Button size="small" icon={<CheckOutlined />} disabled={row.dryRun || row.status !== 'calculated'} onClick={() => approveRun(row)}>审核</Button>
+                <Button size="small" icon={<LockOutlined />} disabled={row.dryRun || row.status !== 'approved'} onClick={() => lockRun(row)}>锁定</Button>
               </Space>
             ),
           },
@@ -152,12 +179,12 @@ export const DepreciationRuns: React.FC = () => {
         rowKey="id"
         dataSource={costPools}
         columns={[
-          { title: 'Run', dataIndex: 'sourceRunId' },
-          { title: 'Asset', dataIndex: 'assetNo' },
-          { title: 'Department', dataIndex: 'departmentId' },
-          { title: 'Cost type', dataIndex: 'costType' },
-          { title: 'Amount', dataIndex: 'amount' },
-          { title: 'Locked at', dataIndex: 'lockedAt' },
+          { title: '计提单', dataIndex: 'sourceRunId' },
+          { title: '资产', dataIndex: 'assetNo' },
+          { title: '部门', dataIndex: 'departmentId' },
+          { title: '成本类型', render: (_, row) => costTypeLabel[row.costType] ?? row.costType },
+          { title: '金额', dataIndex: 'amount' },
+          { title: '锁定时间', dataIndex: 'lockedAt' },
         ]}
       />
     </div>

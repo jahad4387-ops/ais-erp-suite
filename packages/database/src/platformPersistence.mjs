@@ -74,6 +74,25 @@ function partnerToDto(partner) {
   };
 }
 
+function inventoryItemToDto(item) {
+  return {
+    id: item.id,
+    accountSetId: item.accountSetId,
+    code: item.code,
+    name: item.name,
+    category: item.category ?? null,
+    itemType: item.itemType,
+    unit: item.unit,
+    costMethod: item.costMethod,
+    isBatchManaged: item.isBatchManaged,
+    isSerialManaged: item.isSerialManaged,
+    isManufactured: item.isManufactured,
+    shelfLifeDays: item.shelfLifeDays ?? null,
+    isEnabled: item.isEnabled,
+    createdBy: item.createdBy
+  };
+}
+
 function orderLineToDto(line) {
   return {
     id: line.id,
@@ -139,6 +158,193 @@ function evidenceRefsFromJson(value) {
   } catch {
     return [];
   }
+}
+
+function jsonFromString(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function backupJobToDto(job) {
+  return {
+    id: job.id,
+    accountSetId: job.accountSetId,
+    backupType: job.backupType,
+    status: job.status,
+    dryRun: job.dryRun,
+    businessMutation: job.businessMutation,
+    includeAttachments: job.includeAttachments,
+    retentionDays: job.retentionDays ?? null,
+    requestedBy: job.requestedBy,
+    createdAt: dateOnly(job.createdAt),
+    completedAt: dateOnly(job.completedAt),
+    snapshotRef: job.snapshotRef,
+    checksum: job.checksum,
+    manifest: jsonFromString(job.manifestJson, {}),
+    attachmentHashVerification: jsonFromString(job.attachmentHashVerificationJson, {})
+  };
+}
+
+function restoreJobToDto(job) {
+  return {
+    id: job.id,
+    accountSetId: job.accountSetId,
+    sourceBackupJobId: job.sourceBackupJobId,
+    status: job.status,
+    dryRun: job.dryRun,
+    restoreMode: job.restoreMode,
+    targetEnvironment: job.targetEnvironment,
+    restorePointLabel: job.restorePointLabel ?? null,
+    requestedBy: job.requestedBy,
+    createdAt: dateOnly(job.createdAt),
+    completedAt: dateOnly(job.completedAt),
+    businessMutation: job.businessMutation,
+    outboundBlocked: job.outboundBlocked,
+    blockedChannels: jsonFromString(job.blockedChannelsJson, []),
+    impactScope: jsonFromString(job.impactScopeJson, {}),
+    validation: jsonFromString(job.validationJson, {})
+  };
+}
+
+function migrationJobToDto(job) {
+  return {
+    id: job.id,
+    accountSetId: job.accountSetId,
+    jobType: job.jobType,
+    sourceType: job.sourceType,
+    targetObjectType: job.targetObjectType,
+    status: job.status,
+    dryRun: job.dryRun,
+    businessMutation: job.businessMutation,
+    requestedBy: job.requestedBy,
+    createdAt: dateOnly(job.createdAt),
+    completedAt: dateOnly(job.completedAt),
+    sourceSummary: jsonFromString(job.sourceSummaryJson, {}),
+    fieldMapping: jsonFromString(job.fieldMappingJson, {}),
+    sourceRows: jsonFromString(job.sourceRowsJson, []),
+    validation: jsonFromString(job.validationJson, {}),
+    errorReport: jsonFromString(job.errorReportJson, {}),
+    importSummary: jsonFromString(job.importSummaryJson, null)
+  };
+}
+
+function llmDraftRunToDto(run) {
+  const inputSummary = jsonFromString(run.inputSummaryJson, run.inputSummary ?? {});
+  return {
+    id: run.id,
+    accountSetId: run.accountSetId,
+    provider: run.provider,
+    model: run.model,
+    status: run.status,
+    inputSummary,
+    outputSchema: run.outputSchema,
+    errorMessage: run.errorMessage ?? null,
+    createdAt: dateOnly(run.createdAt)
+  };
+}
+
+function agentDraftCandidateToDto(candidate) {
+  return {
+    id: candidate.id,
+    accountSetId: candidate.accountSetId,
+    fiscalPeriodId: candidate.fiscalPeriodId ?? null,
+    draftType: candidate.draftType,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    userInstruction: candidate.userInstruction,
+    status: candidate.status,
+    dryRun: candidate.dryRun,
+    riskLevel: candidate.riskLevel,
+    requiresHumanConfirmation: candidate.requiresHumanConfirmation,
+    sourceContext: jsonFromString(candidate.sourceContextJson, {}),
+    matchedMasterData: jsonFromString(candidate.matchedMasterDataJson, []),
+    unmatchedItems: jsonFromString(candidate.unmatchedItemsJson, []),
+    draftPayload: jsonFromString(candidate.draftPayloadJson, {}),
+    ocrResults: jsonFromString(candidate.ocrResultsJson, []),
+    dryRunResult: jsonFromString(candidate.dryRunResultJson, {}),
+    warnings: jsonFromString(candidate.warningsJson, []),
+    confidence: candidate.confidence,
+    evidenceRefs: jsonFromString(candidate.evidenceRefsJson, []),
+    llmDraftRun: candidate.llmDraftRun ? llmDraftRunToDto(candidate.llmDraftRun) : null,
+    createdBy: candidate.createdBy,
+    createdAt: dateOnly(candidate.createdAt),
+    reviewedBy: candidate.reviewedBy ?? null,
+    reviewedAt: dateOnly(candidate.reviewedAt),
+    rejectedBy: candidate.rejectedBy ?? null,
+    rejectedAt: dateOnly(candidate.rejectedAt),
+    rejectionReason: candidate.rejectionReason ?? null,
+    convertedObjectType: candidate.convertedObjectType ?? null,
+    convertedObjectId: candidate.convertedObjectId ?? null,
+    resolvedUnmatchedItems: jsonFromString(candidate.resolvedUnmatchedItemsJson, [])
+  };
+}
+
+function agentApprovalToDto(approval) {
+  return {
+    id: approval.id,
+    agentActionId: approval.agentActionId,
+    approvedBy: approval.approvedBy,
+    approvedAt: dateOnly(approval.approvedAt),
+    approvalComment: approval.approvalComment ?? null
+  };
+}
+
+function agentActionToDto(action) {
+  const approvalHistory = (action.approvals ?? []).map(agentApprovalToDto).sort((left, right) => left.approvedAt.localeCompare(right.approvedAt) || left.id.localeCompare(right.id));
+  return {
+    id: action.id,
+    accountSetId: action.accountSetId,
+    toolName: action.toolName,
+    dryRun: action.dryRun,
+    riskLevel: action.riskLevel,
+    actionKind: action.actionKind,
+    status: action.status,
+    approvalRequired: action.approvalRequired,
+    approvalPolicy: jsonFromString(action.approvalPolicyJson, {}),
+    evidenceRefs: jsonFromString(action.evidenceRefsJson, []),
+    evidenceSnapshots: jsonFromString(action.evidenceSnapshotsJson, []),
+    payload: jsonFromString(action.payloadJson, {}),
+    requestedBy: action.requestedBy,
+    createdAt: dateOnly(action.createdAt),
+    dryRunResult: jsonFromString(action.dryRunResultJson, {}),
+    approvalRequest: jsonFromString(action.approvalRequestJson, null),
+    approvalHistory,
+    approvalProgress: jsonFromString(action.approvalProgressJson, {}),
+    executionResult: jsonFromString(action.executionResultJson, null),
+    reversalResult: jsonFromString(action.reversalResultJson, null)
+  };
+}
+
+function agentReplayEventToDto(event) {
+  return {
+    id: event.id,
+    agentActionId: event.agentActionId,
+    eventType: event.eventType,
+    actorId: event.actorId,
+    payload: jsonFromString(event.payloadJson, {}),
+    createdAt: dateOnly(event.createdAt)
+  };
+}
+
+function securityEventToDto(event) {
+  return {
+    id: event.id,
+    accountSetId: event.accountSetId ?? null,
+    eventType: event.eventType,
+    severity: event.severity,
+    actorId: event.actorId ?? null,
+    source: event.source,
+    objectType: event.objectType ?? null,
+    objectId: event.objectId ?? null,
+    message: event.message,
+    payload: jsonFromString(event.payloadJson, {}),
+    createdAt: dateOnly(event.createdAt)
+  };
 }
 
 function fulfillmentLineToDto(line, sourceLineKey) {
@@ -993,6 +1199,426 @@ export function createPlatformPersistence(prisma) {
       return Boolean(grant);
     },
 
+    async createMigrationJob(job) {
+      const created = await prisma.migrationJob.create({
+        data: {
+          id: job.id,
+          accountSetId: job.accountSetId,
+          jobType: job.jobType,
+          sourceType: job.sourceType,
+          targetObjectType: job.targetObjectType,
+          status: job.status,
+          dryRun: job.dryRun !== false,
+          businessMutation: job.businessMutation === true,
+          requestedBy: job.requestedBy,
+          createdAt: dateTime(job.createdAt),
+          completedAt: job.completedAt ? dateTime(job.completedAt) : null,
+          sourceSummaryJson: JSON.stringify(job.sourceSummary ?? {}),
+          fieldMappingJson: JSON.stringify(job.fieldMapping ?? {}),
+          sourceRowsJson: JSON.stringify(job.sourceRows ?? []),
+          validationJson: JSON.stringify(job.validation ?? {}),
+          errorReportJson: JSON.stringify(job.errorReport ?? {}),
+          importSummaryJson: job.importSummary ? JSON.stringify(job.importSummary) : null
+        }
+      });
+      return migrationJobToDto(created);
+    },
+
+    async updateMigrationJob(job) {
+      const updated = await prisma.migrationJob.update({
+        where: { id: job.id },
+        data: {
+          jobType: job.jobType,
+          sourceType: job.sourceType,
+          targetObjectType: job.targetObjectType,
+          status: job.status,
+          dryRun: job.dryRun !== false,
+          businessMutation: job.businessMutation === true,
+          requestedBy: job.requestedBy,
+          completedAt: job.completedAt ? dateTime(job.completedAt) : null,
+          sourceSummaryJson: JSON.stringify(job.sourceSummary ?? {}),
+          fieldMappingJson: JSON.stringify(job.fieldMapping ?? {}),
+          sourceRowsJson: JSON.stringify(job.sourceRows ?? []),
+          validationJson: JSON.stringify(job.validation ?? {}),
+          errorReportJson: JSON.stringify(job.errorReport ?? {}),
+          importSummaryJson: job.importSummary ? JSON.stringify(job.importSummary) : null
+        }
+      });
+      return migrationJobToDto(updated);
+    },
+
+    async findMigrationJob(id) {
+      const job = await prisma.migrationJob.findUnique({
+        where: { id }
+      });
+      return job ? migrationJobToDto(job) : null;
+    },
+
+    async listMigrationJobs(accountSetId, filters = {}) {
+      const jobs = await prisma.migrationJob.findMany({
+        where: {
+          ...(accountSetId ? { accountSetId } : {}),
+          ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.jobType ? { jobType: filters.jobType } : {})
+        },
+        orderBy: { createdAt: "desc" }
+      });
+      return jobs.map(migrationJobToDto);
+    },
+
+    async createBackupJob(job) {
+      const created = await prisma.backupJob.create({
+        data: {
+          id: job.id,
+          accountSetId: job.accountSetId,
+          backupType: job.backupType,
+          status: job.status,
+          dryRun: job.dryRun === true,
+          businessMutation: job.businessMutation === true,
+          includeAttachments: job.includeAttachments !== false,
+          retentionDays: job.retentionDays ?? null,
+          requestedBy: job.requestedBy,
+          createdAt: dateTime(job.createdAt),
+          completedAt: job.completedAt ? dateTime(job.completedAt) : null,
+          snapshotRef: job.snapshotRef,
+          checksum: job.checksum,
+          manifestJson: JSON.stringify(job.manifest ?? {}),
+          attachmentHashVerificationJson: JSON.stringify(job.attachmentHashVerification ?? {})
+        }
+      });
+      return backupJobToDto(created);
+    },
+
+    async listBackupJobs(accountSetId, filters = {}) {
+      const jobs = await prisma.backupJob.findMany({
+        where: {
+          ...(accountSetId ? { accountSetId } : {}),
+          ...(filters.status ? { status: filters.status } : {})
+        },
+        orderBy: { createdAt: "desc" }
+      });
+      return jobs.map(backupJobToDto);
+    },
+
+    async findBackupJob(identifier) {
+      const job = await prisma.backupJob.findFirst({
+        where: {
+          OR: [{ id: identifier }, { snapshotRef: identifier }]
+        }
+      });
+      return job ? backupJobToDto(job) : null;
+    },
+
+    async createRestoreJob(job) {
+      const created = await prisma.restoreJob.create({
+        data: {
+          id: job.id,
+          accountSetId: job.accountSetId,
+          sourceBackupJobId: job.sourceBackupJobId,
+          status: job.status,
+          dryRun: job.dryRun !== false,
+          restoreMode: job.restoreMode,
+          targetEnvironment: job.targetEnvironment,
+          restorePointLabel: job.restorePointLabel ?? null,
+          requestedBy: job.requestedBy,
+          createdAt: dateTime(job.createdAt),
+          completedAt: job.completedAt ? dateTime(job.completedAt) : null,
+          businessMutation: job.businessMutation === true,
+          outboundBlocked: job.outboundBlocked === true,
+          blockedChannelsJson: JSON.stringify(job.blockedChannels ?? []),
+          impactScopeJson: JSON.stringify(job.impactScope ?? {}),
+          validationJson: JSON.stringify(job.validation ?? {})
+        }
+      });
+      return restoreJobToDto(created);
+    },
+
+    async listRestoreJobs(accountSetId, filters = {}) {
+      const jobs = await prisma.restoreJob.findMany({
+        where: {
+          ...(accountSetId ? { accountSetId } : {}),
+          ...(filters.status ? { status: filters.status } : {})
+        },
+        orderBy: { createdAt: "desc" }
+      });
+      return jobs.map(restoreJobToDto);
+    },
+
+    async createLlmDraftRun(run) {
+      const inputSummary = run.inputSummary ?? {};
+      const created = await prisma.llmDraftRun.create({
+        data: {
+          id: run.id,
+          accountSetId: run.accountSetId,
+          provider: run.provider,
+          model: run.model,
+          status: run.status,
+          draftType: inputSummary.draftType ?? run.draftType ?? run.outputSchema,
+          sourceObjectType: inputSummary.sourceObjectType ?? run.sourceObjectType ?? null,
+          sourceObjectId: inputSummary.sourceObjectId ?? run.sourceObjectId ?? null,
+          inputSummaryJson: JSON.stringify(inputSummary),
+          outputSchema: run.outputSchema,
+          errorMessage: run.errorMessage ?? null,
+          createdAt: dateTime(run.createdAt)
+        }
+      });
+      return llmDraftRunToDto(created);
+    },
+
+    async listLlmDraftRuns(accountSetId, filters = {}) {
+      const runs = await prisma.llmDraftRun.findMany({
+        where: {
+          ...(accountSetId ? { accountSetId } : {}),
+          ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.draftType ? { draftType: filters.draftType } : {})
+        },
+        orderBy: { createdAt: "desc" }
+      });
+      return runs.map(llmDraftRunToDto);
+    },
+
+    async createAgentDraftCandidate(candidate) {
+      const created = await prisma.agentDraftCandidate.create({
+        data: {
+          id: candidate.id,
+          accountSetId: candidate.accountSetId,
+          fiscalPeriodId: candidate.fiscalPeriodId ?? null,
+          draftType: candidate.draftType,
+          sourceObjectType: candidate.sourceObjectType ?? null,
+          sourceObjectId: candidate.sourceObjectId ?? null,
+          userInstruction: candidate.userInstruction,
+          status: candidate.status,
+          dryRun: candidate.dryRun !== false,
+          riskLevel: candidate.riskLevel,
+          requiresHumanConfirmation: candidate.requiresHumanConfirmation !== false,
+          confidence: candidate.confidence ?? 0,
+          sourceContextJson: JSON.stringify(candidate.sourceContext ?? {}),
+          matchedMasterDataJson: JSON.stringify(candidate.matchedMasterData ?? []),
+          unmatchedItemsJson: JSON.stringify(candidate.unmatchedItems ?? []),
+          draftPayloadJson: JSON.stringify(candidate.draftPayload ?? {}),
+          ocrResultsJson: JSON.stringify(candidate.ocrResults ?? []),
+          dryRunResultJson: JSON.stringify(candidate.dryRunResult ?? {}),
+          warningsJson: JSON.stringify(candidate.warnings ?? []),
+          evidenceRefsJson: JSON.stringify(candidate.evidenceRefs ?? []),
+          llmDraftRunId: candidate.llmDraftRun?.id ?? candidate.llmDraftRunId ?? null,
+          createdBy: candidate.createdBy,
+          createdAt: dateTime(candidate.createdAt),
+          reviewedBy: candidate.reviewedBy ?? null,
+          reviewedAt: candidate.reviewedAt ? dateTime(candidate.reviewedAt) : null,
+          rejectedBy: candidate.rejectedBy ?? null,
+          rejectedAt: candidate.rejectedAt ? dateTime(candidate.rejectedAt) : null,
+          rejectionReason: candidate.rejectionReason ?? null,
+          convertedObjectType: candidate.convertedObjectType ?? null,
+          convertedObjectId: candidate.convertedObjectId ?? null,
+          resolvedUnmatchedItemsJson: JSON.stringify(candidate.resolvedUnmatchedItems ?? [])
+        },
+        include: { llmDraftRun: true }
+      });
+      return agentDraftCandidateToDto(created);
+    },
+
+    async updateAgentDraftCandidate(candidate) {
+      const updated = await prisma.agentDraftCandidate.update({
+        where: { id: candidate.id },
+        data: {
+          status: candidate.status,
+          confidence: candidate.confidence ?? 0,
+          sourceContextJson: JSON.stringify(candidate.sourceContext ?? {}),
+          matchedMasterDataJson: JSON.stringify(candidate.matchedMasterData ?? []),
+          unmatchedItemsJson: JSON.stringify(candidate.unmatchedItems ?? []),
+          draftPayloadJson: JSON.stringify(candidate.draftPayload ?? {}),
+          ocrResultsJson: JSON.stringify(candidate.ocrResults ?? []),
+          dryRunResultJson: JSON.stringify(candidate.dryRunResult ?? {}),
+          warningsJson: JSON.stringify(candidate.warnings ?? []),
+          evidenceRefsJson: JSON.stringify(candidate.evidenceRefs ?? []),
+          reviewedBy: candidate.reviewedBy ?? null,
+          reviewedAt: candidate.reviewedAt ? dateTime(candidate.reviewedAt) : null,
+          rejectedBy: candidate.rejectedBy ?? null,
+          rejectedAt: candidate.rejectedAt ? dateTime(candidate.rejectedAt) : null,
+          rejectionReason: candidate.rejectionReason ?? null,
+          convertedObjectType: candidate.convertedObjectType ?? null,
+          convertedObjectId: candidate.convertedObjectId ?? null,
+          resolvedUnmatchedItemsJson: JSON.stringify(candidate.resolvedUnmatchedItems ?? [])
+        },
+        include: { llmDraftRun: true }
+      });
+      return agentDraftCandidateToDto(updated);
+    },
+
+    async findAgentDraftCandidate(id) {
+      const candidate = await prisma.agentDraftCandidate.findUnique({
+        where: { id },
+        include: { llmDraftRun: true }
+      });
+      return candidate ? agentDraftCandidateToDto(candidate) : null;
+    },
+
+    async listAgentDraftCandidates(accountSetId, filters = {}) {
+      const candidates = await prisma.agentDraftCandidate.findMany({
+        where: {
+          ...(accountSetId ? { accountSetId } : {}),
+          ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.draftType ? { draftType: filters.draftType } : {})
+        },
+        include: { llmDraftRun: true },
+        orderBy: { createdAt: "desc" }
+      });
+      return candidates.map(agentDraftCandidateToDto);
+    },
+
+    async createAgentAction(action) {
+      await prisma.agentAction.create({
+        data: {
+          id: action.id,
+          accountSetId: action.accountSetId,
+          toolName: action.toolName,
+          dryRun: action.dryRun !== false,
+          riskLevel: action.riskLevel,
+          actionKind: action.actionKind,
+          status: action.status,
+          approvalRequired: action.approvalRequired === true,
+          approvalPolicyJson: JSON.stringify(action.approvalPolicy ?? {}),
+          evidenceRefsJson: JSON.stringify(action.evidenceRefs ?? []),
+          evidenceSnapshotsJson: JSON.stringify(action.evidenceSnapshots ?? []),
+          payloadJson: JSON.stringify(action.payload ?? {}),
+          requestedBy: action.requestedBy,
+          createdAt: dateTime(action.createdAt),
+          dryRunResultJson: JSON.stringify(action.dryRunResult ?? {}),
+          approvalRequestJson: action.approvalRequest ? JSON.stringify(action.approvalRequest) : null,
+          approvalProgressJson: JSON.stringify(action.approvalProgress ?? {}),
+          executionResultJson: action.executionResult ? JSON.stringify(action.executionResult) : null,
+          reversalResultJson: action.reversalResult ? JSON.stringify(action.reversalResult) : null
+        }
+      });
+      for (const approval of action.approvalHistory ?? []) {
+        await prisma.agentApproval.create({
+          data: {
+            id: approval.id,
+            agentActionId: action.id,
+            approvedBy: approval.approvedBy,
+            approvedAt: dateTime(approval.approvedAt),
+            approvalComment: approval.approvalComment ?? null
+          }
+        });
+      }
+      return this.findAgentAction(action.id);
+    },
+
+    async updateAgentAction(action) {
+      await prisma.agentAction.update({
+        where: { id: action.id },
+        data: {
+          toolName: action.toolName,
+          dryRun: action.dryRun !== false,
+          riskLevel: action.riskLevel,
+          actionKind: action.actionKind,
+          status: action.status,
+          approvalRequired: action.approvalRequired === true,
+          approvalPolicyJson: JSON.stringify(action.approvalPolicy ?? {}),
+          evidenceRefsJson: JSON.stringify(action.evidenceRefs ?? []),
+          evidenceSnapshotsJson: JSON.stringify(action.evidenceSnapshots ?? []),
+          payloadJson: JSON.stringify(action.payload ?? {}),
+          dryRunResultJson: JSON.stringify(action.dryRunResult ?? {}),
+          approvalRequestJson: action.approvalRequest ? JSON.stringify(action.approvalRequest) : null,
+          approvalProgressJson: JSON.stringify(action.approvalProgress ?? {}),
+          executionResultJson: action.executionResult ? JSON.stringify(action.executionResult) : null,
+          reversalResultJson: action.reversalResult ? JSON.stringify(action.reversalResult) : null
+        }
+      });
+      await prisma.agentApproval.deleteMany({ where: { agentActionId: action.id } });
+      for (const approval of action.approvalHistory ?? []) {
+        await prisma.agentApproval.create({
+          data: {
+            id: approval.id,
+            agentActionId: action.id,
+            approvedBy: approval.approvedBy,
+            approvedAt: dateTime(approval.approvedAt),
+            approvalComment: approval.approvalComment ?? null
+          }
+        });
+      }
+      return this.findAgentAction(action.id);
+    },
+
+    async findAgentAction(id) {
+      const action = await prisma.agentAction.findUnique({
+        where: { id },
+        include: { approvals: true }
+      });
+      return action ? agentActionToDto(action) : null;
+    },
+
+    async listAgentActions(accountSetId, filters = {}) {
+      const actions = await prisma.agentAction.findMany({
+        where: {
+          ...(accountSetId ? { accountSetId } : {}),
+          ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.riskLevel ? { riskLevel: filters.riskLevel } : {}),
+          ...(filters.toolName ? { toolName: filters.toolName } : {})
+        },
+        include: { approvals: true },
+        orderBy: { createdAt: "desc" }
+      });
+      return actions.map(agentActionToDto);
+    },
+
+    async replaceAgentReplayEvents(agentActionId, events) {
+      await prisma.agentReplayEvent.deleteMany({ where: { agentActionId } });
+      for (const event of events) {
+        await prisma.agentReplayEvent.create({
+          data: {
+            id: event.id,
+            agentActionId,
+            eventType: event.eventType,
+            actorId: event.actorId,
+            payloadJson: JSON.stringify(event.payload ?? {}),
+            createdAt: dateTime(event.createdAt)
+          }
+        });
+      }
+      return this.listAgentReplayEvents(agentActionId);
+    },
+
+    async listAgentReplayEvents(agentActionId) {
+      const events = await prisma.agentReplayEvent.findMany({
+        where: { agentActionId },
+        orderBy: { createdAt: "asc" }
+      });
+      return events.map(agentReplayEventToDto);
+    },
+
+    async createSecurityEvent(event) {
+      const created = await prisma.securityEvent.create({
+        data: {
+          id: event.id,
+          accountSetId: event.accountSetId ?? null,
+          eventType: event.eventType,
+          severity: event.severity,
+          actorId: event.actorId ?? null,
+          source: event.source,
+          objectType: event.objectType ?? null,
+          objectId: event.objectId ?? null,
+          message: event.message,
+          payloadJson: JSON.stringify(event.payload ?? {}),
+          createdAt: dateTime(event.createdAt)
+        }
+      });
+      return securityEventToDto(created);
+    },
+
+    async listSecurityEvents(accountSetId, filters = {}) {
+      const events = await prisma.securityEvent.findMany({
+        where: {
+          ...(accountSetId ? { accountSetId } : {}),
+          ...(filters.eventType ? { eventType: filters.eventType } : {}),
+          ...(filters.severity ? { severity: filters.severity } : {}),
+          ...(filters.actorId ? { actorId: filters.actorId } : {})
+        },
+        orderBy: { createdAt: "desc" }
+      });
+      return events.map(securityEventToDto);
+    },
+
     async createPartner(partner) {
       const created = await prisma.partner.create({
         data: {
@@ -1044,6 +1670,44 @@ export function createPlatformPersistence(prisma) {
         }
       });
       return partnerToDto(saved);
+    },
+
+    async createInventoryItem(item) {
+      const created = await prisma.inventoryItem.create({
+        data: {
+          id: item.id,
+          accountSetId: item.accountSetId,
+          code: item.code,
+          name: item.name,
+          category: item.category ?? null,
+          itemType: item.itemType ?? "raw_material",
+          unit: item.unit,
+          costMethod: item.costMethod,
+          isBatchManaged: item.isBatchManaged ?? false,
+          isSerialManaged: item.isSerialManaged ?? false,
+          isManufactured: item.isManufactured ?? false,
+          shelfLifeDays: item.shelfLifeDays ?? null,
+          isEnabled: item.isEnabled ?? true,
+          createdBy: item.createdBy ?? "system"
+        }
+      });
+      return inventoryItemToDto(created);
+    },
+
+    async listInventoryItems(accountSetId) {
+      const items = await prisma.inventoryItem.findMany({
+        where: accountSetId ? { accountSetId } : undefined
+      });
+      return items.map(inventoryItemToDto).sort((left, right) => left.code.localeCompare(right.code));
+    },
+
+    async findInventoryItem(identifier) {
+      const item = await prisma.inventoryItem.findFirst({
+        where: {
+          OR: [{ id: identifier }, { code: identifier }]
+        }
+      });
+      return item ? inventoryItemToDto(item) : null;
     },
 
     async createPurchaseOrder(order) {

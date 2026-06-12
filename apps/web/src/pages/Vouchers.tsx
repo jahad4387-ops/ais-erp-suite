@@ -7,6 +7,7 @@ import { api } from '../api';
 import { useAppContext } from '../context/AppContext';
 import { displayActorName, displayVoucherNo } from '../display';
 import { zhAction, zhActor, zhStatus } from '../i18n';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 
 const VoucherAttachments: React.FC<{ voucherId: string; voucherStatus: string; currentUser: string }> = ({
   voucherId,
@@ -438,6 +439,15 @@ export const Vouchers: React.FC = () => {
 
         return (
           <Space size="middle">
+            <AgentDraftEntryButton
+              size="small"
+              draftType="voucher"
+              sourceObjectType="voucher"
+              sourceObjectId={record.id}
+              userInstruction={`Generate voucher draft from ${record.voucherNo ?? record.id}.`}
+            >
+              Agent
+            </AgentDraftEntryButton>
             {items.length > 0 ? (
               <Dropdown
                 menu={{ items, onClick: (e) => handleVoucherAction(record.id, e.key) }}
@@ -474,6 +484,13 @@ export const Vouchers: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>凭证管理</h2>
         <Space>
+          <AgentDraftEntryButton
+            draftType="voucher"
+            sourceObjectType="voucher_page"
+            userInstruction="根据发票、流水、合同或上传附件生成记账凭证候选草稿"
+          >
+            Agent 凭证草稿
+          </AgentDraftEntryButton>
           <Button>
             <Link to="/vouchers/new">录入凭证</Link>
           </Button>

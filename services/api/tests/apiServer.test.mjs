@@ -15,6 +15,14 @@ async function request(api, method, path, body, idempotencyKey = "test-key-0001"
   });
 }
 
+function resolveAgentUnmatchedItems(candidate, resolvedValue = "reviewed_in_draft_payload") {
+  return (candidate.body?.unmatchedItems ?? candidate.unmatchedItems ?? []).map((item) => ({
+    field: item.field,
+    resolution: "selected_by_reviewer",
+    resolvedValue
+  }));
+}
+
 test("write endpoints reject missing idempotency key", async () => {
   const api = createApi();
 
@@ -36,6 +44,264 @@ test("write endpoints reject missing idempotency key", async () => {
 
   assert.equal(response.status, 400);
   assert.equal(response.body.code, "IDEMPOTENCY_KEY_REQUIRED");
+});
+
+test("write idempotency keys are bound to the target account set", async () => {
+  const api = createApi();
+  const firstAccountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "IDEMP-A",
+      name: "Idempotency Account A",
+      companyName: "Idempotency A Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "idempotency-scope-account-a"
+  );
+  const secondAccountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "IDEMP-B",
+      name: "Idempotency Account B",
+      companyName: "Idempotency B Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "idempotency-scope-account-b"
+  );
+
+  const firstAction = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: firstAccountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: [],
+      payload: { fiscalYear: 2026, periodNo: 1 },
+      requestedBy: "agent-user"
+    },
+    "same-agent-idempotency-key"
+  );
+  const secondAction = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: secondAccountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: [],
+      payload: { fiscalYear: 2026, periodNo: 1 },
+      requestedBy: "agent-user"
+    },
+    "same-agent-idempotency-key"
+  );
+
+  assert.equal(firstAction.status, 201);
+  assert.equal(secondAction.status, 409);
+  assert.equal(secondAction.body.code, "IDEMPOTENCY_SCOPE_MISMATCH");
+  assert.equal(api.state.agentActions.size, 1);
+});
+
+test("Phase 6 security events persist permission and idempotency anomalies through platform store restarts", async () => {
+  const accountSets = new Map();
+  const securityEvents = new Map();
+  const byCreatedDesc = (left, right) => String(right.createdAt).localeCompare(String(left.createdAt));
+  const platformStore = {
+    createAccountSet: async (accountSet) => {
+      accountSets.set(accountSet.id, structuredClone(accountSet));
+      return structuredClone(accountSet);
+    },
+    findAccountSet: async (identifier) =>
+      structuredClone([...accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier) ?? null),
+    listAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    listAccessibleAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    canAccessAccountSet: async (_actorId, accountSetId) => accountSets.has(accountSetId),
+    createSecurityEvent: async (event) => {
+      securityEvents.set(event.id, structuredClone(event));
+      return structuredClone(securityEvents.get(event.id));
+    },
+    listSecurityEvents: async (accountSetId = null, filters = {}) =>
+      [...securityEvents.values()]
+        .filter((event) => !accountSetId || event.accountSetId === accountSetId)
+        .filter((event) => !filters.eventType || event.eventType === filters.eventType)
+        .filter((event) => !filters.severity || event.severity === filters.severity)
+        .filter((event) => !filters.actorId || event.actorId === filters.actorId)
+        .sort(byCreatedDesc)
+        .map((event) => structuredClone(event))
+  };
+  const firstApi = createApi({ platformStore });
+  const firstAccountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6SEC1",
+      name: "Phase 6 Security One",
+      companyName: "Phase 6 Security One Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-security-account-one"
+  );
+  const secondAccountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6SEC2",
+      name: "Phase 6 Security Two",
+      companyName: "Phase 6 Security Two Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-security-account-two"
+  );
+  const denied = await firstApi.handle({
+    method: "POST",
+    path: "/agent-actions",
+    headers: {
+      "Actor-Id": "viewer",
+      "Idempotency-Key": "phase6-security-denied-agent-action"
+    },
+    body: {
+      accountSetId: firstAccountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: [],
+      payload: { fiscalYear: 2026, periodNo: 1 },
+      requestedBy: "viewer"
+    }
+  });
+  const firstAction = await request(
+    firstApi,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: firstAccountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: [],
+      payload: { fiscalYear: 2026, periodNo: 1 },
+      requestedBy: "security-agent"
+    },
+    "phase6-security-shared-idempotency"
+  );
+  const scopeMismatch = await request(
+    firstApi,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: secondAccountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: [],
+      payload: { fiscalYear: 2026, periodNo: 1 },
+      requestedBy: "security-agent"
+    },
+    "phase6-security-shared-idempotency"
+  );
+  const restartedApi = createApi({ platformStore });
+  const deniedEvents = await request(
+    restartedApi,
+    "GET",
+    `/security/events?accountSetId=${encodeURIComponent(firstAccountSet.body.id)}&eventType=permission_denied&actorId=viewer`
+  );
+  const mismatchEvents = await request(
+    restartedApi,
+    "GET",
+    `/security/events?eventType=idempotency_scope_mismatch&severity=medium`
+  );
+
+  assert.equal(denied.status, 403);
+  assert.equal(denied.body.code, "PERMISSION_DENIED");
+  assert.equal(firstAction.status, 201);
+  assert.equal(scopeMismatch.status, 409);
+  assert.equal(scopeMismatch.body.code, "IDEMPOTENCY_SCOPE_MISMATCH");
+  assert.equal(deniedEvents.status, 200);
+  assert.equal(deniedEvents.body.total, 1);
+  assert.equal(deniedEvents.body.items[0].objectId, "agent_action.create");
+  assert.equal(deniedEvents.body.items[0].payload.path, "/agent-actions");
+  assert.equal(mismatchEvents.status, 200);
+  assert.equal(mismatchEvents.body.total, 1);
+  assert.equal(mismatchEvents.body.items[0].payload.cachedScope, firstAccountSet.body.id);
+  assert.equal(mismatchEvents.body.items[0].payload.requestedScope, secondAccountSet.body.id);
+});
+
+test("write idempotency keys expire after their configured TTL", async () => {
+  let now = Date.parse("2026-06-01T00:00:00.000Z");
+  const ttlMs = 7 * 24 * 60 * 60 * 1000;
+  const api = createApi({
+    idempotencyTtlMs: ttlMs,
+    now: () => now
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "IDEMP-TTL",
+      name: "Idempotency TTL Account",
+      companyName: "Idempotency TTL Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "idempotency-ttl-account"
+  );
+
+  const firstAction = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: accountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: [],
+      payload: { fiscalYear: 2026, periodNo: 1 },
+      requestedBy: "agent-user"
+    },
+    "same-agent-idempotency-key-after-ttl"
+  );
+
+  now += ttlMs + 1;
+  const secondAction = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: accountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: [],
+      payload: { fiscalYear: 2026, periodNo: 2 },
+      requestedBy: "agent-user"
+    },
+    "same-agent-idempotency-key-after-ttl"
+  );
+
+  assert.equal(firstAction.status, 201);
+  assert.equal(secondAction.status, 201);
+  assert.notEqual(secondAction.body.id, firstAction.body.id);
+  assert.equal(api.state.agentActions.size, 2);
+  assert.equal(api.state.idempotency.get("same-agent-idempotency-key-after-ttl").expiresAt, now + ttlMs);
 });
 
 test("login returns a bearer token that identifies the current user", async () => {
@@ -1030,6 +1296,21 @@ test("Phase 2 partners create, filter, update, and enforce account-set isolation
       settlementMethod: "bank_acceptance"
     }
   });
+  const customerWithSupplierCode = await api.handle({
+    method: "POST",
+    path: "/partners",
+    headers: { "Actor-Id": alice.body.id, "Idempotency-Key": "phase2-customer-same-code-create" },
+    body: {
+      accountSetId: accountSet.body.id,
+      partnerType: "customer",
+      code: "S001",
+      name: "Customer Using Supplier Code",
+      taxRate: 0.13,
+      creditLimit: 30000,
+      paymentTerms: "NET15",
+      settlementMethod: "bank_transfer"
+    }
+  });
   const suppliers = await api.handle({
     method: "GET",
     path: `/partners?accountSetId=${accountSet.body.id}&partnerType=supplier`,
@@ -1057,6 +1338,8 @@ test("Phase 2 partners create, filter, update, and enforce account-set isolation
   assert.equal(supplier.body.partnerType, "supplier");
   assert.equal(supplier.body.paymentTerms, "NET30");
   assert.equal(both.status, 201);
+  assert.equal(customerWithSupplierCode.status, 201);
+  assert.equal(customerWithSupplierCode.body.partnerType, "customer");
   assert.equal(suppliers.status, 200);
   assert.deepEqual(
     suppliers.body.map((partner) => partner.code).sort(),
@@ -4304,6 +4587,59 @@ test("API can persist chart of accounts through platform store", async () => {
   assert.equal(storedAccount.accountSetId, "account-set:persisted-accounts");
   assert.equal(storedAccount.code, "1002");
   assert.deepEqual(listed.body.map((account) => account.code), ["1002"]);
+});
+
+test("persisted chart accounts can configure auxiliary requirements by code", async () => {
+  const persistedAccount = {
+    id: "account:persisted-bank",
+    accountSetId: "account-set:persisted",
+    code: "1002",
+    name: "银行存款",
+    accountType: "asset",
+    normalBalance: "debit",
+    isLeaf: true,
+    allowManualEntry: true,
+    requiredAuxiliaries: []
+  };
+  const savedRequirements = [];
+  const platformStore = {
+    findAccount: async (identifier) => (identifier === persistedAccount.code || identifier === persistedAccount.id ? persistedAccount : null),
+    saveAccountAuxiliaryRequirement: async (requirement) => {
+      savedRequirements.push(requirement);
+      return requirement;
+    },
+    listAccountAuxiliaryRequirements: async (accountId) =>
+      savedRequirements.filter((requirement) => requirement.accountId === accountId)
+  };
+  const api = createApi({ platformStore });
+  api.state.auxiliaryTypes.set("auxiliary-type:department", {
+    id: "auxiliary-type:department",
+    accountSetId: "account-set:persisted",
+    code: "department",
+    name: "部门",
+    category: "department",
+    isEnabled: true
+  });
+
+  const saved = await request(
+    api,
+    "POST",
+    "/accounts/1002/auxiliary-requirements",
+    {
+      auxiliaryTypeId: "auxiliary-type:department",
+      required: true,
+      configuredBy: "system"
+    },
+    "persisted-account-auxiliary-requirement"
+  );
+  const listed = await request(api, "GET", "/accounts/1002/auxiliary-requirements", null, null);
+
+  assert.equal(saved.status, 201);
+  assert.equal(saved.body.accountCode, "1002");
+  assert.equal(saved.body.accountId, "account:persisted-bank");
+  assert.deepEqual(api.state.accounts.get("1002").requiredAuxiliaries, ["department"]);
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.length, 1);
 });
 
 test("API can persist auxiliary accounting master data through platform store", async () => {
@@ -7748,6 +8084,4945 @@ test("Phase 2 Agent dry-run suggests reconciliation, collection drafts, and exce
   assert.ok(exceptionCheck.body.findings.some((finding) => finding.code === "PAYMENT_BLOCKED"));
   assert.equal(api.state.arSettlements.size, 0);
   assert.equal(api.state.apSettlements.size, 0);
+});
+
+test("Phase 6 Agent draft candidate generation keeps LLM output in dry-run review state", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6DRAFT",
+      name: "Phase 6 Draft Candidates",
+      companyName: "Phase 6 Draft Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-draft-account-set"
+  );
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalPeriodId: "period:p6draft:2026:6",
+      draftType: "purchase_order",
+      sourceObjectType: "free_text",
+      userInstruction: "根据报价单给华东供应商生成采购订单草稿，A材料 100 件，单价 20 元",
+      evidenceRefs: ["quote:hd-001"],
+      dryRun: true
+    },
+    "phase6-draft-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(candidate.body.draftType, "purchase_order");
+  assert.equal(candidate.body.status, "candidate");
+  assert.equal(candidate.body.dryRun, true);
+  assert.equal(candidate.body.requiresHumanConfirmation, true);
+  assert.equal(candidate.body.llmDraftRun.provider, "local-rule-based");
+  assert.equal(candidate.body.draftPayload.documentType, "purchase_order");
+  assert.equal(candidate.body.draftPayload.lines[0].quantity, 100);
+  assert.equal(candidate.body.draftPayload.lines[0].unitPrice, 20);
+  assert.deepEqual(candidate.body.evidenceRefs, ["quote:hd-001"]);
+  assert.ok(candidate.body.unmatchedItems.some((item) => item.field === "supplierId"));
+  assert.equal(candidate.body.dryRunResult.status, "review_required");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).id, candidate.body.id);
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "agent.draft_candidate.create" && log.objectType === "agent_draft_candidate" && log.objectId === candidate.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent draft candidates extract uploaded files with local OCR before LLM draft generation", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6OCR",
+      name: "Phase 6 OCR Draft",
+      companyName: "Phase 6 OCR Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-ocr-account-set"
+  );
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "quote.txt",
+      contentType: "text/plain",
+      byteSize: Buffer.byteLength("华东供应商 A材料 300 件 单价 9 元"),
+      contentBase64: Buffer.from("华东供应商 A材料 300 件 单价 9 元").toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-ocr-upload"
+  );
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalPeriodId: "period:p6ocr:2026:6",
+      draftType: "purchase_order",
+      sourceObjectType: "uploaded_quote",
+      userInstruction: "根据上传的报价单生成采购订单草稿",
+      attachmentIds: [attachment.body.id],
+      evidenceRefs: ["quote:manual-context"],
+      dryRun: true
+    },
+    "phase6-ocr-draft-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(candidate.body.ocrResults[0].attachmentId, attachment.body.id);
+  assert.equal(candidate.body.ocrResults[0].provider, "local-ocr-placeholder");
+  assert.match(candidate.body.ocrResults[0].extractedText, /A材料 300 件 单价 9/);
+  assert.match(candidate.body.llmDraftRun.inputSummary.ocrText, /A材料 300 件 单价 9/);
+  assert.equal(candidate.body.draftPayload.lines[0].quantity, 300);
+  assert.equal(candidate.body.draftPayload.lines[0].unitPrice, 9);
+  assert.deepEqual(candidate.body.evidenceRefs, ["quote:manual-context", attachment.body.id]);
+});
+
+test("Phase 6 Agent draft generation uses configured OCR and LLM adapters", async () => {
+  const calls = { ocr: [], llm: [] };
+  const api = createApi({
+    ocrAdapter: {
+      provider: "local-paddle-ocr",
+      model: "ppocr-v4",
+      async extractText({ attachment, content }) {
+        calls.ocr.push({ filename: attachment.filename, byteSize: content.length });
+        return {
+          provider: "local-paddle-ocr",
+          model: "ppocr-v4",
+          status: "completed",
+          extractedText: "OCR adapter: B material 7 units price 11",
+          confidence: 0.93
+        };
+      }
+    },
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "erp-draft-model",
+      async generateDraft(input) {
+        calls.llm.push(input);
+        return {
+          provider: "openai-compatible",
+          model: "erp-draft-model",
+          status: "completed",
+          draftPayload: {
+            documentType: "purchase_order",
+            businessDate: "2026-06-01",
+            counterpartyId: null,
+            lines: [{ itemId: null, itemName: "B material", quantity: 7, unitPrice: 11, amount: 77 }]
+          },
+          unmatchedItems: [{ field: "supplierId", reason: "Supplier must be selected before saving." }],
+          outputSchema: "purchase_order"
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6ADAPT",
+      name: "Phase 6 Adapter Draft",
+      companyName: "Phase 6 Adapter Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-adapter-account-set"
+  );
+  const imageContent = Buffer.from("pretend image bytes");
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "quote.png",
+      contentType: "image/png",
+      byteSize: imageContent.length,
+      contentBase64: imageContent.toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-adapter-upload"
+  );
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "purchase_order",
+      sourceObjectType: "uploaded_quote",
+      userInstruction: "Generate a purchase order draft from the uploaded quote.",
+      attachmentIds: [attachment.body.id],
+      evidenceRefs: ["quote:adapter"],
+      dryRun: true
+    },
+    "phase6-adapter-draft-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(calls.ocr.length, 1);
+  assert.deepEqual(calls.ocr[0], { filename: "quote.png", byteSize: imageContent.length });
+  assert.equal(calls.llm.length, 1);
+  assert.equal(calls.llm[0].draftType, "purchase_order");
+  assert.match(calls.llm[0].ocrText, /B material 7 units price 11/);
+  assert.deepEqual(calls.llm[0].evidenceRefs, ["quote:adapter", attachment.body.id]);
+  assert.equal(candidate.body.ocrResults[0].provider, "local-paddle-ocr");
+  assert.equal(candidate.body.ocrResults[0].model, "ppocr-v4");
+  assert.equal(candidate.body.llmDraftRun.provider, "openai-compatible");
+  assert.equal(candidate.body.llmDraftRun.model, "erp-draft-model");
+  assert.equal(candidate.body.draftPayload.lines[0].quantity, 7);
+  assert.equal(candidate.body.draftPayload.lines[0].unitPrice, 11);
+});
+
+test("Phase 6 Agent OCR preview supports human-corrected text before LLM draft generation", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6OCRREV",
+      name: "Phase 6 OCR Review",
+      companyName: "Phase 6 OCR Review Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-ocr-review-account-set"
+  );
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "warehouse-note.txt",
+      contentType: "text/plain",
+      byteSize: Buffer.byteLength("raw OCR says 5 units price 6"),
+      contentBase64: Buffer.from("raw OCR says 5 units price 6").toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-ocr-review-upload"
+  );
+
+  const preview = await request(
+    api,
+    "POST",
+    "/ai/ocr-preview",
+    {
+      accountSetId: accountSet.body.id,
+      attachmentIds: [attachment.body.id],
+      requestedBy: "system",
+      dryRun: true
+    },
+    "phase6-ocr-preview"
+  );
+
+  assert.equal(preview.status, 201);
+  assert.equal(preview.body.accountSetId, accountSet.body.id);
+  assert.equal(preview.body.results[0].attachmentId, attachment.body.id);
+  assert.match(preview.body.results[0].extractedText, /5 units price 6/);
+  assert.equal(api.state.agentDraftCandidates.size, 0);
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "inventory_movement",
+      sourceObjectType: "ocr_preview",
+      userInstruction: "Create warehouse inbound draft from reviewed OCR.",
+      attachmentIds: [attachment.body.id],
+      reviewedOcrResults: [
+        {
+          attachmentId: attachment.body.id,
+          extractedText: "reviewed OCR says 12 units price 34",
+          reviewedBy: "warehouse-user"
+        }
+      ],
+      dryRun: true
+    },
+    "phase6-ocr-reviewed-draft-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(candidate.body.ocrResults[0].extractedText, "reviewed OCR says 12 units price 34");
+  assert.match(candidate.body.ocrResults[0].originalExtractedText, /5 units price 6/);
+  assert.equal(candidate.body.ocrResults[0].reviewedBy, "warehouse-user");
+  assert.match(candidate.body.llmDraftRun.inputSummary.ocrText, /12 units price 34/);
+  assert.doesNotMatch(candidate.body.llmDraftRun.inputSummary.ocrText, /5 units price 6/);
+  assert.equal(candidate.body.draftPayload.lines[0].quantity, 12);
+  assert.equal(candidate.body.draftPayload.lines[0].unitCost, 34);
+});
+
+test("Phase 6 LLM draft run endpoint exposes the provider-neutral adapter without saving business drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6LLM",
+      name: "Phase 6 LLM Draft Run",
+      companyName: "Phase 6 LLM Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-llm-account-set"
+  );
+
+  const run = await request(
+    api,
+    "POST",
+    "/ai/llm-draft-runs",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "voucher",
+      userInstruction: "根据银行回单生成 500 元办公费凭证草稿",
+      evidenceRefs: ["bank-receipt:001"],
+      dryRun: true
+    },
+    "phase6-llm-draft-run"
+  );
+
+  assert.equal(run.status, 201);
+  assert.equal(run.body.provider, "local-rule-based");
+  assert.equal(run.body.status, "completed");
+  assert.equal(run.body.inputSummary.draftType, "voucher");
+  assert.deepEqual(run.body.inputSummary.evidenceRefs, ["bank-receipt:001"]);
+  assert.equal(api.state.llmDraftRuns.get(run.body.id).id, run.body.id);
+  assert.equal(api.state.agentDraftCandidates.size, 0);
+});
+
+test("Phase 6 LLM draft runs can be listed by account set for Agent observability", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6LLMLIST",
+      name: "Phase 6 LLM Run List",
+      companyName: "Phase 6 LLM List Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-llm-list-account-set"
+  );
+  const otherAccountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6LLMOTHER",
+      name: "Phase 6 LLM Other",
+      companyName: "Phase 6 LLM Other Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-llm-other-account-set"
+  );
+
+  const purchaseRun = await request(
+    api,
+    "POST",
+    "/ai/llm-draft-runs",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "purchase_order",
+      userInstruction: "Generate purchase order draft for 2 units at 9 each.",
+      evidenceRefs: ["quote:001"],
+      dryRun: true
+    },
+    "phase6-llm-list-run-purchase"
+  );
+  await request(
+    api,
+    "POST",
+    "/ai/llm-draft-runs",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "voucher",
+      userInstruction: "Generate a 500 CNY expense voucher draft.",
+      evidenceRefs: ["receipt:001"],
+      dryRun: true
+    },
+    "phase6-llm-list-run-voucher"
+  );
+  await request(
+    api,
+    "POST",
+    "/ai/llm-draft-runs",
+    {
+      accountSetId: otherAccountSet.body.id,
+      draftType: "voucher",
+      userInstruction: "Other tenant voucher.",
+      dryRun: true
+    },
+    "phase6-llm-list-run-other"
+  );
+
+  const list = await request(api, "GET", `/ai/llm-draft-runs?accountSetId=${encodeURIComponent(accountSet.body.id)}`);
+
+  assert.equal(list.status, 200);
+  assert.equal(list.body.accountSetId, accountSet.body.id);
+  assert.equal(list.body.total, 2);
+  assert.deepEqual(
+    list.body.items.map((run) => run.accountSetId),
+    [accountSet.body.id, accountSet.body.id]
+  );
+  assert.match(list.body.items[0].id, /^llm-draft-run:/);
+  assert.equal(list.body.items[0].status, "completed");
+  assert.equal(list.body.items[0].errorMessage, null);
+  assert.ok(list.body.items.some((run) => run.id === purchaseRun.body.id));
+
+  const purchaseList = await request(
+    api,
+    "GET",
+    `/ai/llm-draft-runs?accountSetId=${encodeURIComponent(accountSet.body.id)}&draftType=purchase_order&status=completed`
+  );
+
+  assert.equal(purchaseList.status, 200);
+  assert.equal(purchaseList.body.total, 1);
+  assert.equal(purchaseList.body.items[0].id, purchaseRun.body.id);
+  assert.equal(purchaseList.body.items[0].draftType, "purchase_order");
+});
+
+test("Phase 6 LLM draft metrics summarize schema success and human review outcomes", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6MET",
+      name: "Phase 6 LLM Metrics",
+      companyName: "Phase 6 Metrics Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-llm-metrics-account-set"
+  );
+  const item = await request(
+    api,
+    "POST",
+    "/inventory-items",
+    {
+      accountSetId: accountSet.body.id,
+      code: "P6-MET-ITEM",
+      name: "Phase 6 Metrics Item",
+      unit: "pcs",
+      costMethod: "moving_average",
+      createdBy: "warehouse-reviewer"
+    },
+    "phase6-llm-metrics-item"
+  );
+  const warehouse = await request(
+    api,
+    "POST",
+    "/warehouses",
+    {
+      accountSetId: accountSet.body.id,
+      code: "P6-MET-WH",
+      name: "Phase 6 Metrics Warehouse",
+      locations: [{ code: "A-01", name: "A Bin" }],
+      createdBy: "warehouse-reviewer"
+    },
+    "phase6-llm-metrics-warehouse"
+  );
+  const convertedCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "inventory_movement",
+      userInstruction: "Generate a warehouse receipt draft",
+      evidenceRefs: ["warehouse:metrics-converted"],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-llm-metrics-converted-candidate"
+  );
+  const rejectedCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "inventory_movement",
+      userInstruction: "Generate a warehouse receipt draft that will be rejected",
+      evidenceRefs: ["warehouse:metrics-rejected"],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-llm-metrics-rejected-candidate"
+  );
+  const pendingCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "inventory_movement",
+      userInstruction: "Generate a warehouse receipt draft still pending review",
+      evidenceRefs: ["warehouse:metrics-pending"],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-llm-metrics-pending-candidate"
+  );
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(convertedCandidate.body.id)}/convert`,
+    {
+      reviewedBy: "warehouse-reviewer",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(convertedCandidate, {
+        itemId: item.body.id,
+        warehouseId: warehouse.body.id
+      }),
+      reviewedDraftPayload: {
+        documentType: "inventory_movement",
+        movementType: "inbound",
+        businessType: "other_inbound",
+        fiscalYear: 2026,
+        periodNo: 1,
+        lines: [{ itemId: item.body.id, warehouseId: warehouse.body.id, locationId: warehouse.body.locations[0].id, quantity: 1, unitCost: 10 }]
+      }
+    },
+    "phase6-llm-metrics-convert"
+  );
+  const rejected = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(rejectedCandidate.body.id)}/reject`,
+    {
+      rejectedBy: "warehouse-reviewer",
+      rejectionReason: "Model output did not match warehouse evidence."
+    },
+    "phase6-llm-metrics-reject"
+  );
+
+  const originalAdapter = api.state.config.llmDraftAdapter;
+  api.state.config.llmDraftAdapter = {
+    provider: "openai-compatible",
+    model: "metrics-model",
+    async generateDraft() {
+      throw new Error("LLM draft output schema validation failed: draftPayload.lines is required.");
+    }
+  };
+  const failedRun = await request(
+    api,
+    "POST",
+    "/ai/llm-draft-runs",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "inventory_movement",
+      userInstruction: "Generate an invalid metrics draft",
+      evidenceRefs: ["warehouse:metrics-failed"],
+      dryRun: true
+    },
+    "phase6-llm-metrics-failed-run"
+  );
+  api.state.config.llmDraftAdapter = originalAdapter;
+
+  const metrics = await request(
+    api,
+    "GET",
+    `/ai/llm-draft-runs/metrics?accountSetId=${encodeURIComponent(accountSet.body.id)}&draftType=inventory_movement`
+  );
+
+  assert.equal(converted.status, 201);
+  assert.equal(rejected.status, 200);
+  assert.equal(pendingCandidate.status, 201);
+  assert.equal(failedRun.status, 201);
+  assert.equal(failedRun.body.status, "failed");
+  assert.equal(metrics.status, 200);
+  assert.equal(metrics.body.accountSetId, accountSet.body.id);
+  assert.equal(metrics.body.draftType, "inventory_movement");
+  assert.equal(metrics.body.totalRuns, 4);
+  assert.equal(metrics.body.completedRuns, 3);
+  assert.equal(metrics.body.failedRuns, 1);
+  assert.equal(metrics.body.schemaSuccessRate, 0.75);
+  assert.equal(metrics.body.candidateCount, 3);
+  assert.equal(metrics.body.convertedCandidates, 1);
+  assert.equal(metrics.body.rejectedCandidates, 1);
+  assert.equal(metrics.body.pendingCandidates, 1);
+  assert.equal(metrics.body.adoptionRate, 0.33);
+  assert.equal(metrics.body.rejectionRate, 0.33);
+  assert.equal(metrics.body.humanCorrectionRate, 0.33);
+  assert.ok(metrics.body.providerBreakdown.some((item) => item.provider === "local-rule-based" && item.completedRuns === 3));
+  assert.ok(metrics.body.providerBreakdown.some((item) => item.provider === "openai-compatible" && item.failedRuns === 1));
+});
+
+test("Phase 6 Agent draft candidates can be reviewed and converted into voucher drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6CONV",
+      name: "Phase 6 Draft Convert",
+      companyName: "Phase 6 Convert Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-convert-account-set"
+  );
+  await request(
+    api,
+    "POST",
+    `/account-sets/${accountSet.body.id}/periods/generate`,
+    { fiscalYear: 2026, startPeriod: 1, endPeriod: 12 },
+    "phase6-convert-periods"
+  );
+  await request(
+    api,
+    "POST",
+    "/accounts",
+    { accountSetId: accountSet.body.id, code: "6602", name: "管理费用", normalBalance: "debit" },
+    "phase6-convert-account-6602"
+  );
+  await request(
+    api,
+    "POST",
+    "/accounts",
+    { accountSetId: accountSet.body.id, code: "1002", name: "银行存款", normalBalance: "debit" },
+    "phase6-convert-account-1002"
+  );
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "bank-receipt.txt",
+      contentType: "text/plain",
+      byteSize: Buffer.byteLength("银行回单 办公费 500 元"),
+      contentBase64: Buffer.from("银行回单 办公费 500 元").toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-convert-upload"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "voucher",
+      sourceObjectType: "bank_receipt",
+      userInstruction: "根据银行回单生成办公费 500 元记账凭证草稿",
+      attachmentIds: [attachment.body.id],
+      dryRun: true
+    },
+    "phase6-convert-candidate"
+  );
+  await request(api, "POST", `/account-sets/${accountSet.body.id}/periods/generate`, {}, "phase6-convert-periods");
+
+  const loaded = await request(api, "GET", `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}`);
+  assert.equal(loaded.status, 200);
+  assert.equal(loaded.body.id, candidate.body.id);
+  assert.equal(loaded.body.status, "candidate");
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "reviewer:p6",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(candidate, ["6602", "1002"]),
+      reviewedDraftPayload: {
+        documentType: "voucher",
+        accountSetId: accountSet.body.id,
+        fiscalYear: 2026,
+        periodNo: 1,
+        voucherDate: "2026-01-31",
+        lines: [
+          { summary: "办公费", accountCode: "6602", debit: 500, credit: 0 },
+          { summary: "银行付款", accountCode: "1002", debit: 0, credit: 500 }
+        ]
+      }
+    },
+    "phase6-convert-candidate-to-voucher"
+  );
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "draft");
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(converted.body.attachmentCount, 1);
+  assert.equal(converted.body.lines[0].accountCode, "6602");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectId, converted.body.id);
+  assert.ok(api.state.attachmentLinks.some((link) => link.attachmentId === attachment.body.id && link.objectId === converted.body.id));
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "agent.draft_candidate.convert" && log.objectType === "voucher" && log.objectId === converted.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent draft conversion requires unresolved fields to be reviewed", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6MATCH",
+      name: "Phase 6 Match Gate",
+      companyName: "Phase 6 Match Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-match-account-set"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "voucher",
+      sourceObjectType: "bank_receipt",
+      userInstruction: "根据银行回单生成办公费 300 元记账凭证草稿",
+      dryRun: true
+    },
+    "phase6-match-candidate"
+  );
+  await request(api, "POST", `/account-sets/${accountSet.body.id}/periods/generate`, {}, "phase6-match-periods");
+  const reviewedDraftPayload = {
+    documentType: "voucher",
+    accountSetId: accountSet.body.id,
+    fiscalYear: 2026,
+    periodNo: 1,
+    voucherDate: "2026-01-31",
+    lines: [
+      { summary: "办公费", accountCode: "6602", debit: 300, credit: 0 },
+      { summary: "银行付款", accountCode: "1002", debit: 0, credit: 300 }
+    ]
+  };
+
+  const blocked = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "reviewer:p6",
+      reviewedDraftPayload
+    },
+    "phase6-match-convert-blocked"
+  );
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "reviewer:p6",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(candidate, ["6602", "1002"]),
+      reviewedDraftPayload
+    },
+    "phase6-match-convert-resolved"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.ok(candidate.body.unmatchedItems.length > 0);
+  assert.equal(blocked.status, 400);
+  assert.equal(blocked.body.code, "AGENT_DRAFT_UNMATCHED_ITEMS_UNRESOLVED");
+  assert.equal(converted.status, 201);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.deepEqual(
+    api.state.agentDraftCandidates.get(candidate.body.id).resolvedUnmatchedItems.map((item) => item.field),
+    candidate.body.unmatchedItems.map((item) => item.field)
+  );
+});
+
+test("Phase 6 Agent draft candidates can be rejected with review reason", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6REJ",
+      name: "Phase 6 Reject Draft",
+      companyName: "Phase 6 Reject Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-reject-account-set"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "purchase_order",
+      userInstruction: "Generate a purchase order candidate that should be rejected",
+      evidenceRefs: ["quote:reject"],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-reject-candidate"
+  );
+
+  const rejected = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/reject`,
+    {
+      rejectedBy: "purchase-reviewer",
+      rejectionReason: "Supplier and item matching were not trustworthy."
+    },
+    "phase6-reject-candidate-action"
+  );
+  const convertAfterReject = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "purchase-reviewer",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(candidate, "manual"),
+      reviewedDraftPayload: {
+        documentType: "purchase_order",
+        supplierId: "partner:missing",
+        orderDate: "2026-01-31",
+        lines: [{ itemCode: "P6-REJ", itemName: "Rejected item", quantity: 1, unitPrice: 1, taxRate: 0 }]
+      }
+    },
+    "phase6-reject-convert-after"
+  );
+  const rejectedQueue = await request(
+    api,
+    "GET",
+    `/agent/draft-candidates?accountSetId=${encodeURIComponent(accountSet.body.id)}&status=rejected`
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(rejected.status, 200);
+  assert.equal(rejected.body.status, "rejected");
+  assert.equal(rejected.body.rejectedBy, "purchase-reviewer");
+  assert.equal(rejected.body.rejectionReason, "Supplier and item matching were not trustworthy.");
+  assert.equal(convertAfterReject.status, 400);
+  assert.match(convertAfterReject.body.message, /Only candidate Agent drafts can be converted/);
+  assert.equal(rejectedQueue.body.total, 1);
+  assert.equal(rejectedQueue.body.items[0].id, candidate.body.id);
+  assert.equal(rejectedQueue.body.items[0].status, "rejected");
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) =>
+        log.action === "agent.draft_candidate.reject" &&
+        log.objectType === "agent_draft_candidate" &&
+        log.objectId === candidate.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent purchase-order draft candidates convert into purchase order drafts after review", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6PO",
+      name: "Phase 6 Purchase Drafts",
+      companyName: "Phase 6 Purchase Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-purchase-draft-account-set"
+  );
+  const supplier = await request(
+    api,
+    "POST",
+    "/partners",
+    {
+      accountSetId: accountSet.body.id,
+      partnerType: "supplier",
+      code: "P6-SUP",
+      name: "Phase 6 Supplier",
+      paymentTerms: "NET30",
+      settlementMethod: "bank_transfer"
+    },
+    "phase6-purchase-draft-supplier"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "purchase_order",
+      userInstruction: "Generate a purchase order draft for materials",
+      evidenceRefs: ["quote:PO-001"],
+      attachmentIds: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-purchase-draft-candidate"
+  );
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "purchase-reviewer",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(candidate, supplier.body.id),
+      reviewedDraftPayload: {
+        documentType: "purchase_order",
+        supplierId: supplier.body.id,
+        orderDate: "2026-01-18",
+        currency: "CNY",
+        exchangeRate: 1,
+        lines: [{ itemCode: "MAT-P6", itemName: "Phase 6 material", quantity: 3, unitPrice: 200, taxRate: 0.13 }]
+      }
+    },
+    "phase6-convert-candidate-to-purchase-order"
+  );
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "draft");
+  assert.equal(converted.body.supplierId, supplier.body.id);
+  assert.equal(converted.body.totalAmount, 678);
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, "purchase_order");
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "agent.draft_candidate.convert" && log.objectType === "purchase_order" && log.objectId === converted.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent sales-order draft candidates convert into sales order drafts after review", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6SO",
+      name: "Phase 6 Sales Drafts",
+      companyName: "Phase 6 Sales Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-sales-draft-account-set"
+  );
+  const customer = await request(
+    api,
+    "POST",
+    "/partners",
+    {
+      accountSetId: accountSet.body.id,
+      partnerType: "customer",
+      code: "P6-CUS",
+      name: "Phase 6 Customer",
+      creditLimit: 100000,
+      isEnabled: true
+    },
+    "phase6-sales-draft-customer"
+  );
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "sales-order.txt",
+      contentType: "text/plain",
+      byteSize: Buffer.byteLength("customer order material 2 price 300"),
+      contentBase64: Buffer.from("customer order material 2 price 300").toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-sales-draft-upload"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "sales_order",
+      sourceObjectType: "uploaded_customer_order",
+      userInstruction: "Create sales order draft for customer order, material 2 price 300.",
+      attachmentIds: [attachment.body.id],
+      dryRun: true
+    },
+    "phase6-sales-draft-candidate"
+  );
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "reviewer:p6-sales",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(candidate, customer.body.id),
+      reviewedDraftPayload: {
+        documentType: "sales_order",
+        customerId: customer.body.id,
+        orderDate: "2026-06-12",
+        currency: "CNY",
+        exchangeRate: 1,
+        lines: [{ itemCode: "SO-MAT", itemName: "Sales material", quantity: 2, unitPrice: 300, taxRate: 0.13 }]
+      }
+    },
+    "phase6-convert-candidate-to-sales-order"
+  );
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "draft");
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(converted.body.customerId, customer.body.id);
+  assert.equal(converted.body.totalAmount, 678);
+  assert.equal(converted.body.lines[0].quantity, 2);
+  assert.equal(converted.body.lines[0].unitPrice, 300);
+  assert.equal(api.state.salesOrders.get(converted.body.id).id, converted.body.id);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, "sales_order");
+  assert.ok(
+    api.state.attachmentLinks.some(
+      (link) => link.attachmentId === attachment.body.id && link.objectType === "sales_order" && link.objectId === converted.body.id
+    )
+  );
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "agent.draft_candidate.convert" && log.objectType === "sales_order" && log.objectId === converted.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent inventory movement candidates convert into non-mutating warehouse drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6INV",
+      name: "Phase 6 Inventory Drafts",
+      companyName: "Phase 6 Inventory Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-inventory-draft-account-set"
+  );
+  const item = await request(
+    api,
+    "POST",
+    "/inventory-items",
+    {
+      accountSetId: accountSet.body.id,
+      code: "P6-MAT",
+      name: "Phase 6 Material",
+      unit: "pcs",
+      costMethod: "moving_average",
+      createdBy: "warehouse-reviewer"
+    },
+    "phase6-inventory-draft-item"
+  );
+  const warehouse = await request(
+    api,
+    "POST",
+    "/warehouses",
+    {
+      accountSetId: accountSet.body.id,
+      code: "P6-WH",
+      name: "Phase 6 Warehouse",
+      locations: [{ code: "A-01", name: "A Bin" }],
+      createdBy: "warehouse-reviewer"
+    },
+    "phase6-inventory-draft-warehouse"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "inventory_movement",
+      userInstruction: "Generate a warehouse receipt draft",
+      evidenceRefs: ["warehouse:instruction"],
+      attachmentIds: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-inventory-draft-candidate"
+  );
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "warehouse-reviewer",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(candidate, {
+        itemId: item.body.id,
+        warehouseId: warehouse.body.id
+      }),
+      reviewedDraftPayload: {
+        documentType: "inventory_movement",
+        movementType: "inbound",
+        businessType: "other_inbound",
+        fiscalYear: 2026,
+        periodNo: 1,
+        lines: [{ itemId: item.body.id, warehouseId: warehouse.body.id, locationId: warehouse.body.locations[0].id, quantity: 1, unitCost: 10 }]
+      }
+    },
+    "phase6-convert-candidate-to-inventory-movement"
+  );
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "draft");
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(converted.body.movementType, "inbound");
+  assert.equal(converted.body.costStatus, "not_calculated");
+  assert.equal(converted.body.lines[0].itemId, item.body.id);
+  assert.equal(api.state.inventoryMovements.size, 0);
+  assert.equal(api.state.inventoryBalances.size, 0);
+  assert.equal(api.state.inventoryMovementDrafts.size, 1);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, "inventory_movement_draft");
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "agent.draft_candidate.convert" && log.objectType === "inventory_movement_draft" && log.objectId === converted.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent production candidates convert into non-mutating material issue and receipt drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6PROD",
+      name: "Phase 6 Production Drafts",
+      companyName: "Phase 6 Production Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-production-draft-account-set"
+  );
+  const rawMaterial = await request(
+    api,
+    "POST",
+    "/inventory-items",
+    {
+      accountSetId: accountSet.body.id,
+      code: "P6-RM",
+      name: "Phase 6 Raw Material",
+      unit: "pcs",
+      costMethod: "moving_average",
+      createdBy: "production-reviewer"
+    },
+    "phase6-production-draft-raw"
+  );
+  const finishedGood = await request(
+    api,
+    "POST",
+    "/inventory-items",
+    {
+      accountSetId: accountSet.body.id,
+      code: "P6-FG",
+      name: "Phase 6 Finished Good",
+      unit: "pcs",
+      costMethod: "moving_average",
+      isManufactured: true,
+      createdBy: "production-reviewer"
+    },
+    "phase6-production-draft-fg"
+  );
+  const warehouse = await request(
+    api,
+    "POST",
+    "/warehouses",
+    {
+      accountSetId: accountSet.body.id,
+      code: "P6-PROD-WH",
+      name: "Phase 6 Production Warehouse",
+      locations: [{ code: "LINE-01", name: "Line 01" }],
+      createdBy: "production-reviewer"
+    },
+    "phase6-production-draft-warehouse"
+  );
+  const bom = await request(
+    api,
+    "POST",
+    "/boms",
+    {
+      accountSetId: accountSet.body.id,
+      productItemId: finishedGood.body.id,
+      version: "V1",
+      status: "active",
+      yieldQuantity: 1,
+      createdBy: "production-reviewer",
+      lines: [{ componentItemId: rawMaterial.body.id, quantity: 2, scrapRate: 0, lineNo: 1 }]
+    },
+    "phase6-production-draft-bom"
+  );
+  const workOrder = await request(
+    api,
+    "POST",
+    "/work-orders",
+    {
+      accountSetId: accountSet.body.id,
+      workOrderNo: "P6-WO-001",
+      productItemId: finishedGood.body.id,
+      bomId: bom.body.id,
+      plannedQuantity: 5,
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: "production-reviewer"
+    },
+    "phase6-production-draft-work-order"
+  );
+  await request(
+    api,
+    "POST",
+    `/work-orders/${encodeURIComponent(workOrder.body.id)}/release`,
+    { releasedBy: "production-reviewer" },
+    "phase6-production-draft-release"
+  );
+  const initialMovementCount = api.state.inventoryMovements.size;
+
+  const requisitionCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "material_requisition",
+      sourceObjectType: "work_order",
+      sourceObjectId: workOrder.body.id,
+      userInstruction: "Generate material issue draft for work order P6-WO-001.",
+      evidenceRefs: ["work-order:P6-WO-001"],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-production-requisition-candidate"
+  );
+  const receiptCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "product_receipt",
+      sourceObjectType: "work_order",
+      sourceObjectId: workOrder.body.id,
+      userInstruction: "Generate finished goods receipt draft for work order P6-WO-001.",
+      evidenceRefs: ["work-order:P6-WO-001"],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-production-receipt-candidate"
+  );
+
+  const requisitionDraft = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(requisitionCandidate.body.id)}/convert`,
+    {
+      reviewedBy: "production-reviewer",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(requisitionCandidate, {
+        workOrderId: workOrder.body.id,
+        componentItemId: rawMaterial.body.id,
+        warehouseId: warehouse.body.id
+      }),
+      reviewedDraftPayload: {
+        documentType: "material_requisition",
+        requisitionNo: "P6-MR-DRAFT",
+        workOrderId: workOrder.body.id,
+        fiscalYear: 2026,
+        periodNo: 1,
+        lines: [
+          {
+            componentItemId: rawMaterial.body.id,
+            warehouseId: warehouse.body.id,
+            locationId: warehouse.body.locations[0].id,
+            quantity: 10
+          }
+        ]
+      }
+    },
+    "phase6-production-requisition-convert"
+  );
+  const receiptDraft = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(receiptCandidate.body.id)}/convert`,
+    {
+      reviewedBy: "production-reviewer",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(receiptCandidate, {
+        workOrderId: workOrder.body.id,
+        productItemId: finishedGood.body.id,
+        warehouseId: warehouse.body.id
+      }),
+      reviewedDraftPayload: {
+        documentType: "product_receipt",
+        receiptNo: "P6-PR-DRAFT",
+        workOrderId: workOrder.body.id,
+        fiscalYear: 2026,
+        periodNo: 1,
+        lines: [
+          {
+            productItemId: finishedGood.body.id,
+            warehouseId: warehouse.body.id,
+            locationId: warehouse.body.locations[0].id,
+            quantity: 5
+          }
+        ]
+      }
+    },
+    "phase6-production-receipt-convert"
+  );
+
+  assert.equal(requisitionCandidate.status, 201);
+  assert.equal(receiptCandidate.status, 201);
+  assert.equal(requisitionDraft.status, 201);
+  assert.equal(requisitionDraft.body.status, "draft");
+  assert.equal(requisitionDraft.body.sourceType, "agent_draft");
+  assert.equal(requisitionDraft.body.sourceMovementId, null);
+  assert.equal(requisitionDraft.body.agentDraftCandidateId, requisitionCandidate.body.id);
+  assert.equal(requisitionDraft.body.lines[0].componentItemId, rawMaterial.body.id);
+  assert.equal(receiptDraft.status, 201);
+  assert.equal(receiptDraft.body.status, "draft");
+  assert.equal(receiptDraft.body.costStatus, "draft_pending_cost");
+  assert.equal(receiptDraft.body.sourceType, "agent_draft");
+  assert.equal(receiptDraft.body.sourceMovementId, null);
+  assert.equal(receiptDraft.body.agentDraftCandidateId, receiptCandidate.body.id);
+  assert.equal(receiptDraft.body.lines[0].productItemId, finishedGood.body.id);
+  assert.equal(api.state.inventoryMovements.size, initialMovementCount);
+  assert.equal(api.state.workOrders.get(workOrder.body.id).directMaterialCost, 0);
+  assert.equal(api.state.workOrders.get(workOrder.body.id).completedQuantity, 0);
+  assert.equal(api.state.agentDraftCandidates.get(requisitionCandidate.body.id).convertedObjectType, "material_requisition_draft");
+  assert.equal(api.state.agentDraftCandidates.get(receiptCandidate.body.id).convertedObjectType, "product_receipt_draft");
+});
+
+test("Phase 6 Agent draft generation hydrates work-order source context for LLM production drafts", async () => {
+  const calls = { llm: [] };
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "source-context-model",
+      async generateDraft(input) {
+        calls.llm.push(input);
+        return {
+          provider: "openai-compatible",
+          model: "source-context-model",
+          status: "completed",
+          outputSchema: input.draftType
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6CTX",
+      name: "Phase 6 Source Context",
+      companyName: "Phase 6 Source Context Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-source-context-account-set"
+  );
+  const rawMaterial = await request(
+    api,
+    "POST",
+    "/inventory-items",
+    {
+      accountSetId: accountSet.body.id,
+      code: "CTX-RM",
+      name: "Context Raw Material",
+      unit: "pcs",
+      costMethod: "moving_average",
+      createdBy: "context-reviewer"
+    },
+    "phase6-source-context-raw"
+  );
+  const finishedGood = await request(
+    api,
+    "POST",
+    "/inventory-items",
+    {
+      accountSetId: accountSet.body.id,
+      code: "CTX-FG",
+      name: "Context Finished Good",
+      unit: "pcs",
+      costMethod: "moving_average",
+      isManufactured: true,
+      createdBy: "context-reviewer"
+    },
+    "phase6-source-context-fg"
+  );
+  const bom = await request(
+    api,
+    "POST",
+    "/boms",
+    {
+      accountSetId: accountSet.body.id,
+      productItemId: finishedGood.body.id,
+      version: "CTX-V1",
+      status: "active",
+      yieldQuantity: 1,
+      createdBy: "context-reviewer",
+      lines: [{ componentItemId: rawMaterial.body.id, quantity: 2, scrapRate: 0, lineNo: 1 }]
+    },
+    "phase6-source-context-bom"
+  );
+  const workOrder = await request(
+    api,
+    "POST",
+    "/work-orders",
+    {
+      accountSetId: accountSet.body.id,
+      workOrderNo: "CTX-WO-001",
+      productItemId: finishedGood.body.id,
+      bomId: bom.body.id,
+      plannedQuantity: 6,
+      fiscalYear: 2026,
+      periodNo: 1,
+      createdBy: "context-reviewer"
+    },
+    "phase6-source-context-work-order"
+  );
+
+  const requisitionCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "material_requisition",
+      sourceObjectType: "work_order",
+      sourceObjectId: workOrder.body.id,
+      userInstruction: "Generate material issue draft from the selected work order.",
+      evidenceRefs: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-source-context-requisition-candidate"
+  );
+  const receiptCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "product_receipt",
+      sourceObjectType: "work_order",
+      sourceObjectId: workOrder.body.id,
+      userInstruction: "Generate finished goods receipt draft from the selected work order.",
+      evidenceRefs: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-source-context-receipt-candidate"
+  );
+
+  assert.equal(requisitionCandidate.status, 201);
+  assert.equal(receiptCandidate.status, 201);
+  assert.equal(calls.llm.length, 2);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.objectType, "work_order");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.workOrderNo, "CTX-WO-001");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.productItemId, finishedGood.body.id);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.bomLines[0].componentItemId, rawMaterial.body.id);
+  assert.equal(requisitionCandidate.body.sourceContext.sourceObject.workOrderNo, "CTX-WO-001");
+  assert.equal(requisitionCandidate.body.draftPayload.workOrderId, workOrder.body.id);
+  assert.equal(requisitionCandidate.body.draftPayload.lines[0].componentItemId, rawMaterial.body.id);
+  assert.equal(requisitionCandidate.body.draftPayload.lines[0].quantity, 12);
+  assert.ok(!requisitionCandidate.body.unmatchedItems.some((item) => item.field === "workOrderId"));
+  assert.ok(!requisitionCandidate.body.unmatchedItems.some((item) => item.field === "lines[0].componentItemId"));
+  assert.ok(requisitionCandidate.body.unmatchedItems.some((item) => item.field === "lines[0].warehouseId"));
+  assert.equal(receiptCandidate.body.draftPayload.workOrderId, workOrder.body.id);
+  assert.equal(receiptCandidate.body.draftPayload.lines[0].productItemId, finishedGood.body.id);
+  assert.equal(receiptCandidate.body.draftPayload.lines[0].quantity, 6);
+  assert.match(receiptCandidate.body.llmDraftRun.inputSummary.sourceContext.sourceObject.workOrderNo, /CTX-WO-001/);
+});
+
+test("Phase 6 Agent draft generation hydrates order source context for LLM order drafts", async () => {
+  const calls = { llm: [] };
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "order-source-context-model",
+      async generateDraft(input) {
+        calls.llm.push(input);
+        return {
+          provider: "openai-compatible",
+          model: "order-source-context-model",
+          status: "completed",
+          outputSchema: input.draftType
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6ORDCTX",
+      name: "Phase 6 Order Source Context",
+      companyName: "Phase 6 Order Context Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-order-source-context-account-set"
+  );
+  const supplier = await request(
+    api,
+    "POST",
+    "/partners",
+    {
+      accountSetId: accountSet.body.id,
+      partnerType: "supplier",
+      code: "ORDCTX-SUP",
+      name: "Order Context Supplier",
+      paymentTerms: "NET30",
+      settlementMethod: "bank_transfer"
+    },
+    "phase6-order-source-context-supplier"
+  );
+  const customer = await request(
+    api,
+    "POST",
+    "/partners",
+    {
+      accountSetId: accountSet.body.id,
+      partnerType: "customer",
+      code: "ORDCTX-CUS",
+      name: "Order Context Customer",
+      paymentTerms: "NET15",
+      settlementMethod: "bank_transfer"
+    },
+    "phase6-order-source-context-customer"
+  );
+  const purchaseOrder = await request(
+    api,
+    "POST",
+    "/purchase-orders",
+    {
+      accountSetId: accountSet.body.id,
+      supplierId: supplier.body.id,
+      orderDate: "2026-06-08",
+      currency: "CNY",
+      exchangeRate: 1,
+      createdBy: "agent-user",
+      lines: [{ itemCode: "PO-CTX-ITEM", itemName: "Purchase Context Item", quantity: 5, unitPrice: 18, taxRate: 0.13 }]
+    },
+    "phase6-order-source-context-purchase-order"
+  );
+  const salesOrder = await request(
+    api,
+    "POST",
+    "/sales-orders",
+    {
+      accountSetId: accountSet.body.id,
+      customerId: customer.body.id,
+      orderDate: "2026-06-09",
+      currency: "CNY",
+      exchangeRate: 1,
+      createdBy: "agent-user",
+      lines: [{ itemCode: "SO-CTX-ITEM", itemName: "Sales Context Item", quantity: 3, unitPrice: 40, taxRate: 0.06 }]
+    },
+    "phase6-order-source-context-sales-order"
+  );
+
+  const purchaseCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "purchase_order",
+      sourceObjectType: "purchase_order",
+      sourceObjectId: purchaseOrder.body.id,
+      userInstruction: "Generate a purchase order draft from the selected purchase order.",
+      evidenceRefs: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-order-source-context-purchase-candidate"
+  );
+  const salesCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "sales_order",
+      sourceObjectType: "sales_order",
+      sourceObjectId: salesOrder.body.id,
+      userInstruction: "Generate a sales order draft from the selected sales order.",
+      evidenceRefs: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-order-source-context-sales-candidate"
+  );
+
+  assert.equal(purchaseCandidate.status, 201);
+  assert.equal(salesCandidate.status, 201);
+  assert.equal(calls.llm.length, 2);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.objectType, "purchase_order");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.orderNo, purchaseOrder.body.orderNo);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.supplierId, supplier.body.id);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.lines[0].itemCode, "PO-CTX-ITEM");
+  assert.equal(calls.llm[1].sourceContext.sourceObject.objectType, "sales_order");
+  assert.equal(calls.llm[1].sourceContext.sourceObject.orderNo, salesOrder.body.orderNo);
+  assert.equal(calls.llm[1].sourceContext.sourceObject.customerId, customer.body.id);
+  assert.equal(calls.llm[1].sourceContext.sourceObject.lines[0].itemCode, "SO-CTX-ITEM");
+  assert.equal(purchaseCandidate.body.sourceContext.sourceObject.orderNo, purchaseOrder.body.orderNo);
+  assert.equal(purchaseCandidate.body.draftPayload.supplierId, supplier.body.id);
+  assert.equal(purchaseCandidate.body.draftPayload.orderDate, "2026-06-08");
+  assert.equal(purchaseCandidate.body.draftPayload.lines[0].itemCode, "PO-CTX-ITEM");
+  assert.equal(purchaseCandidate.body.draftPayload.lines[0].quantity, 5);
+  assert.equal(purchaseCandidate.body.draftPayload.lines[0].unitPrice, 18);
+  assert.ok(!purchaseCandidate.body.unmatchedItems.some((item) => item.field === "supplierId"));
+  assert.ok(purchaseCandidate.body.unmatchedItems.some((item) => item.field === "lines[0].itemId"));
+  assert.equal(salesCandidate.body.sourceContext.sourceObject.orderNo, salesOrder.body.orderNo);
+  assert.equal(salesCandidate.body.draftPayload.customerId, customer.body.id);
+  assert.equal(salesCandidate.body.draftPayload.orderDate, "2026-06-09");
+  assert.equal(salesCandidate.body.draftPayload.lines[0].itemCode, "SO-CTX-ITEM");
+  assert.equal(salesCandidate.body.draftPayload.lines[0].quantity, 3);
+  assert.equal(salesCandidate.body.draftPayload.lines[0].unitPrice, 40);
+  assert.ok(!salesCandidate.body.unmatchedItems.some((item) => item.field === "customerId"));
+  assert.ok(salesCandidate.body.llmDraftRun.inputSummary.sourceContext.sourceObject.lines[0].itemCode === "SO-CTX-ITEM");
+});
+
+test("Phase 6 Agent draft generation hydrates warehouse source context for LLM inventory drafts", async () => {
+  const calls = { llm: [] };
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "warehouse-source-context-model",
+      async generateDraft(input) {
+        calls.llm.push(input);
+        return {
+          provider: "openai-compatible",
+          model: "warehouse-source-context-model",
+          status: "completed",
+          outputSchema: input.draftType
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6WHCTX",
+      name: "Phase 6 Warehouse Source Context",
+      companyName: "Phase 6 Warehouse Context Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-warehouse-source-context-account-set"
+  );
+  const item = await request(
+    api,
+    "POST",
+    "/inventory-items",
+    {
+      accountSetId: accountSet.body.id,
+      code: "WH-CTX-ITEM",
+      name: "Warehouse Context Item",
+      unit: "pcs",
+      costMethod: "moving_average",
+      createdBy: "warehouse-reviewer"
+    },
+    "phase6-warehouse-source-context-item"
+  );
+  const warehouse = await request(
+    api,
+    "POST",
+    "/warehouses",
+    {
+      accountSetId: accountSet.body.id,
+      code: "WH-CTX",
+      name: "Warehouse Context",
+      locations: [{ code: "BIN-01", name: "Bin 01" }],
+      createdBy: "warehouse-reviewer"
+    },
+    "phase6-warehouse-source-context-warehouse"
+  );
+  await request(
+    api,
+    "POST",
+    "/inventory-opening-balances",
+    {
+      accountSetId: accountSet.body.id,
+      itemId: item.body.id,
+      warehouseId: warehouse.body.id,
+      locationId: warehouse.body.locations[0].id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      quantity: 10,
+      amount: 100,
+      createdBy: "warehouse-reviewer"
+    },
+    "phase6-warehouse-source-context-opening"
+  );
+  const movement = await request(
+    api,
+    "POST",
+    "/inventory-movements",
+    {
+      accountSetId: accountSet.body.id,
+      documentNo: "WHCTX-IN-001",
+      movementType: "inbound",
+      businessType: "other_inbound",
+      fiscalYear: 2026,
+      periodNo: 6,
+      movementDate: "2026-06-10",
+      createdBy: "warehouse-reviewer",
+      lines: [
+        {
+          itemId: item.body.id,
+          warehouseId: warehouse.body.id,
+          locationId: warehouse.body.locations[0].id,
+          quantity: 4,
+          unitCost: 12
+        }
+      ]
+    },
+    "phase6-warehouse-source-context-movement"
+  );
+  const stockPreview = await request(
+    api,
+    "POST",
+    "/stock-counts/preview",
+    {
+      accountSetId: accountSet.body.id,
+      countNo: "WHCTX-SC-001",
+      fiscalYear: 2026,
+      periodNo: 6,
+      createdBy: "warehouse-reviewer",
+      lines: [
+        {
+          itemId: item.body.id,
+          warehouseId: warehouse.body.id,
+          locationId: warehouse.body.locations[0].id,
+          actualQuantity: 12,
+          reason: "cycle count"
+        }
+      ]
+    },
+    "phase6-warehouse-source-context-stock-preview"
+  );
+  api.state.stockCounts.set(stockPreview.body.id, stockPreview.body);
+
+  const movementCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "inventory_movement",
+      sourceObjectType: "inventory_movement",
+      sourceObjectId: movement.body.id,
+      userInstruction: "Generate an inventory movement draft from the selected warehouse movement.",
+      evidenceRefs: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-warehouse-source-context-movement-candidate"
+  );
+  const stockCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "stock_count",
+      sourceObjectType: "stock_count",
+      sourceObjectId: stockPreview.body.id,
+      userInstruction: "Generate a stock count draft from the selected count preview.",
+      evidenceRefs: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-warehouse-source-context-stock-candidate"
+  );
+
+  assert.equal(movementCandidate.status, 201);
+  assert.equal(stockCandidate.status, 201);
+  assert.equal(calls.llm.length, 2);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.objectType, "inventory_movement");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.documentNo, "WHCTX-IN-001");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.lines[0].warehouseId, warehouse.body.id);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.lines[0].itemId, item.body.id);
+  assert.equal(calls.llm[1].sourceContext.sourceObject.objectType, "stock_count");
+  assert.equal(calls.llm[1].sourceContext.sourceObject.countNo, "WHCTX-SC-001");
+  assert.equal(calls.llm[1].sourceContext.sourceObject.lines[0].actualQuantity, 12);
+  assert.equal(movementCandidate.body.sourceContext.sourceObject.documentNo, "WHCTX-IN-001");
+  assert.equal(movementCandidate.body.draftPayload.sourceMovementId, movement.body.id);
+  assert.equal(movementCandidate.body.draftPayload.movementType, "inbound");
+  assert.equal(movementCandidate.body.draftPayload.warehouseId, warehouse.body.id);
+  assert.equal(movementCandidate.body.draftPayload.lines[0].itemId, item.body.id);
+  assert.equal(movementCandidate.body.draftPayload.lines[0].quantity, 4);
+  assert.equal(movementCandidate.body.draftPayload.lines[0].unitCost, 12);
+  assert.ok(!movementCandidate.body.unmatchedItems.some((unmatched) => unmatched.field === "warehouseId"));
+  assert.ok(!movementCandidate.body.unmatchedItems.some((unmatched) => unmatched.field === "lines[0].itemId"));
+  assert.equal(stockCandidate.body.sourceContext.sourceObject.countNo, "WHCTX-SC-001");
+  assert.equal(stockCandidate.body.draftPayload.sourceStockCountId, stockPreview.body.id);
+  assert.equal(stockCandidate.body.draftPayload.lines[0].itemId, item.body.id);
+  assert.equal(stockCandidate.body.draftPayload.lines[0].warehouseId, warehouse.body.id);
+  assert.equal(stockCandidate.body.draftPayload.lines[0].actualQuantity, 12);
+  assert.ok(!stockCandidate.body.unmatchedItems.some((unmatched) => unmatched.field === "lines[0].itemId"));
+});
+
+test("Phase 6 Agent draft generation hydrates voucher source context for LLM voucher drafts", async () => {
+  const calls = { llm: [] };
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "voucher-source-context-model",
+      async generateDraft(input) {
+        calls.llm.push(input);
+        return {
+          provider: "openai-compatible",
+          model: "voucher-source-context-model",
+          status: "completed",
+          outputSchema: input.draftType
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6VCHCTX",
+      name: "Phase 6 Voucher Source Context",
+      companyName: "Phase 6 Voucher Context Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-voucher-source-context-account-set"
+  );
+  await request(api, "POST", `/account-sets/${accountSet.body.id}/periods/generate`, {}, "phase6-voucher-source-context-periods");
+  await request(
+    api,
+    "POST",
+    "/accounts",
+    {
+      accountSetId: accountSet.body.id,
+      code: "1002",
+      name: "Bank Deposits",
+      accountType: "asset",
+      normalBalance: "debit"
+    },
+    "phase6-voucher-source-context-bank"
+  );
+  await request(
+    api,
+    "POST",
+    "/accounts",
+    {
+      accountSetId: accountSet.body.id,
+      code: "6602",
+      name: "Office Expense",
+      accountType: "expense",
+      normalBalance: "debit"
+    },
+    "phase6-voucher-source-context-expense"
+  );
+  const voucher = await request(
+    api,
+    "POST",
+    "/vouchers",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      voucherNo: "VCHCTX-001",
+      voucherDate: "2026-06-12",
+      createdBy: "voucher-reviewer",
+      lines: [
+        { summary: "Office supplies", accountCode: "6602", debit: 500, credit: 0 },
+        { summary: "Bank payment", accountCode: "1002", debit: 0, credit: 500 }
+      ]
+    },
+    "phase6-voucher-source-context-voucher"
+  );
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "voucher",
+      sourceObjectType: "voucher",
+      sourceObjectId: voucher.body.id,
+      userInstruction: "Generate a voucher draft from the selected voucher.",
+      evidenceRefs: [`voucher:${voucher.body.id}`],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-voucher-source-context-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(calls.llm.length, 1);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.objectType, "voucher");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.voucherNo, "VCHCTX-001");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.fiscalYear, 2026);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.periodNo, 1);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.lines[0].accountCode, "6602");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.lines[0].accountName, "Office Expense");
+  assert.equal(candidate.body.sourceContext.sourceObject.voucherNo, "VCHCTX-001");
+  assert.equal(candidate.body.draftPayload.sourceVoucherId, voucher.body.id);
+  assert.equal(candidate.body.draftPayload.sourceVoucherNo, "VCHCTX-001");
+  assert.equal(candidate.body.draftPayload.voucherDate, "2026-06-12");
+  assert.equal(candidate.body.draftPayload.lines[0].summary, "Office supplies");
+  assert.equal(candidate.body.draftPayload.lines[0].accountCode, "6602");
+  assert.equal(candidate.body.draftPayload.lines[0].accountName, "Office Expense");
+  assert.equal(candidate.body.draftPayload.lines[0].debit, 500);
+  assert.equal(candidate.body.draftPayload.lines[1].credit, 500);
+  assert.ok(!candidate.body.unmatchedItems.some((unmatched) => unmatched.field === "lines[].accountCode"));
+  assert.equal(candidate.body.dryRunResult.status, "ready_for_confirmation");
+});
+
+test("Phase 6 Agent draft generation hydrates payroll and fixed-asset source context for LLM drafts", async () => {
+  const calls = { llm: [] };
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "phase6-payroll-asset-context-model",
+      async generateDraft(input) {
+        calls.llm.push(input);
+        return {
+          provider: "openai-compatible",
+          model: "phase6-payroll-asset-context-model",
+          status: "completed",
+          outputSchema: input.draftType
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6PACTX",
+      name: "Phase 6 Payroll Asset Source Context",
+      companyName: "Phase 6 Payroll Asset Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-payroll-asset-context-account-set"
+  );
+  const payrollCategory = await request(
+    api,
+    "POST",
+    "/payroll-categories",
+    { accountSetId: accountSet.body.id, code: "MONTHLY", name: "Monthly payroll", createdBy: "payroll-reviewer" },
+    "phase6-payroll-context-category"
+  );
+  const profile = await request(
+    api,
+    "POST",
+    "/employee-payroll-profiles",
+    {
+      accountSetId: accountSet.body.id,
+      employeeNo: "P6-E001",
+      employeeName: "Payroll Context Employee",
+      departmentId: "D-PROD",
+      departmentName: "Production",
+      payrollCategoryId: payrollCategory.body.id,
+      baseSalary: 10000,
+      personalSocialSecurity: 1000,
+      personalHousingFund: 500,
+      companySocialSecurity: 1600,
+      companyHousingFund: 1200,
+      monthlyTaxExemption: 5000,
+      createdBy: "payroll-reviewer"
+    },
+    "phase6-payroll-context-profile"
+  );
+  const variableImport = await request(
+    api,
+    "POST",
+    "/payroll-variable-imports",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      importType: "attendance_performance",
+      createdBy: "payroll-reviewer",
+      lines: [{ employeeProfileId: profile.body.id, workDays: 22, performancePay: 1000, allowance: 200, deduction: 100 }]
+    },
+    "phase6-payroll-context-import"
+  );
+  const payrollRun = await request(
+    api,
+    "POST",
+    "/payroll-runs/calculate",
+    {
+      accountSetId: accountSet.body.id,
+      runNo: "PAY-P6-CTX",
+      payrollCategoryId: payrollCategory.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      variableImportId: variableImport.body.id,
+      createdBy: "payroll-reviewer"
+    },
+    "phase6-payroll-context-run"
+  );
+  const depreciationMethod = await request(
+    api,
+    "POST",
+    "/depreciation-methods",
+    {
+      accountSetId: accountSet.body.id,
+      code: "SL",
+      name: "Straight Line",
+      methodType: "straight_line",
+      createdBy: "asset-reviewer"
+    },
+    "phase6-asset-context-method"
+  );
+  const assetCategory = await request(
+    api,
+    "POST",
+    "/asset-categories",
+    {
+      accountSetId: accountSet.body.id,
+      code: "MACHINE",
+      name: "Machine",
+      depreciationMethodId: depreciationMethod.body.id,
+      defaultUsefulLifeMonths: 60,
+      defaultSalvageRate: 0.05,
+      createdBy: "asset-reviewer"
+    },
+    "phase6-asset-context-category"
+  );
+  const fixedAsset = await request(
+    api,
+    "POST",
+    "/fixed-assets",
+    {
+      accountSetId: accountSet.body.id,
+      assetNo: "FA-P6-CTX",
+      name: "Context CNC machine",
+      categoryId: assetCategory.body.id,
+      depreciationMethodId: depreciationMethod.body.id,
+      acquisitionType: "purchase",
+      acquisitionDate: "2026-05-20",
+      originalValue: 120000,
+      accumulatedDepreciation: 20000,
+      salvageValue: 6000,
+      usefulLifeMonths: 60,
+      departmentId: "D-MFG",
+      departmentName: "Manufacturing",
+      responsiblePerson: "Asset Owner",
+      createdBy: "asset-reviewer"
+    },
+    "phase6-asset-context-asset"
+  );
+
+  const payrollCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "payroll_allocation",
+      sourceObjectType: "payroll_run",
+      sourceObjectId: payrollRun.body.id,
+      userInstruction: "Generate payroll allocation draft from selected payroll run.",
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-payroll-context-candidate"
+  );
+  const assetCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "asset_change",
+      sourceObjectType: "fixed_asset",
+      sourceObjectId: fixedAsset.body.id,
+      userInstruction: "Generate fixed asset improvement draft for selected asset, increase value 2500.",
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-asset-context-candidate"
+  );
+
+  assert.equal(payrollCandidate.status, 201);
+  assert.equal(assetCandidate.status, 201);
+  assert.equal(calls.llm.length, 2);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.objectType, "payroll_run");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.runNo, "PAY-P6-CTX");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.totalCompanyCost, 14000);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.lines[0].employeeNo, "P6-E001");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.lines[0].departmentId, "D-PROD");
+  assert.equal(payrollCandidate.body.draftPayload.payrollRunId, payrollRun.body.id);
+  assert.equal(payrollCandidate.body.draftPayload.runNo, "PAY-P6-CTX");
+  assert.equal(payrollCandidate.body.draftPayload.rules[0].departmentId, "D-PROD");
+  assert.equal(payrollCandidate.body.draftPayload.rules[0].amount, 14000);
+  assert.equal(payrollCandidate.body.draftPayload.rules[0].allocationRate, 1);
+  assert.equal(calls.llm[1].sourceContext.sourceObject.objectType, "fixed_asset");
+  assert.equal(calls.llm[1].sourceContext.sourceObject.assetNo, "FA-P6-CTX");
+  assert.equal(calls.llm[1].sourceContext.sourceObject.netValue, 100000);
+  assert.equal(calls.llm[1].sourceContext.sourceObject.currentDepartmentId, "D-MFG");
+  assert.equal(assetCandidate.body.draftPayload.fixedAssetId, fixedAsset.body.id);
+  assert.equal(assetCandidate.body.draftPayload.assetNo, "FA-P6-CTX");
+  assert.equal(assetCandidate.body.draftPayload.changeKind, "value_change");
+  assert.equal(assetCandidate.body.draftPayload.fromDepartmentId, "D-MFG");
+  assert.equal(assetCandidate.body.draftPayload.amount, 2500);
+  assert.ok(!assetCandidate.body.unmatchedItems.some((unmatched) => unmatched.field === "fixedAssetId"));
+});
+
+test("Phase 6 Agent draft generation hydrates report-run source context for LLM interpretation drafts", async () => {
+  const calls = { llm: [] };
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "report-source-context-model",
+      async generateDraft(input) {
+        calls.llm.push(input);
+        return {
+          provider: "openai-compatible",
+          model: "report-source-context-model",
+          status: "completed",
+          outputSchema: input.draftType
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6RPTCTX",
+      name: "Phase 6 Report Source Context",
+      companyName: "Phase 6 Report Context Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-report-source-context-account-set"
+  );
+  const reportRun = {
+    id: "report-run:p6-source-context",
+    accountSetId: accountSet.body.id,
+    templateVersionId: "report-template-version:p6-source-context",
+    fiscalYear: 2026,
+    periodNo: 6,
+    includeUnposted: false,
+    runMode: "formal",
+    status: "calculated",
+    snapshotHash: "sha256:p6-report-source-context",
+    cells: [
+      {
+        id: "report-run-cell:p6-source-context-cash",
+        sheetCode: "BS",
+        cellAddress: "B10",
+        label: "Cash",
+        formulaText: "QC(1001)",
+        calculatedValue: 120
+      },
+      {
+        id: "report-run-cell:p6-source-context-revenue",
+        sheetCode: "PL",
+        cellAddress: "C20",
+        label: "Revenue",
+        formulaText: "FS(6001)",
+        value: 800
+      }
+    ],
+    traceLinks: [
+      {
+        id: "report-trace-link:p6-source-context-cash",
+        traceId: "trace:cash",
+        sourceType: "ledger_balance",
+        accountCode: "1001",
+        amount: 120
+      }
+    ]
+  };
+  api.state.reportRuns.set(reportRun.id, reportRun);
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "report_interpretation",
+      sourceObjectType: "report_run",
+      sourceObjectId: reportRun.id,
+      userInstruction: "Generate a report interpretation draft from the selected report run.",
+      evidenceRefs: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-report-source-context-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(calls.llm.length, 1);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.objectType, "report_run");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.snapshotHash, "sha256:p6-report-source-context");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.cells[0].evidenceRef, "report_cell:BS!B10");
+  assert.equal(calls.llm[0].sourceContext.sourceObject.cells[1].calculatedValue, 800);
+  assert.equal(calls.llm[0].sourceContext.sourceObject.traceLinks[0].accountCode, "1001");
+  assert.equal(candidate.body.sourceContext.sourceObject.cellCount, 2);
+  assert.equal(candidate.body.draftPayload.reportRunId, reportRun.id);
+  assert.match(candidate.body.draftPayload.summary, /Generate a report interpretation/);
+  assert.deepEqual(candidate.body.draftPayload.evidenceRefs, ["report_cell:BS!B10", "report_cell:PL!C20"]);
+  assert.match(candidate.body.llmDraftRun.inputSummary.sourceContext.sourceObject.snapshotHash, /p6-report-source-context/);
+});
+
+test("Phase 6 Agent stock-count candidates convert into non-mutating stock count previews", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6STK",
+      name: "Phase 6 Stock Count Drafts",
+      companyName: "Phase 6 Stock Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-stock-count-account-set"
+  );
+  const item = await request(
+    api,
+    "POST",
+    "/inventory-items",
+    {
+      accountSetId: accountSet.body.id,
+      code: "P6-STK",
+      name: "Phase 6 Counted Item",
+      unit: "pcs",
+      costMethod: "moving_average",
+      createdBy: "stock-reviewer"
+    },
+    "phase6-stock-count-item"
+  );
+  const warehouse = await request(
+    api,
+    "POST",
+    "/warehouses",
+    {
+      accountSetId: accountSet.body.id,
+      code: "P6-SC-WH",
+      name: "Phase 6 Count Warehouse",
+      locations: [{ code: "C-01", name: "Count Bin" }],
+      createdBy: "stock-reviewer"
+    },
+    "phase6-stock-count-warehouse"
+  );
+  await request(
+    api,
+    "POST",
+    "/inventory-opening-balances",
+    {
+      accountSetId: accountSet.body.id,
+      itemId: item.body.id,
+      warehouseId: warehouse.body.id,
+      locationId: warehouse.body.locations[0].id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      quantity: 10,
+      amount: 100,
+      createdBy: "stock-reviewer"
+    },
+    "phase6-stock-count-opening"
+  );
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "stock-count.txt",
+      contentType: "text/plain",
+      byteSize: Buffer.byteLength("stock count actual quantity 8"),
+      contentBase64: Buffer.from("stock count actual quantity 8").toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-stock-count-upload"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "stock_count",
+      sourceObjectType: "uploaded_stock_count_sheet",
+      userInstruction: "Create stock count preview from uploaded sheet.",
+      attachmentIds: [attachment.body.id],
+      dryRun: true
+    },
+    "phase6-stock-count-candidate"
+  );
+  const balanceBefore = [...api.state.inventoryBalances.values()].find(
+    (balance) => balance.accountSetId === accountSet.body.id && balance.itemId === item.body.id
+  );
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "stock-reviewer",
+      reviewedDraftPayload: {
+        documentType: "stock_count",
+        countNo: "SC-P6-AGENT",
+        fiscalYear: 2026,
+        periodNo: 1,
+        lines: [
+          {
+            itemId: item.body.id,
+            warehouseId: warehouse.body.id,
+            locationId: warehouse.body.locations[0].id,
+            actualQuantity: 8,
+            reason: "Agent OCR reviewed count"
+          }
+        ]
+      }
+    },
+    "phase6-convert-candidate-to-stock-count-preview"
+  );
+  const balanceAfter = [...api.state.inventoryBalances.values()].find(
+    (balance) => balance.accountSetId === accountSet.body.id && balance.itemId === item.body.id
+  );
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "preview");
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(converted.body.countNo, "SC-P6-AGENT");
+  assert.equal(converted.body.lines[0].bookQuantity, 10);
+  assert.equal(converted.body.lines[0].actualQuantity, 8);
+  assert.equal(converted.body.lines[0].differenceQuantity, -2);
+  assert.equal(converted.body.totalAdjustmentAmount, -20);
+  assert.equal(balanceAfter.quantity, balanceBefore.quantity);
+  assert.equal(balanceAfter.amount, balanceBefore.amount);
+  assert.equal(api.state.stockCounts.get(converted.body.id).id, converted.body.id);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, "stock_count");
+  assert.ok(
+    api.state.attachmentLinks.some(
+      (link) => link.attachmentId === attachment.body.id && link.objectType === "stock_count" && link.objectId === converted.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent master-data candidates convert into non-mutating master data drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6MD",
+      name: "Phase 6 Master Data Drafts",
+      companyName: "Phase 6 Master Data Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-master-data-account-set"
+  );
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "supplier-card.txt",
+      contentType: "text/plain",
+      byteSize: Buffer.byteLength("supplier code SUP-A name Alpha Supplier"),
+      contentBase64: Buffer.from("supplier code SUP-A name Alpha Supplier").toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-master-data-upload"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "master_data",
+      sourceObjectType: "uploaded_supplier_card",
+      userInstruction: "Create a supplier master data draft from the uploaded card.",
+      attachmentIds: [attachment.body.id],
+      dryRun: true
+    },
+    "phase6-master-data-candidate"
+  );
+  const partnerCountBefore = api.state.partners.size;
+  const itemCountBefore = api.state.inventoryItems.size;
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "master-data-reviewer",
+      reviewedDraftPayload: {
+        documentType: "master_data",
+        masterDataType: "supplier",
+        code: "SUP-A",
+        name: "Alpha Supplier",
+        fields: {
+          partnerType: "supplier",
+          paymentTerms: "NET30",
+          settlementMethod: "bank_transfer"
+        }
+      }
+    },
+    "phase6-convert-candidate-to-master-data-draft"
+  );
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "draft");
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(converted.body.masterDataType, "supplier");
+  assert.equal(converted.body.code, "SUP-A");
+  assert.equal(converted.body.name, "Alpha Supplier");
+  assert.equal(converted.body.fields.paymentTerms, "NET30");
+  assert.equal(api.state.partners.size, partnerCountBefore);
+  assert.equal(api.state.inventoryItems.size, itemCountBefore);
+  assert.equal(api.state.agentMasterDataDrafts.get(converted.body.id).id, converted.body.id);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, "master_data_draft");
+  assert.ok(
+    api.state.attachmentLinks.some(
+      (link) => link.attachmentId === attachment.body.id && link.objectType === "master_data_draft" && link.objectId === converted.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent payroll allocation candidates convert into non-mutating payroll allocation drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6PAY",
+      name: "Phase 6 Payroll Drafts",
+      companyName: "Phase 6 Payroll Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-payroll-draft-account-set"
+  );
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "payroll-allocation.txt",
+      contentType: "text/plain",
+      byteSize: Buffer.byteLength("allocate payroll run PAY-202606 to production"),
+      contentBase64: Buffer.from("allocate payroll run PAY-202606 to production").toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-payroll-draft-upload"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "payroll_allocation",
+      sourceObjectType: "uploaded_payroll_allocation_sheet",
+      userInstruction: "Create a payroll allocation draft from uploaded reviewed OCR.",
+      attachmentIds: [attachment.body.id],
+      dryRun: true
+    },
+    "phase6-payroll-draft-candidate"
+  );
+  const payrollAllocationCountBefore = api.state.payrollAllocations.size;
+  const payrollCostPoolCountBefore = api.state.payrollCostPools.size;
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "payroll-reviewer",
+      reviewedDraftPayload: {
+        documentType: "payroll_allocation",
+        payrollRunId: "PAY-202606",
+        fiscalYear: 2026,
+        periodNo: 6,
+        rules: [
+          {
+            departmentId: "D-PROD",
+            targetType: "work_order",
+            workOrderId: "WO-AGENT-001",
+            costType: "direct_labor",
+            allocationRate: 1,
+            amount: 14000
+          }
+        ]
+      }
+    },
+    "phase6-convert-candidate-to-payroll-allocation-draft"
+  );
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "draft");
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(converted.body.documentType, "payroll_allocation");
+  assert.equal(converted.body.payrollRunId, "PAY-202606");
+  assert.equal(converted.body.totalAllocatedAmount, 14000);
+  assert.equal(converted.body.rules[0].workOrderId, "WO-AGENT-001");
+  assert.equal(api.state.payrollAllocations.size, payrollAllocationCountBefore);
+  assert.equal(api.state.payrollCostPools.size, payrollCostPoolCountBefore);
+  assert.equal(api.state.agentPayrollAllocationDrafts.get(converted.body.id).id, converted.body.id);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, "payroll_allocation_draft");
+  assert.ok(
+    api.state.attachmentLinks.some(
+      (link) => link.attachmentId === attachment.body.id && link.objectType === "payroll_allocation_draft" && link.objectId === converted.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent asset-change candidates convert into non-mutating fixed asset change drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6FA",
+      name: "Phase 6 Asset Drafts",
+      companyName: "Phase 6 Asset Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-asset-draft-account-set"
+  );
+  api.state.fixedAssets.set("fixed-asset:p6-agent", {
+    id: "fixed-asset:p6-agent",
+    accountSetId: accountSet.body.id,
+    assetNo: "FA-P6-001",
+    name: "Agent CNC machine",
+    originalValue: 120000,
+    accumulatedDepreciation: 20000,
+    netValue: 100000,
+    currentDepartmentId: "D-MFG",
+    usageStatus: "in_use"
+  });
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "asset-change.txt",
+      contentType: "text/plain",
+      byteSize: Buffer.byteLength("asset FA-P6-001 transfer to QA and increase value 5000"),
+      contentBase64: Buffer.from("asset FA-P6-001 transfer to QA and increase value 5000").toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-asset-draft-upload"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "asset_change",
+      sourceObjectType: "uploaded_asset_change_request",
+      userInstruction: "Create an asset change draft from uploaded reviewed OCR.",
+      attachmentIds: [attachment.body.id],
+      dryRun: true
+    },
+    "phase6-asset-draft-candidate"
+  );
+  const assetBefore = api.state.fixedAssets.get("fixed-asset:p6-agent");
+  const transferCountBefore = api.state.assetTransfers.size;
+  const valueChangeCountBefore = api.state.assetValueChanges.size;
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "asset-reviewer",
+      reviewedDraftPayload: {
+        documentType: "asset_change",
+        changeKind: "transfer",
+        fixedAssetId: "fixed-asset:p6-agent",
+        assetNo: "FA-P6-001",
+        changeDate: "2026-06-12",
+        toDepartmentId: "D-QA",
+        toDepartmentName: "Quality Assurance",
+        amount: 5000,
+        reason: "Agent reviewed OCR request"
+      }
+    },
+    "phase6-convert-candidate-to-asset-change-draft"
+  );
+  const assetAfter = api.state.fixedAssets.get("fixed-asset:p6-agent");
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "draft");
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(converted.body.documentType, "asset_change");
+  assert.equal(converted.body.changeKind, "transfer");
+  assert.equal(converted.body.fixedAssetId, "fixed-asset:p6-agent");
+  assert.equal(converted.body.toDepartmentId, "D-QA");
+  assert.equal(converted.body.amount, 5000);
+  assert.equal(assetAfter.originalValue, assetBefore.originalValue);
+  assert.equal(assetAfter.currentDepartmentId, assetBefore.currentDepartmentId);
+  assert.equal(api.state.assetTransfers.size, transferCountBefore);
+  assert.equal(api.state.assetValueChanges.size, valueChangeCountBefore);
+  assert.equal(api.state.agentAssetChangeDrafts.get(converted.body.id).id, converted.body.id);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, "asset_change_draft");
+  assert.ok(
+    api.state.attachmentLinks.some(
+      (link) => link.attachmentId === attachment.body.id && link.objectType === "asset_change_draft" && link.objectId === converted.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent depreciation-run candidates convert into non-mutating depreciation dry-run drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6DEP",
+      name: "Phase 6 Depreciation Agent Drafts",
+      companyName: "Phase 6 Depreciation Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-depreciation-agent-account-set"
+  );
+  const method = await request(
+    api,
+    "POST",
+    "/depreciation-methods",
+    {
+      accountSetId: accountSet.body.id,
+      code: "SL",
+      name: "Straight line",
+      methodType: "straight_line",
+      createdBy: "asset-reviewer"
+    },
+    "phase6-depreciation-agent-method"
+  );
+  const category = await request(
+    api,
+    "POST",
+    "/asset-categories",
+    {
+      accountSetId: accountSet.body.id,
+      code: "MACHINE",
+      name: "Machine",
+      depreciationMethodId: method.body.id,
+      defaultUsefulLifeMonths: 60,
+      defaultSalvageRate: 0.05,
+      createdBy: "asset-reviewer"
+    },
+    "phase6-depreciation-agent-category"
+  );
+  const fixedAsset = await request(
+    api,
+    "POST",
+    "/fixed-assets",
+    {
+      accountSetId: accountSet.body.id,
+      assetNo: "FA-P6-DEP",
+      name: "Agent depreciation machine",
+      categoryId: category.body.id,
+      depreciationMethodId: method.body.id,
+      acquisitionDate: "2026-01-15",
+      originalValue: 120000,
+      salvageValue: 6000,
+      usefulLifeMonths: 60,
+      departmentId: "D-MFG",
+      departmentName: "Manufacturing",
+      createdBy: "asset-reviewer"
+    },
+    "phase6-depreciation-agent-asset"
+  );
+  const initialRunCount = api.state.depreciationRuns.size;
+  const initialLineCount = api.state.depreciationRunLines.size;
+  const initialCostPoolCount = api.state.assetDepreciationCostPools.size;
+  const assetBefore = { ...api.state.fixedAssets.get(fixedAsset.body.id) };
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 2,
+      draftType: "depreciation_run",
+      sourceObjectType: "depreciation_run_page",
+      userInstruction: "Generate depreciation dry-run candidate for February 2026.",
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-depreciation-agent-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(candidate.body.draftType, "depreciation_run");
+  assert.equal(candidate.body.draftPayload.documentType, "depreciation_run");
+  assert.equal(candidate.body.draftPayload.dryRun, true);
+  assert.equal(candidate.body.draftPayload.fiscalYear, 2026);
+  assert.equal(candidate.body.draftPayload.periodNo, 2);
+  assert.match(candidate.body.draftPayload.runNo, /AGENT-DEP-202602/);
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "asset-reviewer",
+      reviewedDraftPayload: {
+        documentType: "depreciation_run",
+        runNo: "AGENT-DEP-202602-REVIEWED",
+        fiscalYear: 2026,
+        periodNo: 2,
+        dryRun: true
+      }
+    },
+    "phase6-convert-candidate-to-depreciation-dry-run"
+  );
+  const assetAfter = api.state.fixedAssets.get(fixedAsset.body.id);
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "draft");
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(converted.body.documentType, "depreciation_run");
+  assert.equal(converted.body.dryRun, true);
+  assert.equal(converted.body.runNo, "AGENT-DEP-202602-REVIEWED");
+  assert.equal(converted.body.totalDepreciationAmount, 1900);
+  assert.equal(converted.body.lines[0].fixedAssetId, fixedAsset.body.id);
+  assert.equal(converted.body.lines[0].depreciationAmount, 1900);
+  assert.equal(converted.body.lines[0].netValueAfter, 118100);
+  assert.equal(api.state.depreciationRuns.size, initialRunCount);
+  assert.equal(api.state.depreciationRunLines.size, initialLineCount);
+  assert.equal(api.state.assetDepreciationCostPools.size, initialCostPoolCount);
+  assert.equal(assetAfter.accumulatedDepreciation, assetBefore.accumulatedDepreciation);
+  assert.equal(assetAfter.netValue, assetBefore.netValue);
+  assert.equal(api.state.agentDepreciationRunDrafts.get(converted.body.id).id, converted.body.id);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, "depreciation_run_draft");
+});
+
+test("Phase 6 Agent report-interpretation candidates convert into non-mutating report interpretation drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6RPT",
+      name: "Phase 6 Report Interpretation Drafts",
+      companyName: "Phase 6 Report Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-report-interpretation-account-set"
+  );
+  const reportRun = {
+    id: "report-run:p6-agent",
+    accountSetId: accountSet.body.id,
+    templateVersionId: "report-template-version:p6-agent",
+    fiscalYear: 2026,
+    periodNo: 6,
+    includeUnposted: false,
+    runMode: "formal",
+    status: "calculated",
+    snapshotHash: "snapshot:p6-agent-before",
+    cells: [
+      {
+        id: "report-run-cell:p6-agent-cash",
+        sheetCode: "BS",
+        cellAddress: "B10",
+        label: "Cash",
+        value: 120,
+        valueType: "formula"
+      }
+    ],
+    traceLinks: []
+  };
+  api.state.reportRuns.set(reportRun.id, reportRun);
+  const attachment = await request(
+    api,
+    "POST",
+    "/attachments/upload",
+    {
+      accountSetId: accountSet.body.id,
+      filename: "report-note.txt",
+      contentType: "text/plain",
+      byteSize: Buffer.byteLength("cash increased based on BS B10"),
+      contentBase64: Buffer.from("cash increased based on BS B10").toString("base64"),
+      uploadedBy: "system"
+    },
+    "phase6-report-interpretation-upload"
+  );
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "report_interpretation",
+      sourceObjectType: "report_run",
+      sourceObjectId: reportRun.id,
+      userInstruction: "Create a report interpretation draft for the selected report cell.",
+      attachmentIds: [attachment.body.id],
+      dryRun: true
+    },
+    "phase6-report-interpretation-candidate"
+  );
+  const snapshotBefore = api.state.reportRuns.get(reportRun.id).snapshotHash;
+  const cellsBefore = api.state.reportRuns.get(reportRun.id).cells.length;
+
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "report-reviewer",
+      reviewedDraftPayload: {
+        documentType: "report_interpretation",
+        reportRunId: reportRun.id,
+        summary: "Cash increased.",
+        keyFindings: ["Cash closing balance is 120."],
+        warnings: ["Confirm whether the increase is recurring."],
+        evidenceRefs: ["report_cell:BS!B10"]
+      }
+    },
+    "phase6-convert-candidate-to-report-interpretation"
+  );
+
+  assert.equal(converted.status, 201);
+  assert.equal(converted.body.status, "draft");
+  assert.equal(converted.body.sourceType, "agent_draft");
+  assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+  assert.equal(converted.body.reportRunId, reportRun.id);
+  assert.equal(converted.body.summary, "Cash increased.");
+  assert.deepEqual(converted.body.evidenceRefs, ["report_cell:BS!B10"]);
+  assert.equal(api.state.reportRuns.get(reportRun.id).snapshotHash, snapshotBefore);
+  assert.equal(api.state.reportRuns.get(reportRun.id).cells.length, cellsBefore);
+  assert.equal(api.state.aiReportInterpretations.get(converted.body.id).id, converted.body.id);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, "report_interpretation_draft");
+  assert.ok(
+    api.state.attachmentLinks.some(
+      (link) => link.attachmentId === attachment.body.id && link.objectType === "report_interpretation_draft" && link.objectId === converted.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent draft candidate queue lists pending and converted drafts by account set", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6Q",
+      name: "Phase 6 Draft Queue",
+      companyName: "Phase 6 Queue Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-draft-queue-account-set"
+  );
+  const supplier = await request(
+    api,
+    "POST",
+    "/partners",
+    {
+      accountSetId: accountSet.body.id,
+      partnerType: "supplier",
+      code: "P6Q-SUP",
+      name: "Phase 6 Queue Supplier",
+      paymentTerms: "NET30",
+      settlementMethod: "bank_transfer"
+    },
+    "phase6-draft-queue-supplier"
+  );
+  const pending = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "voucher",
+      userInstruction: "Generate a voucher candidate for queue review",
+      evidenceRefs: ["queue:evidence"],
+      attachmentIds: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-draft-queue-pending"
+  );
+  const convertedCandidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "purchase_order",
+      userInstruction: "Generate a purchase order candidate for queue review",
+      evidenceRefs: ["queue:quote"],
+      attachmentIds: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-draft-queue-converted-candidate"
+  );
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(convertedCandidate.body.id)}/convert`,
+    {
+      reviewedBy: "purchase-reviewer",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(convertedCandidate, supplier.body.id),
+      reviewedDraftPayload: {
+        documentType: "purchase_order",
+        supplierId: supplier.body.id,
+        orderDate: "2026-01-20",
+        lines: [{ itemCode: "P6Q-MAT", itemName: "Phase 6 queue material", quantity: 1, unitPrice: 100, taxRate: 0 }]
+      }
+    },
+    "phase6-draft-queue-convert"
+  );
+
+  const queue = await request(api, "GET", `/agent/draft-candidates?accountSetId=${encodeURIComponent(accountSet.body.id)}`);
+  const purchaseOnly = await request(
+    api,
+    "GET",
+    `/agent/draft-candidates?accountSetId=${encodeURIComponent(accountSet.body.id)}&draftType=purchase_order&status=converted`
+  );
+
+  assert.equal(queue.status, 200);
+  assert.equal(queue.body.accountSetId, accountSet.body.id);
+  assert.equal(queue.body.total, 2);
+  assert.deepEqual(
+    queue.body.items.map((item) => item.id).sort(),
+    [pending.body.id, convertedCandidate.body.id].sort()
+  );
+  const convertedRow = queue.body.items.find((item) => item.id === convertedCandidate.body.id);
+  assert.equal(convertedRow.status, "converted");
+  assert.equal(convertedRow.convertedObjectType, "purchase_order");
+  assert.equal(convertedRow.convertedObjectId, converted.body.id);
+  assert.equal(purchaseOnly.body.total, 1);
+  assert.equal(purchaseOnly.body.items[0].draftType, "purchase_order");
+});
+
+test("Phase 6 Agent draft candidates and LLM draft runs persist through platform store restarts", async () => {
+  const accountSets = new Map();
+  const llmDraftRuns = new Map();
+  const agentDraftCandidates = new Map();
+  const byCreatedDesc = (left, right) => String(right.createdAt).localeCompare(String(left.createdAt));
+  const platformStore = {
+    createAccountSet: async (accountSet) => {
+      accountSets.set(accountSet.id, accountSet);
+      return accountSet;
+    },
+    findAccountSet: async (identifier) =>
+      [...accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier) ?? null,
+    listAccountSets: async () => [...accountSets.values()],
+    listAccessibleAccountSets: async () => [...accountSets.values()],
+    canAccessAccountSet: async (_actorId, accountSetId) => accountSets.has(accountSetId),
+    createLlmDraftRun: async (run) => {
+      llmDraftRuns.set(run.id, { ...run });
+      return llmDraftRuns.get(run.id);
+    },
+    listLlmDraftRuns: async (accountSetId = null, { status = null, draftType = null } = {}) =>
+      [...llmDraftRuns.values()]
+        .filter((run) => (!accountSetId || run.accountSetId === accountSetId) && (!status || run.status === status))
+        .filter((run) => !draftType || run.inputSummary?.draftType === draftType)
+        .sort(byCreatedDesc),
+    createAgentDraftCandidate: async (candidate) => {
+      agentDraftCandidates.set(candidate.id, { ...candidate });
+      return agentDraftCandidates.get(candidate.id);
+    },
+    updateAgentDraftCandidate: async (candidate) => {
+      agentDraftCandidates.set(candidate.id, { ...candidate });
+      return agentDraftCandidates.get(candidate.id);
+    },
+    findAgentDraftCandidate: async (id) => agentDraftCandidates.get(id) ?? null,
+    listAgentDraftCandidates: async (accountSetId = null, { status = null, draftType = null } = {}) =>
+      [...agentDraftCandidates.values()]
+        .filter((candidate) => (!accountSetId || candidate.accountSetId === accountSetId) && (!status || candidate.status === status))
+        .filter((candidate) => !draftType || candidate.draftType === draftType)
+        .sort(byCreatedDesc)
+  };
+  const firstApi = createApi({ platformStore });
+  const accountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6DRAFTP",
+      name: "Phase 6 Persisted Drafts",
+      companyName: "Phase 6 Persisted Drafts Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-persisted-drafts-account-set"
+  );
+  const candidate = await request(
+    firstApi,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      draftType: "voucher",
+      userInstruction: "Generate a persisted voucher candidate for 880 CNY office expense.",
+      evidenceRefs: ["receipt:persisted"],
+      attachmentIds: [],
+      requestedBy: "agent-user",
+      dryRun: true
+    },
+    "phase6-persisted-draft-candidate"
+  );
+  const restartedApi = createApi({ platformStore });
+  const queue = await request(
+    restartedApi,
+    "GET",
+    `/agent/draft-candidates?accountSetId=${encodeURIComponent(accountSet.body.id)}`
+  );
+  const detail = await request(
+    restartedApi,
+    "GET",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}`
+  );
+  const runs = await request(
+    restartedApi,
+    "GET",
+    `/ai/llm-draft-runs?accountSetId=${encodeURIComponent(accountSet.body.id)}&draftType=voucher`
+  );
+  const rejected = await request(
+    restartedApi,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/reject`,
+    {
+      rejectedBy: "finance-reviewer",
+      rejectionReason: "Need clearer supplier invoice evidence."
+    },
+    "phase6-persisted-draft-reject"
+  );
+  const afterRejectApi = createApi({ platformStore });
+  const rejectedQueue = await request(
+    afterRejectApi,
+    "GET",
+    `/agent/draft-candidates?accountSetId=${encodeURIComponent(accountSet.body.id)}&status=rejected`
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(queue.status, 200);
+  assert.equal(queue.body.total, 1);
+  assert.equal(queue.body.items[0].id, candidate.body.id);
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.llmDraftRun.id, candidate.body.llmDraftRun.id);
+  assert.equal(runs.status, 200);
+  assert.equal(runs.body.total, 1);
+  assert.equal(runs.body.items[0].id, candidate.body.llmDraftRun.id);
+  assert.equal(rejected.status, 200);
+  assert.equal(rejected.body.status, "rejected");
+  assert.equal(rejectedQueue.body.total, 1);
+  assert.equal(rejectedQueue.body.items[0].rejectedBy, "finance-reviewer");
+});
+
+test("Phase 6 Agent actions move through approval and replay without mutating business data", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6ACT",
+      name: "Phase 6 Agent Actions",
+      companyName: "Phase 6 Action Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-action-account-set"
+  );
+
+  const action = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: accountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: ["period:2026-01"],
+      payload: { fiscalYear: 2026, periodNo: 1 },
+      requestedBy: "agent-user"
+    },
+    "phase6-agent-action-create"
+  );
+
+  assert.equal(action.status, 201);
+  assert.equal(action.body.status, "dry_run_completed");
+  assert.equal(action.body.riskLevel, "high");
+  assert.equal(action.body.approvalRequired, true);
+  assert.deepEqual(action.body.approvalProgress, { approvedCount: 0, requiredCount: 2, remainingCount: 2 });
+  assert.equal(action.body.dryRunResult.status, "ready_for_approval");
+  assert.equal(action.body.executionResult, null);
+  assert.deepEqual(action.body.evidenceRefs, ["period:2026-01"]);
+  assert.equal(api.state.vouchers.size, 0);
+
+  const loaded = await request(api, "GET", `/agent-actions/${encodeURIComponent(action.body.id)}`);
+  assert.equal(loaded.status, 200);
+  assert.equal(loaded.body.id, action.body.id);
+
+  const submitted = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/submit`,
+    { submittedBy: "agent-user", approvalComment: "请审批月结检查" },
+    "phase6-agent-action-submit"
+  );
+  assert.equal(submitted.status, 200);
+  assert.equal(submitted.body.status, "submitted_for_approval");
+
+  const approved = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+    { approvedBy: "controller", approvalComment: "dry-run evidence accepted" },
+    "phase6-agent-action-approve"
+  );
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.status, "submitted_for_approval");
+  assert.equal(approved.body.approvalHistory.length, 1);
+  assert.deepEqual(approved.body.approvalProgress, { approvedCount: 1, requiredCount: 2, remainingCount: 1 });
+
+  const duplicateApproval = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+    { approvedBy: "controller", approvalComment: "duplicate approval should be blocked" },
+    "phase6-agent-action-duplicate-approve"
+  );
+  assert.equal(duplicateApproval.status, 409);
+  assert.equal(duplicateApproval.body.code, "AGENT_APPROVAL_DUPLICATE_APPROVER");
+
+  const executeBeforeSecondApproval = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/execute`,
+    { executedBy: "controller" },
+    "phase6-agent-action-execute-before-second-approval"
+  );
+  assert.equal(executeBeforeSecondApproval.status, 409);
+
+  const secondApproval = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+    { approvedBy: "cfo", approvalComment: "second approval accepted" },
+    "phase6-agent-action-second-approve"
+  );
+  assert.equal(secondApproval.status, 200);
+  assert.equal(secondApproval.body.status, "approved");
+  assert.equal(secondApproval.body.approvalHistory.length, 2);
+  assert.deepEqual(secondApproval.body.approvalProgress, { approvedCount: 2, requiredCount: 2, remainingCount: 0 });
+
+  const executeWithoutUserToken = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/execute`,
+    { executedBy: "controller" },
+    "phase6-agent-action-execute"
+  );
+  assert.equal(executeWithoutUserToken.status, 409);
+  assert.equal(executeWithoutUserToken.body.code, "AGENT_ACTION_USER_TOKEN_REQUIRED");
+
+  const executed = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/execute`,
+    { executedBy: "controller", userTokenConfirmed: true },
+    "phase6-agent-action-execute-confirmed"
+  );
+  assert.equal(executed.status, 200);
+  assert.equal(executed.body.status, "executed");
+  assert.equal(executed.body.executionResult.status, "recorded_without_business_mutation");
+  assert.equal(executed.body.executionResult.userTokenConfirmed, true);
+  assert.equal(api.state.vouchers.size, 0);
+
+  const loadedAfterExecution = await request(api, "GET", `/agent-actions/${encodeURIComponent(action.body.id)}`);
+  assert.equal(loadedAfterExecution.status, 200);
+  assert.equal(loadedAfterExecution.body.auditSummary.status, "executed");
+  assert.equal(loadedAfterExecution.body.auditSummary.toolName, "run_close_checklist");
+  assert.deepEqual(loadedAfterExecution.body.auditSummary.approvals, {
+    approvedCount: 2,
+    requiredCount: 2,
+    remainingCount: 0
+  });
+  assert.deepEqual(loadedAfterExecution.body.auditSummary.evidence, {
+    snapshotCount: 0,
+    verificationStatus: "verified",
+    failedCount: 0
+  });
+  assert.equal(loadedAfterExecution.body.auditSummary.dryRunStatus, "ready_for_approval");
+  assert.equal(loadedAfterExecution.body.auditSummary.executionStatus, "recorded_without_business_mutation");
+  assert.equal(loadedAfterExecution.body.auditSummary.mutationState, "executed_without_business_mutation");
+  assert.deepEqual(loadedAfterExecution.body.auditSummary.nextActions, ["reverse"]);
+  assert.deepEqual(loadedAfterExecution.body.auditSummary.replay.eventTypes, [
+    "input_received",
+    "dry_run_completed",
+    "submitted_for_approval",
+    "approved",
+    "approved",
+    "evidence_verified",
+    "executed"
+  ]);
+
+  const replay = await request(api, "GET", `/agent-actions/${encodeURIComponent(action.body.id)}/replay`);
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.auditSummary.agentActionId, action.body.id);
+  assert.equal(replay.body.auditSummary.replay.eventCount, 7);
+  assert.equal(replay.body.auditSummary.replay.lastEventType, "executed");
+  assert.deepEqual(
+    replay.body.events.map((event) => event.eventType),
+    ["input_received", "dry_run_completed", "submitted_for_approval", "approved", "approved", "evidence_verified", "executed"]
+  );
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "agent_action.execute" && log.objectType === "agent_action" && log.objectId === action.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent actions approvals and replay persist through platform store restarts", async () => {
+  const accountSets = new Map();
+  const agentActions = new Map();
+  const replayEventsByAction = new Map();
+  const byCreatedDesc = (left, right) => String(right.createdAt).localeCompare(String(left.createdAt));
+  const platformStore = {
+    createAccountSet: async (accountSet) => {
+      accountSets.set(accountSet.id, accountSet);
+      return accountSet;
+    },
+    findAccountSet: async (identifier) =>
+      [...accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier) ?? null,
+    listAccountSets: async () => [...accountSets.values()],
+    listAccessibleAccountSets: async () => [...accountSets.values()],
+    canAccessAccountSet: async (_actorId, accountSetId) => accountSets.has(accountSetId),
+    createAgentAction: async (action) => {
+      agentActions.set(action.id, structuredClone(action));
+      return structuredClone(agentActions.get(action.id));
+    },
+    updateAgentAction: async (action) => {
+      agentActions.set(action.id, structuredClone(action));
+      return structuredClone(agentActions.get(action.id));
+    },
+    findAgentAction: async (id) => structuredClone(agentActions.get(id) ?? null),
+    listAgentActions: async (accountSetId = null, filters = {}) =>
+      [...agentActions.values()]
+        .filter((action) => (!accountSetId || action.accountSetId === accountSetId) && (!filters.status || action.status === filters.status))
+        .filter((action) => !filters.riskLevel || action.riskLevel === filters.riskLevel)
+        .filter((action) => !filters.toolName || action.toolName === filters.toolName)
+        .sort(byCreatedDesc)
+        .map((action) => structuredClone(action)),
+    replaceAgentReplayEvents: async (agentActionId, events) => {
+      replayEventsByAction.set(agentActionId, events.map((event) => structuredClone(event)));
+      return replayEventsByAction.get(agentActionId).map((event) => structuredClone(event));
+    },
+    listAgentReplayEvents: async (agentActionId) => (replayEventsByAction.get(agentActionId) ?? []).map((event) => structuredClone(event))
+  };
+  const firstApi = createApi({ platformStore });
+  const accountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6AAP",
+      name: "Phase 6 Agent Action Persisted",
+      companyName: "Phase 6 Agent Action Persisted Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-persisted-agent-action-account-set"
+  );
+  const created = await request(
+    firstApi,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: accountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: ["period:2026-06"],
+      payload: { fiscalYear: 2026, periodNo: 6 },
+      requestedBy: "agent-user"
+    },
+    "phase6-persisted-agent-action-create"
+  );
+  const secondApi = createApi({ platformStore });
+  const loaded = await request(secondApi, "GET", `/agent-actions/${encodeURIComponent(created.body.id)}`);
+  const submitted = await request(
+    secondApi,
+    "POST",
+    `/agent-actions/${encodeURIComponent(created.body.id)}/submit`,
+    { submittedBy: "agent-user", approvalComment: "submit after restart" },
+    "phase6-persisted-agent-action-submit"
+  );
+  const thirdApi = createApi({ platformStore });
+  const firstApproval = await request(
+    thirdApi,
+    "POST",
+    `/agent-actions/${encodeURIComponent(created.body.id)}/approve`,
+    { approvedBy: "controller", approvalComment: "first persisted approval" },
+    "phase6-persisted-agent-action-approve-1"
+  );
+  const fourthApi = createApi({ platformStore });
+  const secondApproval = await request(
+    fourthApi,
+    "POST",
+    `/agent-actions/${encodeURIComponent(created.body.id)}/approve`,
+    { approvedBy: "cfo", approvalComment: "second persisted approval" },
+    "phase6-persisted-agent-action-approve-2"
+  );
+  const executed = await request(
+    fourthApi,
+    "POST",
+    `/agent-actions/${encodeURIComponent(created.body.id)}/execute`,
+    { executedBy: "controller", userTokenConfirmed: true },
+    "phase6-persisted-agent-action-execute"
+  );
+  const finalApi = createApi({ platformStore });
+  const queue = await request(finalApi, "GET", `/agent-actions?accountSetId=${encodeURIComponent(accountSet.body.id)}&status=executed`);
+  const replay = await request(finalApi, "GET", `/agent-actions/${encodeURIComponent(created.body.id)}/replay`);
+
+  assert.equal(created.status, 201);
+  assert.equal(loaded.status, 200);
+  assert.equal(loaded.body.auditSummary.replay.eventCount, 2);
+  assert.equal(submitted.status, 200);
+  assert.equal(firstApproval.status, 200);
+  assert.equal(secondApproval.status, 200);
+  assert.equal(executed.status, 200);
+  assert.equal(executed.body.status, "executed");
+  assert.equal(queue.status, 200);
+  assert.equal(queue.body.total, 1);
+  assert.equal(queue.body.items[0].id, created.body.id);
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.auditSummary.replay.eventCount, 7);
+  assert.deepEqual(
+    replay.body.events.map((event) => event.eventType),
+    ["input_received", "dry_run_completed", "submitted_for_approval", "approved", "approved", "evidence_verified", "executed"]
+  );
+});
+
+test("Phase 6 restore drill blocks external Agent executions after approval", async () => {
+  const api = createApi({ restoreDrill: true });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6RDS",
+      name: "Phase 6 Restore Drill Sandbox",
+      companyName: "Phase 6 Restore Drill Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-restore-drill-account-set"
+  );
+
+  const action = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: accountSet.body.id,
+      toolName: "execute_approved_payment",
+      dryRun: true,
+      evidenceRefs: ["payment:restore-drill"],
+      payload: { paymentId: "payment:restore-drill" },
+      requestedBy: "agent-user"
+    },
+    "phase6-restore-drill-action"
+  );
+  assert.equal(action.status, 201);
+  assert.equal(action.body.actionKind, "external_execution");
+
+  await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/submit`,
+    { submittedBy: "agent-user", approvalComment: "restore drill external boundary test" },
+    "phase6-restore-drill-submit"
+  );
+  await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+    { approvedBy: "controller", approvalComment: "first approval" },
+    "phase6-restore-drill-approve-1"
+  );
+  const approved = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+    { approvedBy: "cfo", approvalComment: "second approval" },
+    "phase6-restore-drill-approve-2"
+  );
+  assert.equal(approved.body.status, "approved");
+
+  const blocked = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/execute`,
+    { executedBy: "controller", userTokenConfirmed: true },
+    "phase6-restore-drill-execute"
+  );
+
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.code, "RESTORE_DRILL_OUTBOUND_BLOCKED");
+  const stillApproved = api.state.agentActions.get(action.body.id);
+  assert.equal(stillApproved.status, "approved");
+  assert.equal(stillApproved.executionResult, null);
+  assert.ok(
+    api.state.agentReplayEvents.some(
+      (event) => event.agentActionId === action.body.id && event.eventType === "restore_drill_outbound_blocked"
+    )
+  );
+});
+
+test("Phase 6 Ops backup jobs create auditable manifests and restore dry-runs require restore-drill sandbox", async () => {
+  const api = createApi({ restoreDrill: true });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6OPS",
+      name: "Phase 6 Ops Jobs",
+      companyName: "Phase 6 Ops Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-ops-account-set"
+  );
+
+  const backup = await request(
+    api,
+    "POST",
+    "/ops/backups",
+    {
+      accountSetId: accountSet.body.id,
+      backupType: "full",
+      includeAttachments: true,
+      retentionDays: 30,
+      requestedBy: "ops-user"
+    },
+    "phase6-ops-backup"
+  );
+
+  assert.equal(backup.status, 201);
+  assert.equal(backup.body.accountSetId, accountSet.body.id);
+  assert.equal(backup.body.backupType, "full");
+  assert.equal(backup.body.status, "completed");
+  assert.equal(backup.body.businessMutation, false);
+  assert.equal(backup.body.manifest.accountSetId, accountSet.body.id);
+  assert.equal(backup.body.manifest.tableCounts.vouchers, 0);
+  assert.equal(backup.body.attachmentHashVerification.status, "completed_empty");
+  assert.match(backup.body.checksum, /^sha256:/);
+  assert.equal(api.state.backupJobs.size, 1);
+
+  const backups = await request(api, "GET", `/ops/backups?accountSetId=${encodeURIComponent(accountSet.body.id)}`);
+  assert.equal(backups.status, 200);
+  assert.equal(backups.body.total, 1);
+  assert.equal(backups.body.items[0].id, backup.body.id);
+
+  const restore = await request(
+    api,
+    "POST",
+    "/ops/restores/execute",
+    {
+      accountSetId: accountSet.body.id,
+      backupJobId: backup.body.id,
+      dryRun: true,
+      targetEnvironment: "restore_drill",
+      restorePointLabel: "phase6-sandbox-drill",
+      requestedBy: "ops-user"
+    },
+    "phase6-ops-restore"
+  );
+
+  assert.equal(restore.status, 201);
+  assert.equal(restore.body.accountSetId, accountSet.body.id);
+  assert.equal(restore.body.sourceBackupJobId, backup.body.id);
+  assert.equal(restore.body.status, "dry_run_completed");
+  assert.equal(restore.body.restoreMode, "silent_sandbox");
+  assert.equal(restore.body.businessMutation, false);
+  assert.equal(restore.body.outboundBlocked, true);
+  assert.deepEqual(restore.body.blockedChannels, ["webhook", "email", "bank_api"]);
+  assert.equal(restore.body.impactScope.accountSetId, accountSet.body.id);
+  assert.equal(api.state.restoreJobs.size, 1);
+  assert.ok(api.state.auditLogs.some((log) => log.action === "backup_job.create" && log.objectId === backup.body.id));
+  assert.ok(api.state.auditLogs.some((log) => log.action === "restore_job.dry_run" && log.objectId === restore.body.id));
+
+  const restores = await request(api, "GET", `/ops/restores?accountSetId=${encodeURIComponent(accountSet.body.id)}`);
+  assert.equal(restores.status, 200);
+  assert.equal(restores.body.total, 1);
+  assert.equal(restores.body.items[0].id, restore.body.id);
+
+  const liveApi = createApi();
+  const liveAccountSet = await request(
+    liveApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6OPL",
+      name: "Phase 6 Ops Live",
+      companyName: "Phase 6 Ops Live Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-ops-live-account-set"
+  );
+  const liveBackup = await request(
+    liveApi,
+    "POST",
+    "/ops/backups",
+    {
+      accountSetId: liveAccountSet.body.id,
+      backupType: "full",
+      requestedBy: "ops-user"
+    },
+    "phase6-ops-live-backup"
+  );
+  const blockedRestore = await request(
+    liveApi,
+    "POST",
+    "/ops/restores/execute",
+    {
+      accountSetId: liveAccountSet.body.id,
+      backupJobId: liveBackup.body.id,
+      dryRun: true,
+      targetEnvironment: "restore_drill",
+      requestedBy: "ops-user"
+    },
+    "phase6-ops-live-restore"
+  );
+
+  assert.equal(blockedRestore.status, 409);
+  assert.equal(blockedRestore.body.code, "RESTORE_DRILL_REQUIRED");
+});
+
+test("Phase 6 Ops backup and restore jobs persist through platform store restarts", async () => {
+  const accountSets = new Map();
+  const backupJobs = new Map();
+  const restoreJobs = new Map();
+  const byCreatedDesc = (left, right) => String(right.createdAt).localeCompare(String(left.createdAt));
+  const platformStore = {
+    createAccountSet: async (accountSet) => {
+      accountSets.set(accountSet.id, accountSet);
+      return accountSet;
+    },
+    findAccountSet: async (identifier) =>
+      [...accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier) ?? null,
+    listAccountSets: async () => [...accountSets.values()],
+    listAccessibleAccountSets: async () => [...accountSets.values()],
+    canAccessAccountSet: async (_actorId, accountSetId) => accountSets.has(accountSetId),
+    createBackupJob: async (job) => {
+      backupJobs.set(job.id, { ...job });
+      return backupJobs.get(job.id);
+    },
+    listBackupJobs: async (accountSetId = null, { status = null } = {}) =>
+      [...backupJobs.values()]
+        .filter((job) => (!accountSetId || job.accountSetId === accountSetId) && (!status || job.status === status))
+        .sort(byCreatedDesc),
+    findBackupJob: async (identifier) =>
+      [...backupJobs.values()].find((job) => job.id === identifier || job.snapshotRef === identifier) ?? null,
+    createRestoreJob: async (job) => {
+      restoreJobs.set(job.id, { ...job });
+      return restoreJobs.get(job.id);
+    },
+    listRestoreJobs: async (accountSetId = null, { status = null } = {}) =>
+      [...restoreJobs.values()]
+        .filter((job) => (!accountSetId || job.accountSetId === accountSetId) && (!status || job.status === status))
+        .sort(byCreatedDesc)
+  };
+  const firstApi = createApi({ platformStore, restoreDrill: true });
+  const accountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6OPP",
+      name: "Phase 6 Ops Persisted",
+      companyName: "Phase 6 Ops Persisted Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-ops-persisted-account-set"
+  );
+  const backup = await request(
+    firstApi,
+    "POST",
+    "/ops/backups",
+    {
+      accountSetId: accountSet.body.id,
+      backupType: "full",
+      includeAttachments: true,
+      requestedBy: "ops-user"
+    },
+    "phase6-ops-persisted-backup"
+  );
+  const firstRestore = await request(
+    firstApi,
+    "POST",
+    "/ops/restores/execute",
+    {
+      accountSetId: accountSet.body.id,
+      backupJobId: backup.body.id,
+      dryRun: true,
+      targetEnvironment: "restore_drill",
+      requestedBy: "ops-user"
+    },
+    "phase6-ops-persisted-restore"
+  );
+  const restartedApi = createApi({ platformStore, restoreDrill: true });
+  const persistedBackups = await request(
+    restartedApi,
+    "GET",
+    `/ops/backups?accountSetId=${encodeURIComponent(accountSet.body.id)}`
+  );
+  const restartedRestore = await request(
+    restartedApi,
+    "POST",
+    "/ops/restores/execute",
+    {
+      accountSetId: accountSet.body.id,
+      backupJobId: backup.body.id,
+      dryRun: true,
+      targetEnvironment: "restore_drill",
+      restorePointLabel: "phase6-restarted-drill",
+      requestedBy: "ops-user"
+    },
+    "phase6-ops-restarted-restore"
+  );
+  const persistedRestores = await request(
+    restartedApi,
+    "GET",
+    `/ops/restores?accountSetId=${encodeURIComponent(accountSet.body.id)}`
+  );
+
+  assert.equal(backup.status, 201);
+  assert.equal(firstRestore.status, 201);
+  assert.equal(persistedBackups.status, 200);
+  assert.equal(persistedBackups.body.total, 1);
+  assert.equal(persistedBackups.body.items[0].id, backup.body.id);
+  assert.equal(persistedBackups.body.items[0].manifest.accountSetCode, "P6OPP");
+  assert.equal(restartedRestore.status, 201);
+  assert.equal(restartedRestore.body.sourceBackupJobId, backup.body.id);
+  assert.equal(persistedRestores.status, 200);
+  assert.equal(persistedRestores.body.total, 2);
+  assert.ok(persistedRestores.body.items.some((item) => item.id === firstRestore.body.id));
+  assert.ok(persistedRestores.body.items.some((item) => item.id === restartedRestore.body.id));
+});
+
+test("Phase 6 migration jobs dry-run and persist through platform store restarts", async () => {
+  const accountSets = new Map();
+  const migrationJobs = new Map();
+  const byCreatedDesc = (left, right) => String(right.createdAt).localeCompare(String(left.createdAt));
+  const platformStore = {
+    createAccountSet: async (accountSet) => {
+      accountSets.set(accountSet.id, structuredClone(accountSet));
+      return structuredClone(accountSet);
+    },
+    findAccountSet: async (identifier) =>
+      structuredClone([...accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier) ?? null),
+    listAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    listAccessibleAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    canAccessAccountSet: async (_actorId, accountSetId) => accountSets.has(accountSetId),
+    createMigrationJob: async (job) => {
+      migrationJobs.set(job.id, structuredClone(job));
+      return structuredClone(migrationJobs.get(job.id));
+    },
+    updateMigrationJob: async (job) => {
+      migrationJobs.set(job.id, structuredClone(job));
+      return structuredClone(migrationJobs.get(job.id));
+    },
+    findMigrationJob: async (id) => structuredClone(migrationJobs.get(id) ?? null),
+    listMigrationJobs: async (accountSetId = null, { status = null, jobType = null } = {}) =>
+      [...migrationJobs.values()]
+        .filter((job) => (!accountSetId || job.accountSetId === accountSetId) && (!status || job.status === status))
+        .filter((job) => !jobType || job.jobType === jobType)
+        .sort(byCreatedDesc)
+        .map((job) => structuredClone(job))
+  };
+  const firstApi = createApi({ platformStore });
+  const accountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6MIG",
+      name: "Phase 6 Migration",
+      companyName: "Phase 6 Migration Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-migration-account-set"
+  );
+  const job = await request(
+    firstApi,
+    "POST",
+    "/ops/migrations/jobs",
+    {
+      accountSetId: accountSet.body.id,
+      jobType: "opening_balance",
+      sourceType: "excel",
+      targetObjectType: "opening_balance",
+      fieldMapping: {
+        accountCode: "accountCode",
+        debit: "debit",
+        credit: "credit"
+      },
+      sourceRows: [
+        { accountCode: "1002", debit: 500, credit: 0 },
+        { accountCode: "3001", debit: 0, credit: 500 }
+      ],
+      requestedBy: "migration-user"
+    },
+    "phase6-migration-job"
+  );
+  const dryRun = await request(
+    firstApi,
+    "POST",
+    `/ops/migrations/jobs/${encodeURIComponent(job.body.id)}/dry-run`,
+    {
+      requestedBy: "migration-user"
+    },
+    "phase6-migration-dry-run"
+  );
+  const restartedApi = createApi({ platformStore });
+  const listed = await request(
+    restartedApi,
+    "GET",
+    `/ops/migrations/jobs?accountSetId=${encodeURIComponent(accountSet.body.id)}&status=dry_run_completed&jobType=opening_balance`
+  );
+
+  assert.equal(job.status, 201);
+  assert.equal(job.body.status, "draft");
+  assert.equal(dryRun.status, 200);
+  assert.equal(dryRun.body.status, "dry_run_completed");
+  assert.equal(dryRun.body.businessMutation, false);
+  assert.equal(dryRun.body.validation.status, "passed");
+  assert.equal(dryRun.body.validation.trialBalance.difference, 0);
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.total, 1);
+  assert.equal(listed.body.items[0].id, job.body.id);
+  assert.equal(listed.body.items[0].validation.status, "passed");
+});
+
+test("Phase 6 migration import writes approved opening balances and persists import summary", async () => {
+  const accountSets = new Map();
+  const migrationJobs = new Map();
+  const openingBalances = new Map();
+  const byCreatedDesc = (left, right) => String(right.createdAt).localeCompare(String(left.createdAt));
+  const platformStore = {
+    createAccountSet: async (accountSet) => {
+      accountSets.set(accountSet.id, structuredClone(accountSet));
+      return structuredClone(accountSet);
+    },
+    findAccountSet: async (identifier) =>
+      structuredClone([...accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier) ?? null),
+    listAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    listAccessibleAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    canAccessAccountSet: async (_actorId, accountSetId) => accountSets.has(accountSetId),
+    createMigrationJob: async (job) => {
+      migrationJobs.set(job.id, structuredClone(job));
+      return structuredClone(migrationJobs.get(job.id));
+    },
+    updateMigrationJob: async (job) => {
+      migrationJobs.set(job.id, structuredClone(job));
+      return structuredClone(migrationJobs.get(job.id));
+    },
+    findMigrationJob: async (id) => structuredClone(migrationJobs.get(id) ?? null),
+    listMigrationJobs: async (accountSetId = null, { status = null, jobType = null } = {}) =>
+      [...migrationJobs.values()]
+        .filter((job) => (!accountSetId || job.accountSetId === accountSetId) && (!status || job.status === status))
+        .filter((job) => !jobType || job.jobType === jobType)
+        .sort(byCreatedDesc)
+        .map((job) => structuredClone(job)),
+    saveOpeningBalance: async (openingBalance) => {
+      const saved = {
+        ...structuredClone(openingBalance),
+        id: `opening-balance:${openingBalance.accountCode}:${openingBalance.fiscalYear}:${openingBalance.periodNo}`
+      };
+      openingBalances.set(`${openingBalance.accountCode}:${openingBalance.fiscalYear}:${openingBalance.periodNo}`, saved);
+      return structuredClone(saved);
+    },
+    listOpeningBalances: async () => [...openingBalances.values()].map((balance) => structuredClone(balance))
+  };
+  const firstApi = createApi({ platformStore });
+  const accountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6IMPO",
+      name: "Phase 6 Import",
+      companyName: "Phase 6 Import Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-import-account-set"
+  );
+  await request(
+    firstApi,
+    "POST",
+    "/accounts",
+    {
+      accountSetId: accountSet.body.id,
+      code: "1002",
+      name: "Bank Deposit",
+      accountType: "asset",
+      normalBalance: "debit",
+      isCashEquivalent: true
+    },
+    "phase6-import-account-bank"
+  );
+  await request(
+    firstApi,
+    "POST",
+    "/accounts",
+    {
+      accountSetId: accountSet.body.id,
+      code: "3001",
+      name: "Paid-in Capital",
+      accountType: "equity",
+      normalBalance: "credit"
+    },
+    "phase6-import-account-capital"
+  );
+  const job = await request(
+    firstApi,
+    "POST",
+    "/ops/migrations/jobs",
+    {
+      accountSetId: accountSet.body.id,
+      jobType: "opening_balance",
+      sourceType: "excel",
+      targetObjectType: "opening_balance",
+      fieldMapping: {
+        accountCode: "accountCode",
+        debit: "debit",
+        credit: "credit"
+      },
+      sourceRows: [
+        { accountCode: "1002", debit: 900, credit: 0 },
+        { accountCode: "3001", debit: 0, credit: 900 }
+      ],
+      requestedBy: "migration-user"
+    },
+    "phase6-import-job"
+  );
+  await request(
+    firstApi,
+    "POST",
+    `/ops/migrations/jobs/${encodeURIComponent(job.body.id)}/dry-run`,
+    {
+      requestedBy: "migration-user"
+    },
+    "phase6-import-dry-run"
+  );
+  const imported = await request(
+    firstApi,
+    "POST",
+    `/ops/migrations/jobs/${encodeURIComponent(job.body.id)}/import`,
+    {
+      fiscalYear: 2026,
+      periodNo: 1,
+      requestedBy: "migration-user"
+    },
+    "phase6-import-apply"
+  );
+  const restartedApi = createApi({ platformStore });
+  const balances = await request(restartedApi, "GET", "/opening-balances", null, null);
+  const importedJobs = await request(
+    restartedApi,
+    "GET",
+    `/ops/migrations/jobs?accountSetId=${encodeURIComponent(accountSet.body.id)}&status=imported&jobType=opening_balance`
+  );
+
+  assert.equal(imported.status, 200);
+  assert.equal(imported.body.status, "imported");
+  assert.equal(imported.body.businessMutation, true);
+  assert.equal(imported.body.importSummary.importedCount, 2);
+  assert.equal(imported.body.importSummary.targetObjectType, "opening_balance");
+  assert.equal(balances.status, 200);
+  assert.deepEqual(
+    balances.body.map((balance) => [balance.accountCode, balance.openingDebit, balance.openingCredit]).sort(),
+    [
+      ["1002", 900, 0],
+      ["3001", 0, 900]
+    ]
+  );
+  assert.equal(importedJobs.status, 200);
+  assert.equal(importedJobs.body.total, 1);
+  assert.equal(importedJobs.body.items[0].importSummary.importedCount, 2);
+});
+
+test("Phase 6 migration import writes approved partner master data and persists import summary", async () => {
+  const accountSets = new Map();
+  const migrationJobs = new Map();
+  const partners = new Map();
+  const byCreatedDesc = (left, right) => String(right.createdAt).localeCompare(String(left.createdAt));
+  const platformStore = {
+    createAccountSet: async (accountSet) => {
+      accountSets.set(accountSet.id, structuredClone(accountSet));
+      return structuredClone(accountSet);
+    },
+    findAccountSet: async (identifier) =>
+      structuredClone([...accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier) ?? null),
+    listAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    listAccessibleAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    canAccessAccountSet: async (_actorId, accountSetId) => accountSets.has(accountSetId),
+    createMigrationJob: async (job) => {
+      migrationJobs.set(job.id, structuredClone(job));
+      return structuredClone(migrationJobs.get(job.id));
+    },
+    updateMigrationJob: async (job) => {
+      migrationJobs.set(job.id, structuredClone(job));
+      return structuredClone(migrationJobs.get(job.id));
+    },
+    findMigrationJob: async (id) => structuredClone(migrationJobs.get(id) ?? null),
+    listMigrationJobs: async (accountSetId = null, { status = null, jobType = null } = {}) =>
+      [...migrationJobs.values()]
+        .filter((job) => (!accountSetId || job.accountSetId === accountSetId) && (!status || job.status === status))
+        .filter((job) => !jobType || job.jobType === jobType)
+        .sort(byCreatedDesc)
+        .map((job) => structuredClone(job)),
+    createPartner: async (partner) => {
+      partners.set(partner.id, structuredClone(partner));
+      return structuredClone(partner);
+    },
+    listPartners: async (accountSetId, partnerType = null) =>
+      [...partners.values()]
+        .filter((partner) => partner.accountSetId === accountSetId)
+        .filter((partner) => !partnerType || partner.partnerType === partnerType || partner.partnerType === "both")
+        .sort((left, right) => left.code.localeCompare(right.code))
+        .map((partner) => structuredClone(partner)),
+    findPartner: async (identifier) =>
+      structuredClone([...partners.values()].find((partner) => partner.id === identifier || partner.code === identifier) ?? null)
+  };
+  const firstApi = createApi({ platformStore });
+  const accountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6PMI",
+      name: "Phase 6 Partner Migration",
+      companyName: "Phase 6 Partner Migration Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-partner-import-account-set"
+  );
+  const job = await request(
+    firstApi,
+    "POST",
+    "/ops/migrations/jobs",
+    {
+      accountSetId: accountSet.body.id,
+      jobType: "partner_master",
+      sourceType: "legacy_erp",
+      targetObjectType: "partner",
+      fieldMapping: {
+        code: "legacyCode",
+        name: "partnerName",
+        partnerType: "type",
+        taxRate: "taxRate",
+        creditLimit: "creditLimit",
+        paymentTerms: "paymentTerms",
+        settlementMethod: "settlementMethod",
+        isEnabled: "enabled"
+      },
+      sourceRows: [
+        {
+          legacyCode: "S-P6-001",
+          partnerName: "Phase 6 Imported Supplier",
+          type: "supplier",
+          taxRate: 0.13,
+          creditLimit: 0,
+          paymentTerms: "30D",
+          settlementMethod: "bank",
+          enabled: true
+        },
+        {
+          legacyCode: "C-P6-001",
+          partnerName: "Phase 6 Imported Customer",
+          type: "customer",
+          taxRate: 0.06,
+          creditLimit: 5000,
+          paymentTerms: "COD",
+          settlementMethod: "bank",
+          enabled: true
+        }
+      ],
+      requestedBy: "migration-user"
+    },
+    "phase6-partner-import-job"
+  );
+  const dryRun = await request(
+    firstApi,
+    "POST",
+    `/ops/migrations/jobs/${encodeURIComponent(job.body.id)}/dry-run`,
+    {
+      requestedBy: "migration-user"
+    },
+    "phase6-partner-import-dry-run"
+  );
+  const imported = await request(
+    firstApi,
+    "POST",
+    `/ops/migrations/jobs/${encodeURIComponent(job.body.id)}/import`,
+    {
+      requestedBy: "migration-user"
+    },
+    "phase6-partner-import-apply"
+  );
+  const restartedApi = createApi({ platformStore });
+  const partnerList = await request(restartedApi, "GET", `/partners?accountSetId=${encodeURIComponent(accountSet.body.id)}`);
+  const importedJobs = await request(
+    restartedApi,
+    "GET",
+    `/ops/migrations/jobs?accountSetId=${encodeURIComponent(accountSet.body.id)}&status=imported&jobType=partner_master`
+  );
+
+  assert.equal(job.status, 201);
+  assert.equal(dryRun.status, 200);
+  assert.equal(dryRun.body.validation.status, "passed");
+  assert.equal(imported.status, 200);
+  assert.equal(imported.body.status, "imported");
+  assert.equal(imported.body.businessMutation, true);
+  assert.equal(imported.body.importSummary.targetObjectType, "partner");
+  assert.equal(imported.body.importSummary.importedCount, 2);
+  assert.equal(partnerList.status, 200);
+  assert.deepEqual(
+    partnerList.body.map((partner) => [partner.code, partner.name, partner.partnerType]).sort(),
+    [
+      ["C-P6-001", "Phase 6 Imported Customer", "customer"],
+      ["S-P6-001", "Phase 6 Imported Supplier", "supplier"]
+    ]
+  );
+  assert.equal(importedJobs.status, 200);
+  assert.equal(importedJobs.body.total, 1);
+  assert.equal(importedJobs.body.items[0].importSummary.importedCount, 2);
+  assert.equal(importedJobs.body.items[0].importSummary.objectIds.length, 2);
+});
+
+test("Phase 6 migration import writes approved inventory item master data", async () => {
+  const accountSets = new Map();
+  const migrationJobs = new Map();
+  const inventoryItems = new Map();
+  const byCreatedDesc = (left, right) => String(right.createdAt).localeCompare(String(left.createdAt));
+  const platformStore = {
+    createAccountSet: async (accountSet) => {
+      accountSets.set(accountSet.id, structuredClone(accountSet));
+      return structuredClone(accountSet);
+    },
+    findAccountSet: async (identifier) =>
+      structuredClone([...accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier) ?? null),
+    listAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    listAccessibleAccountSets: async () => [...accountSets.values()].map((accountSet) => structuredClone(accountSet)),
+    canAccessAccountSet: async (_actorId, accountSetId) => accountSets.has(accountSetId),
+    createMigrationJob: async (job) => {
+      migrationJobs.set(job.id, structuredClone(job));
+      return structuredClone(migrationJobs.get(job.id));
+    },
+    updateMigrationJob: async (job) => {
+      migrationJobs.set(job.id, structuredClone(job));
+      return structuredClone(migrationJobs.get(job.id));
+    },
+    findMigrationJob: async (id) => structuredClone(migrationJobs.get(id) ?? null),
+    listMigrationJobs: async (accountSetId = null, { status = null, jobType = null } = {}) =>
+      [...migrationJobs.values()]
+        .filter((job) => (!accountSetId || job.accountSetId === accountSetId) && (!status || job.status === status))
+        .filter((job) => !jobType || job.jobType === jobType)
+        .sort(byCreatedDesc)
+        .map((job) => structuredClone(job)),
+    createInventoryItem: async (item) => {
+      inventoryItems.set(item.id, structuredClone(item));
+      return structuredClone(item);
+    },
+    listInventoryItems: async (accountSetId) =>
+      [...inventoryItems.values()]
+        .filter((item) => item.accountSetId === accountSetId)
+        .sort((left, right) => left.code.localeCompare(right.code))
+        .map((item) => structuredClone(item)),
+    findInventoryItem: async (identifier) =>
+      structuredClone([...inventoryItems.values()].find((item) => item.id === identifier || item.code === identifier) ?? null)
+  };
+  const firstApi = createApi({ platformStore });
+  const accountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6IIM",
+      name: "Phase 6 Inventory Item Migration",
+      companyName: "Phase 6 Inventory Migration Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-inventory-item-import-account-set"
+  );
+  const job = await request(
+    firstApi,
+    "POST",
+    "/ops/migrations/jobs",
+    {
+      accountSetId: accountSet.body.id,
+      jobType: "inventory_item_master",
+      sourceType: "legacy_erp",
+      targetObjectType: "inventory_item",
+      fieldMapping: {
+        code: "legacySku",
+        name: "itemName",
+        unit: "uom",
+        category: "category",
+        itemType: "itemType",
+        costMethod: "costMethod",
+        isBatchManaged: "batchManaged",
+        isManufactured: "manufactured"
+      },
+      sourceRows: [
+        {
+          legacySku: "RM-P6-001",
+          itemName: "Phase 6 Raw Material",
+          uom: "kg",
+          category: "raw",
+          itemType: "raw_material",
+          costMethod: "fifo",
+          batchManaged: true,
+          manufactured: false
+        },
+        {
+          legacySku: "FG-P6-001",
+          itemName: "Phase 6 Finished Good",
+          uom: "pcs",
+          category: "finished",
+          itemType: "finished_good",
+          costMethod: "moving_average",
+          batchManaged: false,
+          manufactured: true
+        }
+      ],
+      requestedBy: "migration-user"
+    },
+    "phase6-inventory-item-import-job"
+  );
+  const dryRun = await request(
+    firstApi,
+    "POST",
+    `/ops/migrations/jobs/${encodeURIComponent(job.body.id)}/dry-run`,
+    {
+      requestedBy: "migration-user"
+    },
+    "phase6-inventory-item-import-dry-run"
+  );
+  const imported = await request(
+    firstApi,
+    "POST",
+    `/ops/migrations/jobs/${encodeURIComponent(job.body.id)}/import`,
+    {
+      requestedBy: "migration-user"
+    },
+    "phase6-inventory-item-import-apply"
+  );
+  const restartedApi = createApi({ platformStore });
+  const itemList = await request(restartedApi, "GET", `/inventory-items?accountSetId=${encodeURIComponent(accountSet.body.id)}`);
+
+  assert.equal(job.status, 201);
+  assert.equal(dryRun.status, 200);
+  assert.equal(dryRun.body.validation.status, "passed");
+  assert.equal(imported.status, 200);
+  assert.equal(imported.body.status, "imported");
+  assert.equal(imported.body.businessMutation, true);
+  assert.equal(imported.body.importSummary.targetObjectType, "inventory_item");
+  assert.equal(imported.body.importSummary.importedCount, 2);
+  assert.equal(itemList.status, 200);
+  assert.deepEqual(
+    itemList.body.map((item) => [item.code, item.name, item.unit, item.costMethod, item.isBatchManaged, item.isManufactured]).sort(),
+    [
+      ["FG-P6-001", "Phase 6 Finished Good", "pcs", "moving_average", false, true],
+      ["RM-P6-001", "Phase 6 Raw Material", "kg", "fifo", true, false]
+    ]
+  );
+});
+
+test("Phase 6 Agent actions can be listed by account set and approval status", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6AQL",
+      name: "Phase 6 Agent Action Queue",
+      companyName: "Phase 6 Action Queue Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-action-queue-account-set"
+  );
+  const otherAccountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6AQO",
+      name: "Phase 6 Agent Action Other",
+      companyName: "Phase 6 Action Other Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-action-queue-other-account-set"
+  );
+
+  const dryRun = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: accountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: ["period:2026-01"],
+      payload: { fiscalYear: 2026, periodNo: 1 },
+      requestedBy: "agent-user"
+    },
+    "phase6-action-queue-dry-run"
+  );
+  const submitted = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: accountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: ["period:2026-02"],
+      payload: { fiscalYear: 2026, periodNo: 2 },
+      requestedBy: "agent-user"
+    },
+    "phase6-action-queue-submit-source"
+  );
+  await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(submitted.body.id)}/submit`,
+    { submittedBy: "agent-user", approvalComment: "ready for queue review" },
+    "phase6-action-queue-submit"
+  );
+  await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: otherAccountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: ["period:2026-03"],
+      payload: { fiscalYear: 2026, periodNo: 3 },
+      requestedBy: "other-agent"
+    },
+    "phase6-action-queue-other"
+  );
+
+  const queue = await request(api, "GET", `/agent-actions?accountSetId=${encodeURIComponent(accountSet.body.id)}`);
+  const submittedQueue = await request(
+    api,
+    "GET",
+    `/agent-actions?accountSetId=${encodeURIComponent(accountSet.body.id)}&status=submitted_for_approval`
+  );
+
+  assert.equal(queue.status, 200);
+  assert.equal(queue.body.accountSetId, accountSet.body.id);
+  assert.equal(queue.body.total, 2);
+  assert.deepEqual(
+    queue.body.items.map((item) => item.accountSetId),
+    [accountSet.body.id, accountSet.body.id]
+  );
+  assert.ok(queue.body.items.some((item) => item.id === dryRun.body.id && item.status === "dry_run_completed"));
+  assert.ok(queue.body.items.some((item) => item.id === submitted.body.id && item.status === "submitted_for_approval"));
+  assert.equal(submittedQueue.status, 200);
+  assert.equal(submittedQueue.body.total, 1);
+  assert.equal(submittedQueue.body.items[0].id, submitted.body.id);
+  assert.equal(submittedQueue.body.items[0].approvalProgress.remainingCount, 2);
+});
+
+test("Phase 6 Agent actions reverse executed records through the audit trail", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6REV",
+      name: "Phase 6 Agent Reverse",
+      companyName: "Phase 6 Reverse Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-agent-reverse-account-set"
+  );
+
+  const action = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: accountSet.body.id,
+      toolName: "run_close_checklist",
+      dryRun: true,
+      evidenceRefs: ["period:2026-01"],
+      payload: { fiscalYear: 2026, periodNo: 1 },
+      requestedBy: "agent-user"
+    },
+    "phase6-agent-reverse-action-create"
+  );
+  const reverseBeforeExecute = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/reverse`,
+    { reversedBy: "controller", reversalReason: "premature reversal should fail" },
+    "phase6-agent-reverse-before-execute"
+  );
+  await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/submit`,
+    { submittedBy: "agent-user" },
+    "phase6-agent-reverse-submit"
+  );
+  await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+    { approvedBy: "controller" },
+    "phase6-agent-reverse-approve-controller"
+  );
+  await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+    { approvedBy: "cfo" },
+    "phase6-agent-reverse-approve-cfo"
+  );
+  const executed = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/execute`,
+    { executedBy: "controller", userTokenConfirmed: true },
+    "phase6-agent-reverse-execute"
+  );
+  const reversed = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/reverse`,
+    { reversedBy: "controller", reversalReason: "rollback after execution review" },
+    "phase6-agent-reverse"
+  );
+  const reverseAgain = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(action.body.id)}/reverse`,
+    { reversedBy: "controller", reversalReason: "duplicate reversal should fail" },
+    "phase6-agent-reverse-duplicate"
+  );
+  const replay = await request(api, "GET", `/agent-actions/${encodeURIComponent(action.body.id)}/replay`);
+
+  assert.equal(reverseBeforeExecute.status, 409);
+  assert.equal(executed.status, 200);
+  assert.equal(executed.body.status, "executed");
+  assert.equal(reversed.status, 200);
+  assert.equal(reversed.body.status, "reversed");
+  assert.equal(reversed.body.reversalResult.status, "reversed_without_business_mutation");
+  assert.equal(reversed.body.reversalResult.reversedBy, "controller");
+  assert.equal(reversed.body.reversalResult.reversalReason, "rollback after execution review");
+  assert.equal(reverseAgain.status, 409);
+  assert.ok(replay.body.events.some((event) => event.eventType === "reversed"));
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "agent_action.reverse" && log.objectType === "agent_action" && log.objectId === action.body.id
+    )
+  );
+});
+
+test("Phase 6 Agent action execution blocks tampered attachment evidence", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "ais-agent-evidence-"));
+  const api = createApi({ attachmentStorageRoot: storageRoot });
+  try {
+    const accountSet = await request(
+      api,
+      "POST",
+      "/account-sets",
+      {
+        code: "P6EVD",
+        name: "Phase 6 Agent Evidence",
+        companyName: "Phase 6 Evidence Co.",
+        baseCurrency: "CNY",
+        accountingStandard: "Small Business Accounting Standards",
+        startYear: 2026,
+        startPeriod: 1
+      },
+      "phase6-evidence-account-set"
+    );
+    const evidenceContent = Buffer.from("period close proof");
+    const upload = await request(
+      api,
+      "POST",
+      "/attachments/upload",
+      {
+        accountSetId: accountSet.body.id,
+        filename: "close-evidence.txt",
+        contentType: "text/plain",
+        byteSize: evidenceContent.length,
+        contentBase64: evidenceContent.toString("base64"),
+        uploadedBy: "agent-user"
+      },
+      "phase6-evidence-upload"
+    );
+    const action = await request(
+      api,
+      "POST",
+      "/agent-actions",
+      {
+        accountSetId: accountSet.body.id,
+        toolName: "run_close_checklist",
+        dryRun: true,
+        evidenceRefs: [upload.body.id],
+        payload: { fiscalYear: 2026, periodNo: 1 },
+        requestedBy: "agent-user"
+      },
+      "phase6-evidence-action"
+    );
+
+    await request(
+      api,
+      "POST",
+      `/agent-actions/${encodeURIComponent(action.body.id)}/submit`,
+      { submittedBy: "agent-user" },
+      "phase6-evidence-submit"
+    );
+    await request(
+      api,
+      "POST",
+      `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+      { approvedBy: "controller" },
+      "phase6-evidence-approve"
+    );
+    await request(
+      api,
+      "POST",
+      `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+      { approvedBy: "cfo" },
+      "phase6-evidence-second-approve"
+    );
+    api.state.attachments.set(upload.body.id, {
+      ...api.state.attachments.get(upload.body.id),
+      checksum: "sha256:tampered-after-approval"
+    });
+
+    const executed = await request(
+      api,
+      "POST",
+      `/agent-actions/${encodeURIComponent(action.body.id)}/execute`,
+      { executedBy: "controller", userTokenConfirmed: true },
+      "phase6-evidence-execute"
+    );
+
+    assert.equal(upload.status, 201);
+    assert.equal(action.status, 201);
+    assert.deepEqual(action.body.evidenceRefs, [upload.body.id]);
+    assert.equal(action.body.evidenceSnapshots[0].checksum, upload.body.checksum);
+    assert.equal(executed.status, 409);
+    assert.equal(executed.body.code, "AGENT_EVIDENCE_HASH_MISMATCH");
+    assert.equal(api.state.agentActions.get(action.body.id).status, "approved");
+    assert.ok(
+      api.state.agentReplayEvents.some(
+        (event) => event.agentActionId === action.body.id && event.eventType === "evidence_verification_failed"
+      )
+    );
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Phase 6 Agent tool registry exposes schemas, risk, and approval policy", async () => {
+  const api = createApi();
+
+  const response = await request(api, "GET", "/agent-tools");
+
+  assert.equal(response.status, 200);
+  assert.ok(Array.isArray(response.body.tools));
+  const toolNames = response.body.tools.map((tool) => tool.name);
+  assert.ok(toolNames.includes("suggest_purchase_order_draft"));
+  assert.ok(toolNames.includes("suggest_inventory_movement_draft"));
+  assert.ok(toolNames.includes("suggest_material_requisition_draft"));
+  assert.ok(toolNames.includes("suggest_product_receipt_draft"));
+  assert.ok(toolNames.includes("create_voucher_draft"));
+  assert.ok(toolNames.includes("post_approved_voucher"));
+
+  const purchaseTool = response.body.tools.find((tool) => tool.name === "suggest_purchase_order_draft");
+  assert.equal(purchaseTool.riskLevel, "medium");
+  assert.equal(purchaseTool.actionKind, "draft_generation");
+  assert.equal(purchaseTool.draftType, "purchase_order");
+  assert.equal(purchaseTool.agentTokenAllowed, true);
+  assert.equal(purchaseTool.approvalPolicy.requiresHumanConfirmation, true);
+  assert.deepEqual(purchaseTool.inputSchema.required, ["accountSetId", "userInstruction"]);
+  assert.ok(purchaseTool.outputSchema.required.includes("draftPayload"));
+  assert.ok(purchaseTool.outputSchema.required.includes("unmatchedItems"));
+
+  const requisitionTool = response.body.tools.find((tool) => tool.name === "suggest_material_requisition_draft");
+  assert.equal(requisitionTool.draftType, "material_requisition");
+  assert.equal(requisitionTool.approvalPolicy.requiresHumanConfirmation, true);
+
+  const receiptTool = response.body.tools.find((tool) => tool.name === "suggest_product_receipt_draft");
+  assert.equal(receiptTool.draftType, "product_receipt");
+  assert.equal(receiptTool.approvalPolicy.requiresHumanConfirmation, true);
+
+  const postTool = response.body.tools.find((tool) => tool.name === "post_approved_voucher");
+  assert.equal(postTool.riskLevel, "high");
+  assert.equal(postTool.approvalPolicy.minApprovals, 2);
+  assert.equal(postTool.agentTokenAllowed, false);
+});
+
+test("Phase 6 Agent tool invocation creates draft candidates through the registry", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6INV",
+      name: "Phase 6 Invoke Tool",
+      companyName: "Phase 6 Invoke Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-tool-invoke-account-set"
+  );
+
+  const response = await request(
+    api,
+    "POST",
+    "/agent-tools/suggest_purchase_order_draft/invoke",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      userInstruction: "Generate a purchase order draft for 5 units at 20 CNY.",
+      evidenceRefs: ["quote:AGENT-PO-1"],
+      attachmentIds: [],
+      requestedBy: "external-agent",
+      dryRun: true
+    },
+    "phase6-agent-tool-invoke-purchase"
+  );
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.toolName, "suggest_purchase_order_draft");
+  assert.equal(response.body.resultType, "agent_draft_candidate");
+  assert.equal(response.body.result.draftType, "purchase_order");
+  assert.equal(response.body.result.status, "candidate");
+  assert.equal(response.body.result.dryRun, true);
+  assert.equal(response.body.result.requiresHumanConfirmation, true);
+  assert.equal(api.state.agentDraftCandidates.get(response.body.result.id).id, response.body.result.id);
+  assert.ok(
+    api.state.auditLogs.some(
+      (log) => log.action === "agent_tool.invoke" && log.objectType === "agent_tool" && log.objectId === "suggest_purchase_order_draft"
+    )
+  );
+});
+
+test("Phase 6 Agent tool draft invocation persists candidates and LLM runs through platform store restarts", async () => {
+  const accountSets = new Map();
+  const llmDraftRuns = new Map();
+  const agentDraftCandidates = new Map();
+  const byCreatedDesc = (left, right) => String(right.createdAt).localeCompare(String(left.createdAt));
+  const platformStore = {
+    createAccountSet: async (accountSet) => {
+      accountSets.set(accountSet.id, accountSet);
+      return accountSet;
+    },
+    findAccountSet: async (identifier) =>
+      [...accountSets.values()].find((accountSet) => accountSet.id === identifier || accountSet.code === identifier) ?? null,
+    listAccountSets: async () => [...accountSets.values()],
+    listAccessibleAccountSets: async () => [...accountSets.values()],
+    canAccessAccountSet: async (_actorId, accountSetId) => accountSets.has(accountSetId),
+    createLlmDraftRun: async (run) => {
+      llmDraftRuns.set(run.id, structuredClone(run));
+      return structuredClone(llmDraftRuns.get(run.id));
+    },
+    listLlmDraftRuns: async (accountSetId = null, filters = {}) =>
+      [...llmDraftRuns.values()]
+        .filter((run) => (!accountSetId || run.accountSetId === accountSetId) && (!filters.status || run.status === filters.status))
+        .filter((run) => !filters.draftType || run.inputSummary?.draftType === filters.draftType)
+        .sort(byCreatedDesc)
+        .map((run) => structuredClone(run)),
+    createAgentDraftCandidate: async (candidate) => {
+      agentDraftCandidates.set(candidate.id, structuredClone(candidate));
+      return structuredClone(agentDraftCandidates.get(candidate.id));
+    },
+    updateAgentDraftCandidate: async (candidate) => {
+      agentDraftCandidates.set(candidate.id, structuredClone(candidate));
+      return structuredClone(agentDraftCandidates.get(candidate.id));
+    },
+    findAgentDraftCandidate: async (id) => structuredClone(agentDraftCandidates.get(id) ?? null),
+    listAgentDraftCandidates: async (accountSetId = null, filters = {}) =>
+      [...agentDraftCandidates.values()]
+        .filter((candidate) => (!accountSetId || candidate.accountSetId === accountSetId) && (!filters.status || candidate.status === filters.status))
+        .filter((candidate) => !filters.draftType || candidate.draftType === filters.draftType)
+        .sort(byCreatedDesc)
+        .map((candidate) => structuredClone(candidate))
+  };
+  const firstApi = createApi({ platformStore });
+  const accountSet = await request(
+    firstApi,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6TIP",
+      name: "Phase 6 Tool Invoke Persisted",
+      companyName: "Phase 6 Tool Invoke Persisted Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-persisted-tool-invoke-account-set"
+  );
+  const invoked = await request(
+    firstApi,
+    "POST",
+    "/agent-tools/suggest_purchase_order_draft/invoke",
+    {
+      accountSetId: accountSet.body.id,
+      fiscalYear: 2026,
+      periodNo: 1,
+      userInstruction: "Generate persisted tool purchase order draft for 3 units at 12 CNY.",
+      evidenceRefs: ["quote:persisted-tool"],
+      attachmentIds: [],
+      requestedBy: "external-agent",
+      dryRun: true
+    },
+    "phase6-persisted-tool-invoke"
+  );
+  const restartedApi = createApi({ platformStore });
+  const queue = await request(
+    restartedApi,
+    "GET",
+    `/agent/draft-candidates?accountSetId=${encodeURIComponent(accountSet.body.id)}&draftType=purchase_order`
+  );
+  const runs = await request(
+    restartedApi,
+    "GET",
+    `/ai/llm-draft-runs?accountSetId=${encodeURIComponent(accountSet.body.id)}&draftType=purchase_order`
+  );
+
+  assert.equal(invoked.status, 201);
+  assert.equal(invoked.body.resultType, "agent_draft_candidate");
+  assert.equal(queue.status, 200);
+  assert.equal(queue.body.total, 1);
+  assert.equal(queue.body.items[0].id, invoked.body.result.id);
+  assert.equal(runs.status, 200);
+  assert.equal(runs.body.total, 1);
+  assert.equal(runs.body.items[0].id, invoked.body.result.llmDraftRun.id);
+});
+
+test("Phase 6 Agent tool invocation rejects payloads that violate the registered input schema", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6SCH",
+      name: "Phase 6 Tool Schema",
+      companyName: "Phase 6 Schema Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-tool-schema-account-set"
+  );
+
+  const missingRequired = await request(
+    api,
+    "POST",
+    "/agent-tools/suggest_purchase_order_draft/invoke",
+    {
+      accountSetId: accountSet.body.id,
+      evidenceRefs: ["quote:PO-SCHEMA"],
+      dryRun: true
+    },
+    "phase6-agent-tool-schema-missing"
+  );
+  const wrongType = await request(
+    api,
+    "POST",
+    "/agent-tools/suggest_purchase_order_draft/invoke",
+    {
+      accountSetId: accountSet.body.id,
+      userInstruction: "Generate a purchase order draft.",
+      evidenceRefs: "quote:PO-SCHEMA",
+      dryRun: true
+    },
+    "phase6-agent-tool-schema-type"
+  );
+
+  assert.equal(missingRequired.status, 400);
+  assert.equal(missingRequired.body.code, "AGENT_TOOL_SCHEMA_INVALID");
+  assert.match(missingRequired.body.message, /userInstruction/);
+  assert.equal(wrongType.status, 400);
+  assert.equal(wrongType.body.code, "AGENT_TOOL_SCHEMA_INVALID");
+  assert.match(wrongType.body.message, /evidenceRefs/);
+  assert.equal(api.state.agentDraftCandidates.size, 0);
+});
+
+test("Phase 6 Agent actions reject tools outside the registry before dry-run", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6BAD",
+      name: "Phase 6 Unknown Agent Tool",
+      companyName: "Phase 6 Unknown Tool Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-unknown-tool-account-set"
+  );
+
+  const response = await request(
+    api,
+    "POST",
+    "/agent-actions",
+    {
+      accountSetId: accountSet.body.id,
+      toolName: "invented_direct_posting_tool",
+      dryRun: true,
+      evidenceRefs: [],
+      payload: { amount: 100 },
+      requestedBy: "agent-user"
+    },
+    "phase6-unknown-agent-tool"
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.code, "AGENT_TOOL_NOT_REGISTERED");
+  assert.equal(api.state.agentActions.size, 0);
 });
 
 test("AI voucher suggestions accept available attachment ids as evidence", async () => {

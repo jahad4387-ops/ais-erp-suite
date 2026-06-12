@@ -3,6 +3,7 @@ import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, mes
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useAppContext } from '../context/AppContext';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 
 type Movement = {
   id: string;
@@ -16,6 +17,24 @@ type Movement = {
 };
 
 type OptionRow = { id: string; code: string; name: string };
+
+const movementTypeLabel: Record<string, string> = {
+  inbound: '入库',
+  outbound: '出库',
+};
+
+const businessTypeLabel: Record<string, string> = {
+  other_inbound: '其他入库',
+  other_outbound: '其他出库',
+  purchase_inbound: '采购入库',
+  sales_outbound: '销售出库',
+};
+
+const costStatusLabel: Record<string, string> = {
+  calculated: '已计算',
+  pending: '待计算',
+  adjusted: '已调整',
+};
 
 export const InventoryMovements: React.FC = () => {
   const [form] = Form.useForm();
@@ -87,10 +106,17 @@ export const InventoryMovements: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Inventory Movements</h2>
+        <h2 style={{ margin: 0 }}>库存出入库</h2>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={fetchData}>Refresh</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>New</Button>
+          <AgentDraftEntryButton
+            draftType="inventory_movement"
+            sourceObjectType="inventory_movement_page"
+            userInstruction="根据仓库指令、扫码记录或上传附件生成库存出入库候选草稿"
+          >
+            Agent 生成仓库草稿
+          </AgentDraftEntryButton>
+          <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>
         </Space>
       </div>
       <Table
@@ -104,53 +130,67 @@ export const InventoryMovements: React.FC = () => {
               pagination={false}
               dataSource={record.lines ?? []}
               columns={[
-                { title: 'Item', dataIndex: 'itemCode' },
-                { title: 'Quantity', dataIndex: 'quantity' },
-                { title: 'Amount', dataIndex: 'amount' },
-                { title: 'costBreakdown', dataIndex: 'costBreakdown', render: (value: unknown[]) => value?.length ?? 0 },
+                { title: '存货', dataIndex: 'itemCode' },
+                { title: '数量', dataIndex: 'quantity' },
+                { title: '金额', dataIndex: 'amount' },
+                { title: '成本明细', dataIndex: 'costBreakdown', render: (value: unknown[]) => value?.length ?? 0 },
               ]}
             />
           ),
         }}
         columns={[
-          { title: 'Document', dataIndex: 'documentNo' },
-          { title: 'Type', dataIndex: 'movementType' },
-          { title: 'Business', dataIndex: 'businessType' },
-          { title: 'Quantity', dataIndex: 'totalQuantity' },
-          { title: 'Amount', dataIndex: 'totalAmount' },
-          { title: 'Cost', dataIndex: 'costStatus', render: (value: string) => <Tag color="green">{value}</Tag> },
+          { title: '单据号', dataIndex: 'documentNo' },
+          { title: '类型', render: (_: unknown, record: Movement) => movementTypeLabel[record.movementType] ?? record.movementType },
+          { title: '业务类型', render: (_: unknown, record: Movement) => businessTypeLabel[record.businessType] ?? record.businessType },
+          { title: '数量', dataIndex: 'totalQuantity' },
+          { title: '金额', dataIndex: 'totalAmount' },
+          { title: '成本状态', dataIndex: 'costStatus', render: (value: string) => <Tag color="green">{costStatusLabel[value] ?? value}</Tag> },
+          {
+            title: 'Agent',
+            render: (_: unknown, record: Movement) => (
+              <AgentDraftEntryButton
+                draftType="inventory_movement"
+                sourceObjectType="inventory_movement"
+                sourceObjectId={record.id}
+                userInstruction={`Generate an inventory movement draft from ${record.documentNo}.`}
+                size="small"
+              >
+                Agent
+              </AgentDraftEntryButton>
+            ),
+          },
         ]}
       />
-      <Modal title="New inventory movement" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
+      <Modal title="新增库存出入库" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} okText="确定" cancelText="取消">
         <Form form={form} layout="vertical">
-          <Form.Item name="documentNo" label="Document no." rules={[{ required: true }]}>
+          <Form.Item name="documentNo" label="单据号" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="movementType" label="Movement type" rules={[{ required: true }]}>
-            <Select options={[{ value: 'inbound', label: 'Inbound' }, { value: 'outbound', label: 'Outbound' }]} />
+          <Form.Item name="movementType" label="出入库类型" rules={[{ required: true }]}>
+            <Select options={[{ value: 'inbound', label: '入库' }, { value: 'outbound', label: '出库' }]} />
           </Form.Item>
-          <Form.Item name="businessType" label="Business type" rules={[{ required: true }]}>
+          <Form.Item name="businessType" label="业务类型" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="itemId" label="Item" rules={[{ required: true }]}>
+          <Form.Item name="itemId" label="存货" rules={[{ required: true }]}>
             <Select options={items.map((item) => ({ value: item.id, label: `${item.code} ${item.name}` }))} />
           </Form.Item>
-          <Form.Item name="warehouseId" label="Warehouse" rules={[{ required: true }]}>
+          <Form.Item name="warehouseId" label="仓库" rules={[{ required: true }]}>
             <Select options={warehouses.map((warehouse) => ({ value: warehouse.id, label: `${warehouse.code} ${warehouse.name}` }))} />
           </Form.Item>
-          <Form.Item name="batchNo" label="Batch no.">
+          <Form.Item name="batchNo" label="批次号">
             <Input />
           </Form.Item>
-          <Form.Item name="quantity" label="Quantity" rules={[{ required: true }]}>
+          <Form.Item name="quantity" label="数量" rules={[{ required: true }]}>
             <InputNumber min={0.000001} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="unitCost" label="Unit cost">
+          <Form.Item name="unitCost" label="单位成本">
             <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="fiscalYear" label="Fiscal year" rules={[{ required: true }]}>
+          <Form.Item name="fiscalYear" label="会计年度" rules={[{ required: true }]}>
             <InputNumber style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="periodNo" label="Period" rules={[{ required: true }]}>
+          <Form.Item name="periodNo" label="期间" rules={[{ required: true }]}>
             <InputNumber min={1} max={12} style={{ width: '100%' }} />
           </Form.Item>
         </Form>

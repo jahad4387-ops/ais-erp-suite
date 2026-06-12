@@ -1,0 +1,31 @@
+{
+  "appId": "com.ais.erp.suite",
+  "productName": "AIS-ERP-Suite",
+  "directories": {
+    "output": "release"
+  },
+  "asar": false,
+  "afterPack": "scripts/electron-after-pack.cjs",
+  "files": [
+    "desktop/**/*",
+    "apps/web/dist/**/*",
+    "services/**/*",
+    "packages/**/*",
+    "!apps/**/node_modules/**/*",
+    "!services/**/node_modules/**/*",
+    "!packages/**/node_modules/**/*",
+    "node_modules/**/*",
+    "node_modules/.prisma/**/*",
+    "package.json"
+  ],
+  "win": {
+    "target": [
+      "nsis"
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "perMachine": false
+  }
+}

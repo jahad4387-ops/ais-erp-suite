@@ -102,6 +102,7 @@ export const permissionText: Record<string, string> = {
   'report_export.manage': '管理报表导出',
   'report_interpretation.manage': '管理报表解读',
   'report_approval.manage': '管理报表审批',
+  'ops.backup.manage': '管理备份恢复',
   'attachment.upload': '上传附件',
   'attachment.delete': '删除附件',
   'bank_reconciliation.create': '创建银行对账',

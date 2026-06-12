@@ -58,6 +58,277 @@ paths:
               schema:
                 $ref: "#/components/schemas/DeploymentConfig"
 
+  /ops/migrations/jobs:
+    get:
+      summary: List Phase 6 migration jobs.
+      x-permission: ops.migration.manage
+      x-risk-level: low
+      x-agent-allowed: false
+      parameters:
+        - name: accountSetId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, dry_run_completed, dry_run_failed, imported]
+        - name: jobType
+          in: query
+          schema:
+            type: string
+            enum: [master_data, opening_balance, voucher_history, partner_master, inventory_item_master]
+      responses:
+        "200":
+          description: Migration job queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accountSetId, status, jobType, total, items]
+                properties:
+                  accountSetId:
+                    type: string
+                    nullable: true
+                  status:
+                    type: string
+                    nullable: true
+                  jobType:
+                    type: string
+                    nullable: true
+                  total:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MigrationJob"
+    post:
+      summary: Create a Phase 6 migration job from uploaded or mapped rows.
+      x-permission: ops.migration.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMigrationJobRequest"
+      responses:
+        "201":
+          description: Migration job created in draft state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationJob"
+
+  /ops/migrations/jobs/{migrationJobId}/dry-run:
+    post:
+      summary: Dry-run a Phase 6 migration job without mutating business data.
+      x-permission: ops.migration.manage
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: migrationJobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                requestedBy:
+                  type: string
+                fieldMapping:
+                  type: object
+                  additionalProperties: true
+                sourceRows:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+      responses:
+        "200":
+          description: Migration dry-run result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationJob"
+
+  /ops/migrations/jobs/{migrationJobId}/import:
+    post:
+      summary: Import an approved Phase 6 migration job into formal business records.
+      description: The job must be dry_run_completed with validation.status passed. The current implementation imports opening_balance jobs into formal opening balances, partner_master jobs into partner master data, and inventory_item_master jobs into inventory item master data, then records importSummary.
+      x-permission: ops.migration.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: migrationJobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fiscalYear:
+                  type: integer
+                  description: Required for opening_balance imports.
+                periodNo:
+                  type: integer
+                  description: Required for opening_balance imports.
+                requestedBy:
+                  type: string
+      responses:
+        "200":
+          description: Migration import completed and business records were written.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MigrationJob"
+        "409":
+          description: MIGRATION_DRY_RUN_REQUIRED or MIGRATION_IMPORT_UNSUPPORTED.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /ops/backups:
+    get:
+      summary: List auditable backup jobs.
+      x-permission: ops.backup.manage
+      x-risk-level: low
+      x-agent-allowed: false
+      parameters:
+        - name: accountSetId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Backup job queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accountSetId, status, total, items]
+                properties:
+                  accountSetId:
+                    type: string
+                    nullable: true
+                  status:
+                    type: string
+                    nullable: true
+                  total:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BackupJob"
+    post:
+      summary: Create an auditable backup job.
+      x-permission: ops.backup.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBackupJobRequest"
+      responses:
+        "201":
+          description: Backup job manifest created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupJob"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /ops/restores:
+    get:
+      summary: List restore dry-run jobs.
+      x-permission: ops.backup.manage
+      x-risk-level: low
+      x-agent-allowed: false
+      parameters:
+        - name: accountSetId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Restore job queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accountSetId, status, total, items]
+                properties:
+                  accountSetId:
+                    type: string
+                    nullable: true
+                  status:
+                    type: string
+                    nullable: true
+                  total:
+                    type: integer
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RestoreJob"
+
+  /ops/restores/execute:
+    post:
+      summary: Execute a restore dry-run inside the restore-drill sandbox.
+      x-permission: ops.backup.manage
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRestoreJobRequest"
+      responses:
+        "201":
+          description: Restore dry-run completed without business mutation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreJob"
+        "409":
+          description: RESTORE_DRILL_REQUIRED when the runtime is not a silent restore-drill sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /roles:
     get:
       summary: List roles and assigned permission codes.
@@ -1950,6 +2221,44 @@ paths:
                 items:
                   $ref: "#/components/schemas/AuditLog"
 
+  /security/events:
+    get:
+      summary: Query Phase 6 security anomaly events.
+      description: Lists structured security events such as permission denials and idempotency scope mismatches. Results are account-set scoped unless the actor has platform administrator privileges.
+      x-permission: security_event.view
+      x-risk-level: low
+      x-agent-allowed: false
+      parameters:
+        - name: accountSetId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: eventType
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [permission_denied, idempotency_scope_mismatch]
+        - name: severity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - name: actorId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Security event list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecurityEventList"
+
   /partners:
     get:
       summary: List Phase 2 customer and supplier partner master data.
@@ -3494,7 +3803,379 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /agent/draft-candidates:
+    get:
+      summary: List Agent draft candidates for the review queue.
+      description: Returns lightweight queue rows for pending and converted Agent-generated drafts. Use accountSetId, draftType, and status query parameters to filter the human review queue.
+      x-permission: ai.generate_draft
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [candidate, converted, rejected, archived]
+        - name: draftType
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [master_data, purchase_order, sales_order, inventory_movement, material_requisition, product_receipt, stock_count, voucher, payroll_allocation, depreciation_run, asset_change, report_interpretation]
+      responses:
+        "200":
+          description: Agent draft candidate queue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentDraftCandidateQueue"
+    post:
+      summary: Generate a Phase 6 Agent draft candidate through local OCR and the LLM Draft Adapter.
+      description: Uploaded attachments are parsed by the local OCR placeholder first; OCR text, user instructions, evidence, and target schema are then passed to the LLM Draft Adapter. The result remains a candidate draft until human confirmation.
+      x-permission: ai.generate_draft
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentDraftCandidateRequest"
+      responses:
+        "201":
+          description: Agent draft candidate created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentDraftCandidate"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /agent/draft-candidates/{agentDraftCandidateId}:
+    get:
+      summary: Get an Agent draft candidate for human review.
+      description: Returns the candidate draft, OCR evidence, LLM draft run summary, unmatched fields, and dry-run result before conversion.
+      x-permission: ai.generate_draft
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: agentDraftCandidateId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent draft candidate detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentDraftCandidate"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /agent/draft-candidates/{agentDraftCandidateId}/convert:
+    post:
+      summary: Convert a reviewed Agent draft candidate into a supported system draft.
+      description: Requires a human-reviewed payload. The model candidate is never trusted directly; unresolved accounts, auxiliaries, master data, and evidence must be corrected before this endpoint creates a formal system draft. Current supported conversions are voucher drafts, purchase order drafts, sales order drafts, non-mutating inventory movement drafts, non-mutating material requisition drafts, non-mutating product receipt drafts, non-mutating stock count previews, non-mutating master data drafts, payroll allocation drafts, non-mutating depreciation dry-run drafts, fixed asset change drafts, and report interpretation drafts.
+      x-permission: agent_draft.convert
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - name: agentDraftCandidateId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvertAgentDraftCandidateRequest"
+      responses:
+        "201":
+          description: Supported system draft created from reviewed Agent candidate.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Voucher"
+                  - $ref: "#/components/schemas/PurchaseOrder"
+                  - $ref: "#/components/schemas/SalesOrder"
+                  - $ref: "#/components/schemas/InventoryMovementDraft"
+                  - $ref: "#/components/schemas/MaterialRequisition"
+                  - $ref: "#/components/schemas/ProductReceipt"
+                  - $ref: "#/components/schemas/StockCountPreview"
+                  - $ref: "#/components/schemas/AgentMasterDataDraft"
+                  - $ref: "#/components/schemas/AgentPayrollAllocationDraft"
+                  - $ref: "#/components/schemas/AgentDepreciationRunDraft"
+                  - $ref: "#/components/schemas/AgentAssetChangeDraft"
+                  - $ref: "#/components/schemas/AgentReportInterpretationDraft"
+        "400":
+          description: BUSINESS_RULE_FAILED.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /agent/draft-candidates/{agentDraftCandidateId}/reject:
+    post:
+      summary: Reject an Agent draft candidate after human review.
+      description: Marks a candidate as rejected with a reviewer and reason. Rejected candidates remain in the review queue for auditability and cannot be converted into system drafts.
+      x-permission: agent_draft.convert
+      x-risk-level: medium
+      x-agent-allowed: false
+      parameters:
+        - name: agentDraftCandidateId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectAgentDraftCandidateRequest"
+      responses:
+        "200":
+          description: Agent draft candidate rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentDraftCandidate"
+        "400":
+          description: BUSINESS_RULE_FAILED.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /ai/ocr-preview:
+    post:
+      summary: Run local OCR / document parsing for uploaded Agent evidence before LLM draft generation.
+      description: Parses uploaded attachments through the local OCR/document parser and returns reviewable text. The preview is dry-run only and does not create business drafts. Users can pass corrected text back as reviewedOcrResults when creating an Agent draft candidate.
+      x-permission: ai.generate_draft
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOcrPreviewRequest"
+      responses:
+        "201":
+          description: OCR preview created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OcrPreview"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /ai/llm-draft-runs:
+    get:
+      summary: List recent provider-neutral LLM draft runs for Agent observability.
+      description: Returns auditable LLM draft adapter runs by account set, status, and draft type. This is read-only and helps users inspect schema failures, provider failures, and completed model-assisted draft attempts without creating business drafts.
+      x-permission: ai.generate_draft
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [completed, failed]
+        - name: draftType
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: LLM draft run list scoped to accessible account sets.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmDraftRunList"
+    post:
+      summary: Reserve a provider-neutral LLM draft run API for structured draft generation.
+      description: This API represents the model-facing draft adapter boundary. Business tools should call it through Agent draft candidate workflows rather than trusting raw model output. Attachment ids are resolved through the local OCR/document parser first; the LLM receives extracted text and evidence summaries, not unchecked raw files.
+      x-permission: ai.generate_draft
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentDraftCandidateRequest"
+      responses:
+        "201":
+          description: LLM draft run created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmDraftRun"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /ai/llm-draft-runs/metrics:
+    get:
+      summary: Summarize LLM draft run quality and human review outcomes.
+      description: Returns read-only evaluation metrics for the draft adapter, including schema success rate, candidate adoption, rejection, human correction, and provider/model breakdown. Metrics are scoped to accessible account sets.
+      x-permission: ai.generate_draft
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: draftType
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: LLM draft metrics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LlmDraftMetrics"
+
+  /agent-tools:
+    get:
+      summary: List registered Agent tools with schemas, risk, and approval policy.
+      description: Tool Registry discovery endpoint for Agent Gateway clients. It exposes stable tool names, action kind, draft type, JSON Schemas, risk level, whether Agent tokens may call the tool, and the human approval policy.
+      x-permission: agent_action.view
+      x-risk-level: low
+      x-agent-allowed: true
+      responses:
+        "200":
+          description: Registered Agent tool list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tools]
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgentTool"
+
+  /agent-tools/{toolName}/invoke:
+    post:
+      summary: Invoke a registered Agent tool in dry-run mode.
+      description: Tool Registry invocation endpoint for external Agents. Draft-generation tools return an Agent draft candidate; other Agent-token-allowed tools return an AgentAction dry-run record. Formal execution still requires the Agent Action approval workflow.
+      x-permission: agent_action.create
+      x-risk-level: medium
+      x-agent-allowed: true
+      parameters:
+        - name: toolName
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvokeAgentToolRequest"
+      responses:
+        "201":
+          description: Agent tool dry-run invocation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentToolInvocationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Agent token is not allowed to invoke this tool directly.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /agent-actions:
+    get:
+      summary: List Agent actions and approval queue rows.
+      description: Read-only queue for Agent actions, including dry-run status, risk level, approval progress, evidence count, requester, and execution markers. Supports account-set scoped filtering for Agent action lists and approval work queues.
+      x-permission: agent_action.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [dry_run_completed, submitted_for_approval, approved, executed, archived, rejected]
+        - name: riskLevel
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [low, medium, high]
+        - name: toolName
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent action queue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentActionQueue"
     post:
       summary: Create an Agent action in dry-run mode.
       x-permission: agent_action.create
@@ -3518,6 +4199,52 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
+  /agent-actions/{agentActionId}:
+    get:
+      summary: Get the current state of an Agent action.
+      x-permission: agent_action.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AgentActionId"
+      responses:
+        "200":
+          description: Agent action detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAction"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /agent-actions/{agentActionId}/submit:
+    post:
+      summary: Submit a dry-run completed Agent action for approval.
+      x-permission: agent_action.create
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AgentActionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                submittedBy:
+                  type: string
+                approvalComment:
+                  type: string
+      responses:
+        "200":
+          description: Agent action submitted for approval.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAction"
+
   /agent-actions/{agentActionId}/approve:
     post:
       summary: Approve a high-risk Agent action.
@@ -3530,19 +4257,75 @@ paths:
       responses:
         "200":
           description: Agent action approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAction"
 
   /agent-actions/{agentActionId}/execute:
     post:
       summary: Execute an approved Agent action.
+      description: Execution can only be triggered by a real user confirmation when the action approval policy sets executeRequiresUserToken.
       x-permission: agent_action.execute
       x-risk-level: high
       x-agent-allowed: false
       parameters:
         - $ref: "#/components/parameters/AgentActionId"
         - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecuteAgentActionRequest"
       responses:
         "200":
           description: Agent action executed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAction"
+
+  /agent-actions/{agentActionId}/reverse:
+    post:
+      summary: Reverse an executed Agent action through the audit trail.
+      description: Records a compensating reversal event for an executed Agent action. It does not silently delete or mutate prior audit history; business correction still follows the relevant domain workflow.
+      x-permission: agent_action.execute
+      x-risk-level: high
+      x-agent-allowed: false
+      parameters:
+        - $ref: "#/components/parameters/AgentActionId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReverseAgentActionRequest"
+      responses:
+        "200":
+          description: Agent action reversed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAction"
+
+  /agent-actions/{agentActionId}/replay:
+    get:
+      summary: Replay Agent action inputs, dry-run, approval, and execution events.
+      description: Returns the chronological Replay event timeline together with the same auditSummary exposed by Agent action detail.
+      x-permission: agent_action.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - $ref: "#/components/parameters/AgentActionId"
+      responses:
+        "200":
+          description: Agent action replay timeline.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentActionReplay"
 
   /close/checklist:
     post:
@@ -5210,7 +5993,7 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      description: Required for write operations. Replays with the same key return the first committed result.
+      description: Required for write operations. Replays with the same key return the first committed result within the same account-set scope while the key is inside its TTL window. The default TTL is 7 days and deployments may set AIS_IDEMPOTENCY_TTL_HOURS or AIS_IDEMPOTENCY_TTL_MS. Reusing a non-expired key for another account set returns IDEMPOTENCY_SCOPE_MISMATCH; expired keys are purged before processing a new write request.
       schema:
         type: string
         minLength: 12
@@ -5278,7 +6061,7 @@ components:
 
     DeploymentConfig:
       type: object
-      required: [deploymentMode, platformStore, database, jwt, attachmentStorage]
+      required: [deploymentMode, platformStore, database, jwt, attachmentStorage, ai, idempotency, restoreDrill]
       properties:
         deploymentMode:
           type: string
@@ -5348,6 +6131,348 @@ components:
                   type: integer
                   nullable: true
                   minimum: 1
+        ai:
+          type: object
+          required: [ocr, llmDraft]
+          properties:
+            ocr:
+              type: object
+              required: [provider, model, configured, commandPresent]
+              properties:
+                provider:
+                  type: string
+                  description: OCR provider from AIS_OCR_PROVIDER. Defaults to local-ocr-placeholder. Use local-command-ocr with AIS_OCR_COMMAND, local-tesseract for a local OCR engine, or configured-local-ocr for an injected adapter.
+                model:
+                  type: string
+                  description: OCR model from AIS_OCR_MODEL.
+                configured:
+                  type: boolean
+                commandPresent:
+                  type: boolean
+                  description: True when AIS_OCR_COMMAND is configured or an injected local OCR adapter is active.
+            llmDraft:
+              type: object
+              required: [provider, model, configured, timeoutMs, maxTokens, baseUrlPresent, apiKeyRefPresent, redaction]
+              properties:
+                provider:
+                  type: string
+                  description: Draft LLM provider from AIS_LLM_DRAFT_PROVIDER. Use openai-compatible for OpenAI-compatible model gateways.
+                model:
+                  type: string
+                  description: Draft LLM model from AIS_LLM_DRAFT_MODEL.
+                configured:
+                  type: boolean
+                timeoutMs:
+                  type: integer
+                  nullable: true
+                  description: Timeout from AIS_LLM_DRAFT_TIMEOUT_MS.
+                maxTokens:
+                  type: integer
+                  nullable: true
+                  description: Token limit from AIS_LLM_DRAFT_MAX_TOKENS.
+                baseUrlPresent:
+                  type: boolean
+                  description: Whether AIS_LLM_DRAFT_BASE_URL is configured.
+                apiKeyRefPresent:
+                  type: boolean
+                  description: Whether AIS_LLM_DRAFT_API_KEY_REF is configured.
+                redaction:
+                  type: string
+                  description: Redaction policy from AIS_LLM_DRAFT_REDACTION.
+        idempotency:
+          type: object
+          required: [ttlMs, ttlHours]
+          properties:
+            ttlMs:
+              type: number
+              description: Idempotency cache TTL in milliseconds. Defaults to 7 days; can be configured with AIS_IDEMPOTENCY_TTL_MS or AIS_IDEMPOTENCY_TTL_HOURS.
+            ttlHours:
+              type: number
+              description: Idempotency cache TTL in hours for deployment review.
+        restoreDrill:
+          type: object
+          required: [enabled, silentSandbox, outboundBlocked, blockedChannels, envVar]
+          properties:
+            enabled:
+              type: boolean
+              description: True when RESTORE_DRILL or AIS_RESTORE_DRILL enables restore-drill mode.
+            silentSandbox:
+              type: boolean
+              description: Restore-drill environments must behave as silent data islands.
+            outboundBlocked:
+              type: boolean
+              description: True when outbound webhook, email, and bank API actions are blocked by the runtime.
+            blockedChannels:
+              type: array
+              items:
+                type: string
+                enum: [webhook, email, bank_api]
+            envVar:
+              type: string
+              nullable: true
+              description: Environment variable that enabled restore-drill mode.
+
+    CreateBackupJobRequest:
+      type: object
+      required: [accountSetId, backupType]
+      properties:
+        accountSetId:
+          type: string
+        backupType:
+          type: string
+          enum: [full, incremental]
+        dryRun:
+          type: boolean
+          default: false
+        includeAttachments:
+          type: boolean
+          default: true
+        retentionDays:
+          type: integer
+          nullable: true
+          minimum: 1
+        requestedBy:
+          type: string
+
+    BackupJob:
+      type: object
+      required:
+        [id, accountSetId, backupType, status, dryRun, businessMutation, includeAttachments, requestedBy, createdAt, completedAt, snapshotRef, checksum, manifest, attachmentHashVerification]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        backupType:
+          type: string
+          enum: [full, incremental]
+        status:
+          type: string
+          enum: [completed, dry_run_completed]
+        dryRun:
+          type: boolean
+        businessMutation:
+          type: boolean
+          description: Always false; backup job creation records a manifest and does not mutate business ledgers.
+        includeAttachments:
+          type: boolean
+        retentionDays:
+          type: integer
+          nullable: true
+        requestedBy:
+          type: string
+        createdAt:
+          type: string
+        completedAt:
+          type: string
+        snapshotRef:
+          type: string
+        checksum:
+          type: string
+          description: sha256 checksum of the backup manifest and attachment hash verification summary.
+        manifest:
+          $ref: "#/components/schemas/BackupJobManifest"
+        attachmentHashVerification:
+          $ref: "#/components/schemas/AttachmentHashVerification"
+
+    BackupJobManifest:
+      type: object
+      required: [accountSetId, accountSetCode, accountSetName, backupType, includeAttachments, tableCounts, generatedAt]
+      properties:
+        accountSetId:
+          type: string
+        accountSetCode:
+          type: string
+        accountSetName:
+          type: string
+        backupType:
+          type: string
+          enum: [full, incremental]
+        includeAttachments:
+          type: boolean
+        tableCounts:
+          type: object
+          additionalProperties:
+            type: integer
+          description: Per-domain row counts including vouchers, inventory, payroll, fixed assets, reports, and attachments.
+        generatedAt:
+          type: string
+
+    AttachmentHashVerification:
+      type: object
+      required: [status, attachmentCount, verifiedCount, failedCount]
+      properties:
+        status:
+          type: string
+          enum: [skipped, completed_empty, completed, failed]
+        attachmentCount:
+          type: integer
+        verifiedCount:
+          type: integer
+        failedCount:
+          type: integer
+
+    CreateMigrationJobRequest:
+      type: object
+      required: [accountSetId, jobType, sourceType, targetObjectType, fieldMapping, sourceRows]
+      properties:
+        accountSetId:
+          type: string
+        jobType:
+          type: string
+          enum: [master_data, opening_balance, voucher_history, partner_master, inventory_item_master]
+        sourceType:
+          type: string
+          enum: [excel, csv, legacy_erp, api]
+        targetObjectType:
+          type: string
+        fieldMapping:
+          type: object
+          additionalProperties: true
+        sourceRows:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        requestedBy:
+          type: string
+
+    MigrationJob:
+      type: object
+      required:
+        [id, accountSetId, jobType, sourceType, targetObjectType, status, dryRun, businessMutation, requestedBy, createdAt, sourceSummary, fieldMapping, validation, errorReport]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        jobType:
+          type: string
+          enum: [master_data, opening_balance, voucher_history, partner_master, inventory_item_master]
+        sourceType:
+          type: string
+          enum: [excel, csv, legacy_erp, api]
+        targetObjectType:
+          type: string
+        status:
+          type: string
+          enum: [draft, dry_run_completed, dry_run_failed, imported]
+        dryRun:
+          type: boolean
+        businessMutation:
+          type: boolean
+          description: False for draft and dry-run records; formal import is a later explicit step.
+        requestedBy:
+          type: string
+        createdAt:
+          type: string
+        completedAt:
+          type: string
+          nullable: true
+        sourceSummary:
+          type: object
+          additionalProperties: true
+        fieldMapping:
+          type: object
+          additionalProperties: true
+        validation:
+          type: object
+          additionalProperties: true
+        errorReport:
+          type: object
+          additionalProperties: true
+        importSummary:
+          type: object
+          nullable: true
+          additionalProperties: true
+
+    CreateRestoreJobRequest:
+      type: object
+      required: [accountSetId, backupJobId, dryRun, targetEnvironment]
+      properties:
+        accountSetId:
+          type: string
+        backupJobId:
+          type: string
+        dryRun:
+          type: boolean
+          enum: [true]
+          description: Phase 6 restore execution is dry-run only.
+        targetEnvironment:
+          type: string
+          enum: [restore_drill]
+        restorePointLabel:
+          type: string
+          nullable: true
+        requestedBy:
+          type: string
+
+    RestoreJob:
+      type: object
+      required:
+        [id, accountSetId, sourceBackupJobId, status, dryRun, restoreMode, targetEnvironment, requestedBy, createdAt, completedAt, businessMutation, outboundBlocked, blockedChannels, impactScope, validation]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        sourceBackupJobId:
+          type: string
+        status:
+          type: string
+          enum: [dry_run_completed]
+        dryRun:
+          type: boolean
+        restoreMode:
+          type: string
+          enum: [silent_sandbox]
+        targetEnvironment:
+          type: string
+          enum: [restore_drill]
+        restorePointLabel:
+          type: string
+          nullable: true
+        requestedBy:
+          type: string
+        createdAt:
+          type: string
+        completedAt:
+          type: string
+        businessMutation:
+          type: boolean
+          description: Always false; restore dry-run records impact only and never writes live business data.
+        outboundBlocked:
+          type: boolean
+        blockedChannels:
+          type: array
+          items:
+            type: string
+            enum: [webhook, email, bank_api]
+        impactScope:
+          type: object
+          required: [accountSetId, accountSetCode, sourceBackupJobId, tableCounts]
+          properties:
+            accountSetId:
+              type: string
+            accountSetCode:
+              type: string
+            sourceBackupJobId:
+              type: string
+            tableCounts:
+              type: object
+              additionalProperties:
+                type: integer
+        validation:
+          type: object
+          required: [status, backupChecksum, attachmentHashVerification]
+          properties:
+            status:
+              type: string
+              enum: [passed]
+            backupChecksum:
+              type: string
+            attachmentHashVerification:
+              type: string
 
     Role:
       type: object
@@ -7708,6 +8833,7 @@ components:
             type: string
         attachmentIds:
           type: array
+          description: Available attachment ids that should be parsed by the local OCR/document layer before model understanding.
           items:
             type: string
         warnings:
@@ -8231,6 +9357,303 @@ components:
           items:
             $ref: "#/components/schemas/InventoryMovementLine"
 
+    InventoryMovementDraft:
+      type: object
+      required: [id, accountSetId, documentNo, movementType, businessType, fiscalYear, periodNo, status, costStatus, totalQuantity, totalAmount, sourceType, agentDraftCandidateId, lines]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        documentNo:
+          type: string
+        movementType:
+          type: string
+          enum: [inbound, outbound, adjustment]
+        businessType:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        movementDate:
+          type: string
+        status:
+          type: string
+          enum: [draft]
+        costStatus:
+          type: string
+          enum: [not_calculated]
+        sourceType:
+          type: string
+          enum: [agent_draft]
+        agentDraftCandidateId:
+          type: string
+        sourceObjectType:
+          type: string
+        sourceObjectId:
+          type: string
+        totalQuantity:
+          type: number
+        totalAmount:
+          type: number
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/InventoryMovementLine"
+
+    AgentMasterDataDraft:
+      type: object
+      required: [id, accountSetId, masterDataType, name, status, sourceType, agentDraftCandidateId, fields, createdBy, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        masterDataType:
+          type: string
+          enum: [customer, supplier, partner, inventory_item, warehouse, employee, asset_category, auxiliary_item]
+        code:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [draft]
+        sourceType:
+          type: string
+          enum: [agent_draft]
+        agentDraftCandidateId:
+          type: string
+        sourceObjectType:
+          type: string
+        sourceObjectId:
+          type: string
+        fields:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+
+    AgentPayrollAllocationDraft:
+      type: object
+      required: [id, accountSetId, documentType, fiscalYear, periodNo, status, sourceType, agentDraftCandidateId, totalAllocatedAmount, approvalRequired, rules, createdBy, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        documentType:
+          type: string
+          enum: [payroll_allocation]
+        payrollRunId:
+          type: string
+        runNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [draft]
+        sourceType:
+          type: string
+          enum: [agent_draft]
+        agentDraftCandidateId:
+          type: string
+        sourceObjectType:
+          type: string
+        sourceObjectId:
+          type: string
+        totalAllocatedAmount:
+          type: number
+        approvalRequired:
+          type: boolean
+        rules:
+          type: array
+          items:
+            type: object
+            required: [id, payrollAllocationDraftId, lineNo, targetType, costType, amount]
+            properties:
+              id:
+                type: string
+              payrollAllocationDraftId:
+                type: string
+              lineNo:
+                type: integer
+              departmentId:
+                type: string
+              targetType:
+                type: string
+                enum: [department, work_order]
+              workOrderId:
+                type: string
+              costType:
+                type: string
+                enum: [direct_labor, payroll_overhead]
+              allocationRate:
+                type: number
+              amount:
+                type: number
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+
+    AgentDepreciationRunDraft:
+      type: object
+      description: Human-reviewed Agent depreciation dry-run draft. It is calculated from fixed-asset cards but is not saved as a formal DepreciationRun and must not lock depreciation or create cost pools.
+      required: [id, accountSetId, documentType, runNo, fiscalYear, periodNo, dryRun, status, sourceType, agentDraftCandidateId, totalDepreciationAmount, lineCount, warningCodes, lines, reviewedDraftPayload, createdBy, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        documentType:
+          type: string
+          enum: [depreciation_run]
+        runNo:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        dryRun:
+          type: boolean
+          const: true
+        status:
+          type: string
+          enum: [draft]
+        sourceType:
+          type: string
+          enum: [agent_draft]
+        agentDraftCandidateId:
+          type: string
+        sourceObjectType:
+          type: string
+          nullable: true
+        sourceObjectId:
+          type: string
+          nullable: true
+        totalDepreciationAmount:
+          type: number
+        lineCount:
+          type: integer
+        warningCodes:
+          type: array
+          items:
+            type: string
+            enum: [NEW_ASSET_NOT_STARTED, DISPOSED_BEFORE_PERIOD, FULLY_DEPRECIATED, DEPRECIATION_STOPPED, NET_VALUE_BRAKE_APPLIED]
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/DepreciationRunLine"
+        reviewedDraftPayload:
+          type: object
+          additionalProperties: true
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+
+    AgentAssetChangeDraft:
+      type: object
+      required: [id, accountSetId, documentType, changeKind, status, sourceType, agentDraftCandidateId, createdBy, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        documentType:
+          type: string
+          enum: [asset_change]
+        changeKind:
+          type: string
+          enum: [addition, transfer, value_change, disposal, count_variance]
+        fixedAssetId:
+          type: string
+        assetNo:
+          type: string
+        assetName:
+          type: string
+        changeDate:
+          type: string
+        fromDepartmentId:
+          type: string
+        toDepartmentId:
+          type: string
+        toDepartmentName:
+          type: string
+        amount:
+          type: number
+        reason:
+          type: string
+        status:
+          type: string
+          enum: [draft]
+        sourceType:
+          type: string
+          enum: [agent_draft]
+        agentDraftCandidateId:
+          type: string
+        sourceObjectType:
+          type: string
+        sourceObjectId:
+          type: string
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+
+    AgentReportInterpretationDraft:
+      type: object
+      required: [id, accountSetId, reportRunId, summary, keyFindings, warnings, evidenceRefs, status, sourceType, agentDraftCandidateId, interpretedBy, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        reportRunId:
+          type: string
+        summary:
+          type: string
+        keyFindings:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+          description: Must reference cells in the immutable report run snapshot, for example report_cell:BS!B10.
+        status:
+          type: string
+          enum: [draft]
+        sourceType:
+          type: string
+          enum: [agent_draft]
+        agentDraftCandidateId:
+          type: string
+        sourceObjectType:
+          type: string
+        sourceObjectId:
+          type: string
+        interpretedBy:
+          type: string
+        createdAt:
+          type: string
+
     InventoryMovementLine:
       type: object
       required: [itemId, warehouseId, quantity]
@@ -8548,7 +9971,7 @@ components:
 
     MaterialRequisition:
       type: object
-      required: [id, accountSetId, requisitionNo, workOrderId, sourceMovementId, totalQuantity, totalAmount, lines]
+      required: [id, accountSetId, requisitionNo, workOrderId, sourceMovementId, status, totalQuantity, totalAmount, lines]
       properties:
         id:
           type: string
@@ -8558,8 +9981,22 @@ components:
           type: string
         workOrderId:
           type: string
+        workOrderNo:
+          type: string
         sourceMovementId:
           type: string
+          nullable: true
+        sourceType:
+          type: string
+        agentDraftCandidateId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [draft, posted]
         totalQuantity:
           type: number
         totalAmount:
@@ -8581,14 +10018,20 @@ components:
           type: string
         warehouseCode:
           type: string
+        locationId:
+          type: string
+          nullable: true
         batchNo:
           type: string
+          nullable: true
         quantity:
           type: number
         unitCost:
           type: number
+          nullable: true
         amount:
           type: number
+          nullable: true
 
     CreateProductReceiptRequest:
       type: object
@@ -8613,7 +10056,7 @@ components:
 
     ProductReceipt:
       type: object
-      required: [id, accountSetId, receiptNo, workOrderId, sourceMovementId, costStatus, totalQuantity, totalAmount, lines]
+      required: [id, accountSetId, receiptNo, workOrderId, sourceMovementId, status, costStatus, totalQuantity, totalAmount, lines]
       properties:
         id:
           type: string
@@ -8623,11 +10066,25 @@ components:
           type: string
         workOrderId:
           type: string
+        workOrderNo:
+          type: string
         sourceMovementId:
           type: string
+          nullable: true
+        sourceType:
+          type: string
+        agentDraftCandidateId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        status:
+          type: string
+          enum: [draft, posted]
         costStatus:
           type: string
-          enum: [direct_material_only]
+          enum: [draft_pending_cost, direct_material_only]
         totalQuantity:
           type: number
         totalAmount:
@@ -8649,14 +10106,20 @@ components:
           type: string
         warehouseCode:
           type: string
+        locationId:
+          type: string
+          nullable: true
         batchNo:
           type: string
+          nullable: true
         quantity:
           type: number
         unitCost:
           type: number
+          nullable: true
         amount:
           type: number
+          nullable: true
 
     CreateMockCostInputRequest:
       type: object
@@ -10746,12 +12209,1047 @@ components:
         daysPastDue:
           type: integer
 
-    CreateAgentActionRequest:
+    CreateAgentDraftCandidateRequest:
       type: object
-      required: [toolName, dryRun, evidenceRefs]
+      required: [accountSetId, draftType, userInstruction, dryRun]
+      properties:
+        accountSetId:
+          type: string
+        fiscalPeriodId:
+          type: string
+        draftType:
+          type: string
+          enum: [master_data, purchase_order, sales_order, inventory_movement, material_requisition, product_receipt, stock_count, voucher, payroll_allocation, depreciation_run, asset_change, report_interpretation]
+        sourceObjectType:
+          type: string
+        sourceObjectId:
+          type: string
+        userInstruction:
+          type: string
+        attachmentIds:
+          type: array
+          items:
+            type: string
+        reviewedOcrResults:
+          type: array
+          description: Human-corrected OCR text keyed by attachmentId. When supplied, the LLM Draft Adapter uses this reviewed text while preserving originalExtractedText for audit.
+          items:
+            type: object
+            required: [attachmentId, extractedText]
+            properties:
+              attachmentId:
+                type: string
+              extractedText:
+                type: string
+              reviewedBy:
+                type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        dryRun:
+          type: boolean
+          const: true
+
+    CreateOcrPreviewRequest:
+      type: object
+      required: [accountSetId, attachmentIds, dryRun]
+      properties:
+        accountSetId:
+          type: string
+        attachmentIds:
+          type: array
+          items:
+            type: string
+        requestedBy:
+          type: string
+        dryRun:
+          type: boolean
+          const: true
+
+    OcrPreview:
+      type: object
+      required: [id, accountSetId, dryRun, attachmentIds, results, requestedBy, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        dryRun:
+          type: boolean
+        attachmentIds:
+          type: array
+          items:
+            type: string
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentDraftOcrResult"
+        requestedBy:
+          type: string
+        createdAt:
+          type: string
+
+    AgentDraftOcrResult:
+      type: object
+      required: [attachmentId, provider, status, extractedText, confidence]
+      properties:
+        attachmentId:
+          type: string
+        provider:
+          type: string
+          description: OCR provider id. Defaults to local-ocr-placeholder and may be replaced by local-command-ocr, local-tesseract, or configured-local-ocr adapters such as PaddleOCR.
+        model:
+          type: string
+          nullable: true
+          description: Local OCR model name or version, for example ppocr-v4.
+        status:
+          type: string
+          enum: [completed, completed_empty, failed, metadata_only, reviewed]
+        extractedText:
+          type: string
+        originalExtractedText:
+          type: string
+        confidence:
+          type: number
+        reviewedBy:
+          type: string
+        reviewedAt:
+          type: string
+        warning:
+          type: string
+
+    LlmDraftRun:
+      type: object
+      required: [id, accountSetId, provider, model, status, inputSummary, outputSchema, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        provider:
+          type: string
+          description: Draft adapter provider, for example local-rule-based, openai-compatible, or another configured LLM provider.
+        model:
+          type: string
+          description: Model or deployment name used by the draft adapter.
+        status:
+          type: string
+          enum: [completed, failed]
+        inputSummary:
+          type: object
+          additionalProperties: true
+          properties:
+            draftType:
+              type: string
+            sourceObjectType:
+              type: string
+            sourceObjectId:
+              type: string
+            sourceContext:
+              $ref: "#/components/schemas/AgentDraftSourceContext"
+            ocrText:
+              type: string
+            evidenceRefs:
+              type: array
+              items:
+                type: string
+        outputSchema:
+          type: string
+        errorMessage:
+          type: string
+          nullable: true
+          description: Present when status is failed; records provider, timeout, or JSON parsing errors without creating business drafts.
+        createdAt:
+          type: string
+
+    LlmDraftRunList:
+      type: object
+      required: [accountSetId, status, draftType, total, items]
+      properties:
+        accountSetId:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+          enum: [completed, failed]
+        draftType:
+          type: string
+          nullable: true
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LlmDraftRunListItem"
+
+    LlmDraftRunListItem:
+      type: object
+      required: [id, accountSetId, provider, model, status, draftType, outputSchema, evidenceCount, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        status:
+          type: string
+          enum: [completed, failed]
+        draftType:
+          type: string
+          nullable: true
+        sourceObjectType:
+          type: string
+          nullable: true
+        sourceObjectId:
+          type: string
+          nullable: true
+        evidenceCount:
+          type: integer
+        outputSchema:
+          type: string
+        errorMessage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+
+    LlmDraftMetrics:
+      type: object
+      required:
+        - accountSetId
+        - draftType
+        - totalRuns
+        - completedRuns
+        - failedRuns
+        - schemaSuccessRate
+        - candidateCount
+        - convertedCandidates
+        - rejectedCandidates
+        - pendingCandidates
+        - adoptionRate
+        - rejectionRate
+        - humanCorrectionRate
+        - providerBreakdown
+      properties:
+        accountSetId:
+          type: string
+          nullable: true
+        draftType:
+          type: string
+          nullable: true
+        totalRuns:
+          type: integer
+        completedRuns:
+          type: integer
+        failedRuns:
+          type: integer
+        schemaSuccessRate:
+          type: number
+          description: Completed LLM draft runs divided by all LLM draft runs after schema/provider validation.
+        candidateCount:
+          type: integer
+        convertedCandidates:
+          type: integer
+        rejectedCandidates:
+          type: integer
+        pendingCandidates:
+          type: integer
+        adoptionRate:
+          type: number
+          description: Converted Agent draft candidates divided by all generated candidates in the metric scope.
+        rejectionRate:
+          type: number
+        humanCorrectionRate:
+          type: number
+          description: Candidates with human-resolved unmatched items divided by all generated candidates in the metric scope.
+        providerBreakdown:
+          type: array
+          items:
+            $ref: "#/components/schemas/LlmDraftProviderMetric"
+
+    LlmDraftProviderMetric:
+      type: object
+      required: [provider, model, totalRuns, completedRuns, failedRuns, schemaSuccessRate]
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        totalRuns:
+          type: integer
+        completedRuns:
+          type: integer
+        failedRuns:
+          type: integer
+        schemaSuccessRate:
+          type: number
+
+    ConvertAgentDraftCandidateRequest:
+      type: object
+      required: [reviewedBy, reviewedDraftPayload]
+      properties:
+        reviewedBy:
+          type: string
+        resolvedUnmatchedItems:
+          type: array
+          description: Required when the candidate exposes unmatchedItems; each field must be resolved by a human reviewer before conversion.
+          items:
+            $ref: "#/components/schemas/AgentDraftResolvedUnmatchedItem"
+        reviewedDraftPayload:
+          type: object
+          required: [documentType]
+          properties:
+            documentType:
+              type: string
+              enum: [voucher, purchase_order, sales_order, inventory_movement, material_requisition, product_receipt, stock_count, master_data, payroll_allocation, depreciation_run, asset_change, report_interpretation]
+            accountSetId:
+              type: string
+            runNo:
+              type: string
+              description: Required when documentType is depreciation_run or payroll_allocation.
+            fiscalYear:
+              type: integer
+            periodNo:
+              type: integer
+            dryRun:
+              type: boolean
+              description: Must remain true when documentType is depreciation_run; conversion creates a non-mutating Agent depreciation-run draft instead of a formal depreciation run.
+            voucherDate:
+              type: string
+            voucherNo:
+              type: string
+            supplierId:
+              type: string
+              description: Required when documentType is purchase_order.
+            orderDate:
+              type: string
+              description: Required when documentType is purchase_order.
+            currency:
+              type: string
+            exchangeRate:
+              type: number
+            movementType:
+              type: string
+              description: Inventory movement conversion is currently documented but rejected until a non-mutating warehouse draft model exists.
+              enum: [inbound, outbound, adjustment]
+            businessType:
+              type: string
+            lines:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                properties:
+                  summary:
+                    type: string
+                  accountCode:
+                    type: string
+                  debit:
+                    type: number
+                  credit:
+                    type: number
+                  auxiliaries:
+                    type: object
+                    additionalProperties: true
+                  itemCode:
+                    type: string
+                  itemName:
+                    type: string
+                  quantity:
+                    type: number
+                  unitPrice:
+                    type: number
+                  taxRate:
+                    type: number
+                  itemId:
+                    type: string
+                  warehouseId:
+                    type: string
+                  unitCost:
+                    type: number
+
+    RejectAgentDraftCandidateRequest:
+      type: object
+      required: [rejectedBy, rejectionReason]
+      properties:
+        rejectedBy:
+          type: string
+        rejectionReason:
+          type: string
+
+    AgentDraftSourceContext:
+      type: object
+      description: Source object context resolved by the system before the LLM Draft Adapter is called. The model receives this audited snapshot instead of trusting a raw sourceObjectId string.
+      additionalProperties: true
+      properties:
+        sourceObjectType:
+          type: string
+        sourceObjectId:
+          type: string
+        userInstruction:
+          type: string
+        sourceObject:
+          $ref: "#/components/schemas/AgentDraftSourceObject"
+
+    AgentDraftSourceObject:
+      type: object
+      description: Resolved business source snapshot. Work-order snapshots include product, quantity, period, BOM yield, and BOM component lines; order snapshots include counterparty, amount, currency, and source lines; warehouse snapshots include inventory movement or stock count line context for inventory draft generation; voucher snapshots include voucher header, evidence, and accounting entry lines; payroll and fixed-asset snapshots include payroll run totals or asset card values for Agent draft prefilling; report-run snapshots include immutable report cells, evidence refs, and trace links for interpretation drafts.
+      additionalProperties: true
+      properties:
+        objectType:
+          type: string
+          enum: [work_order, purchase_order, sales_order, inventory_movement, stock_count, voucher, payroll_run, fixed_asset, report_run]
+        id:
+          type: string
+        documentNo:
+          type: string
+        movementType:
+          type: string
+        businessType:
+          type: string
+        sourceType:
+          type: string
+          nullable: true
+        sourceDocumentId:
+          type: string
+          nullable: true
+        movementDate:
+          type: string
+        costStatus:
+          type: string
+        totalQuantity:
+          type: number
+        countNo:
+          type: string
+        totalDifferenceQuantity:
+          type: number
+        totalAdjustmentAmount:
+          type: number
+        voucherNo:
+          type: string
+        voucherDate:
+          type: string
+          format: date
+        attachmentCount:
+          type: integer
+        attachmentIds:
+          type: array
+          items:
+            type: string
+        runNo:
+          type: string
+        payrollCategoryId:
+          type: string
+        payrollCategoryCode:
+          type: string
+        variableImportId:
+          type: string
+        lineCount:
+          type: integer
+        totalGrossAmount:
+          type: number
+        totalDeductionAmount:
+          type: number
+        totalTaxAmount:
+          type: number
+        totalNetPay:
+          type: number
+        totalCompanyCost:
+          type: number
+        assetNo:
+          type: string
+        assetName:
+          type: string
+        categoryId:
+          type: string
+        categoryCode:
+          type: string
+        depreciationMethodId:
+          type: string
+        depreciationMethodCode:
+          type: string
+        acquisitionType:
+          type: string
+        acquisitionDate:
+          type: string
+          format: date
+        originalValue:
+          type: number
+        accumulatedDepreciation:
+          type: number
+        netValue:
+          type: number
+        salvageValue:
+          type: number
+        usefulLifeMonths:
+          type: integer
+        serviceStartYear:
+          type: integer
+        serviceStartPeriod:
+          type: integer
+        currentDepartmentId:
+          type: string
+        currentDepartmentName:
+          type: string
+        responsiblePerson:
+          type: string
+        usageStatus:
+          type: string
+        depreciationTimelineRule:
+          type: string
+        depreciationDepartmentRule:
+          type: string
+        isDepreciationStopped:
+          type: boolean
+        templateVersionId:
+          type: string
+        templateId:
+          type: string
+          nullable: true
+        templateCode:
+          type: string
+          nullable: true
+        templateName:
+          type: string
+          nullable: true
+        reportType:
+          type: string
+          nullable: true
+        renderMode:
+          type: string
+        snapshotHash:
+          type: string
+        cellCount:
+          type: integer
+        traceLinkCount:
+          type: integer
+        orderNo:
+          type: string
+        supplierId:
+          type: string
+        supplierName:
+          type: string
+        customerId:
+          type: string
+        customerName:
+          type: string
+        orderDate:
+          type: string
+          format: date
+        currency:
+          type: string
+        exchangeRate:
+          type: number
+        totalAmount:
+          type: number
+        lines:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              id:
+                type: string
+              lineNo:
+                type: integer
+              itemId:
+                type: string
+              itemCode:
+                type: string
+              itemName:
+                type: string
+              employeeProfileId:
+                type: string
+              employeeNo:
+                type: string
+              employeeName:
+                type: string
+              departmentId:
+                type: string
+              departmentName:
+                type: string
+              summary:
+                type: string
+              accountCode:
+                type: string
+              accountName:
+                type: string
+              sheetCode:
+                type: string
+              cellAddress:
+                type: string
+              label:
+                type: string
+                nullable: true
+              formulaText:
+                type: string
+                nullable: true
+              calculatedValue:
+                type: number
+              displayFormat:
+                type: string
+                nullable: true
+              traceId:
+                type: string
+                nullable: true
+              evidenceRef:
+                type: string
+              warehouseId:
+                type: string
+              warehouseCode:
+                type: string
+              locationId:
+                type: string
+                nullable: true
+              locationCode:
+                type: string
+                nullable: true
+              batchNo:
+                type: string
+                nullable: true
+              quantity:
+                type: number
+              unitPrice:
+                type: number
+              unitCost:
+                type: number
+              amount:
+                type: number
+              grossAmount:
+                type: number
+              deductionAmount:
+                type: number
+              taxableIncome:
+                type: number
+              individualIncomeTax:
+                type: number
+              netPay:
+                type: number
+              companyCost:
+                type: number
+              debit:
+                type: number
+              credit:
+                type: number
+              auxiliaries:
+                type: object
+                additionalProperties: true
+              taxRate:
+                type: number
+              taxAmount:
+                type: number
+              totalAmount:
+                type: number
+              bookQuantity:
+                type: number
+              actualQuantity:
+                type: number
+              differenceQuantity:
+                type: number
+              adjustmentAmount:
+                type: number
+              reason:
+                type: string
+                nullable: true
+              receivedQuantity:
+                type: number
+              shippedQuantity:
+                type: number
+              invoicedQuantity:
+                type: number
+        traceLinks:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              id:
+                type: string
+                nullable: true
+              traceId:
+                type: string
+                nullable: true
+              sourceType:
+                type: string
+                nullable: true
+              accountCode:
+                type: string
+                nullable: true
+              accountName:
+                type: string
+                nullable: true
+              amount:
+                type: number
+        workOrderNo:
+          type: string
+        status:
+          type: string
+        productItemId:
+          type: string
+        productItemCode:
+          type: string
+        productItemName:
+          type: string
+        bomId:
+          type: string
+        bomVersion:
+          type: string
+        bomYieldQuantity:
+          type: number
+        plannedQuantity:
+          type: number
+        completedQuantity:
+          type: number
+        remainingQuantity:
+          type: number
+        directMaterialCost:
+          type: number
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        bomLines:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              componentItemId:
+                type: string
+              componentItemCode:
+                type: string
+              componentItemName:
+                type: string
+              lineNo:
+                type: integer
+              quantity:
+                type: number
+              scrapRate:
+                type: number
+
+    AgentDraftCandidate:
+      type: object
+      required: [id, accountSetId, draftType, status, dryRun, requiresHumanConfirmation, sourceContext, matchedMasterData, unmatchedItems, draftPayload, dryRunResult, evidenceRefs, ocrResults, llmDraftRun]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        fiscalPeriodId:
+          type: string
+        draftType:
+          type: string
+        sourceObjectType:
+          type: string
+        sourceObjectId:
+          type: string
+        userInstruction:
+          type: string
+        status:
+          type: string
+          enum: [candidate, converted, rejected]
+        dryRun:
+          type: boolean
+        riskLevel:
+          type: string
+          enum: [medium]
+        requiresHumanConfirmation:
+          type: boolean
+        sourceContext:
+          $ref: "#/components/schemas/AgentDraftSourceContext"
+        matchedMasterData:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        unmatchedItems:
+          type: array
+          items:
+            type: object
+            required: [field, reason]
+            properties:
+              field:
+                type: string
+              reason:
+                type: string
+        draftPayload:
+          type: object
+          additionalProperties: true
+        dryRunResult:
+          type: object
+          additionalProperties: true
+        warnings:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        ocrResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentDraftOcrResult"
+        llmDraftRun:
+          $ref: "#/components/schemas/LlmDraftRun"
+        convertedObjectType:
+          type: string
+        convertedObjectId:
+          type: string
+        reviewedBy:
+          type: string
+        reviewedAt:
+          type: string
+        rejectedBy:
+          type: string
+        rejectedAt:
+          type: string
+        rejectionReason:
+          type: string
+        resolvedUnmatchedItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentDraftResolvedUnmatchedItem"
+        reviewedDraftPayload:
+          type: object
+          additionalProperties: true
+
+    AgentDraftResolvedUnmatchedItem:
+      type: object
+      required: [field, resolution, resolvedValue]
+      properties:
+        field:
+          type: string
+          description: Field path from AgentDraftCandidate.unmatchedItems.
+        resolution:
+          type: string
+          description: Human review decision, such as selected_by_reviewer or corrected_by_reviewer.
+        resolvedValue:
+          description: Human-selected or corrected value used in reviewedDraftPayload.
+        reviewedBy:
+          type: string
+        reviewedAt:
+          type: string
+
+    AgentDraftCandidateQueue:
+      type: object
+      required: [accountSetId, status, draftType, total, items]
+      properties:
+        accountSetId:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        draftType:
+          type: string
+          nullable: true
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentDraftCandidateQueueItem"
+
+    AgentDraftCandidateQueueItem:
+      type: object
+      required: [id, accountSetId, draftType, status, riskLevel, requiresHumanConfirmation, confidence, dryRunStatus, unmatchedCount, warningCount, evidenceCount, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        draftType:
+          type: string
+        status:
+          type: string
+          enum: [candidate, converted, rejected, archived]
+        riskLevel:
+          type: string
+        requiresHumanConfirmation:
+          type: boolean
+        confidence:
+          type: number
+        sourceObjectType:
+          type: string
+          nullable: true
+        sourceObjectId:
+          type: string
+          nullable: true
+        userInstruction:
+          type: string
+        dryRunStatus:
+          type: string
+          nullable: true
+        unmatchedCount:
+          type: integer
+        warningCount:
+          type: integer
+        evidenceCount:
+          type: integer
+        convertedObjectType:
+          type: string
+          nullable: true
+        convertedObjectId:
+          type: string
+          nullable: true
+        reviewedBy:
+          type: string
+          nullable: true
+        reviewedAt:
+          type: string
+          nullable: true
+        rejectedBy:
+          type: string
+          nullable: true
+        rejectedAt:
+          type: string
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+
+    AgentTool:
+      type: object
+      required: [name, title, description, riskLevel, actionKind, agentTokenAllowed, approvalPolicy, inputSchema, outputSchema]
+      properties:
+        name:
+          type: string
+          enum:
+            - search_vouchers
+            - search_ledger
+            - search_reports
+            - suggest_master_data_draft
+            - suggest_purchase_order_draft
+            - suggest_sales_order_draft
+            - suggest_inventory_movement_draft
+            - suggest_material_requisition_draft
+            - suggest_product_receipt_draft
+            - suggest_stock_count_draft
+            - create_voucher_draft
+            - suggest_payroll_allocation_draft
+            - run_depreciation_dry_run
+            - suggest_asset_change_draft
+            - suggest_report_interpretation_draft
+            - run_close_checklist
+            - post_approved_voucher
+            - execute_approved_payment
+            - close_approved_period
+        title:
+          type: string
+        description:
+          type: string
+        riskLevel:
+          type: string
+          enum: [low, medium, high]
+        actionKind:
+          type: string
+          enum: [query, draft_generation, dry_run, posting_execution, external_execution, period_execution]
+        draftType:
+          type: string
+          nullable: true
+          enum: [master_data, purchase_order, sales_order, inventory_movement, material_requisition, product_receipt, stock_count, voucher, payroll_allocation, depreciation_run, asset_change, report_interpretation, null]
+        agentTokenAllowed:
+          type: boolean
+        approvalPolicy:
+          type: object
+          required: [approvalRequired, requiresHumanConfirmation, minApprovals, executeRequiresUserToken]
+          properties:
+            approvalRequired:
+              type: boolean
+            requiresHumanConfirmation:
+              type: boolean
+            minApprovals:
+              type: integer
+            executeRequiresUserToken:
+              type: boolean
+        inputSchema:
+          type: object
+          description: JSON Schema that the Agent Gateway must validate before dry-run.
+          additionalProperties: true
+        outputSchema:
+          type: object
+          description: JSON Schema for tool dry-run or candidate-draft output.
+          additionalProperties: true
+
+    InvokeAgentToolRequest:
+      type: object
+      required: [accountSetId, dryRun]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        userInstruction:
+          type: string
+          description: Required for draft_generation tools.
+        sourceObjectType:
+          type: string
+        sourceObjectId:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
+        attachmentIds:
+          type: array
+          items:
+            type: string
+        reviewedOcrResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentDraftOcrResult"
+        payload:
+          type: object
+          additionalProperties: true
+          description: Payload used for non-draft AgentAction dry-runs.
+        requestedBy:
+          type: string
+        dryRun:
+          type: boolean
+          const: true
+
+    AgentToolInvocationResult:
+      type: object
+      required: [toolName, actionKind, dryRun, resultType, result]
       properties:
         toolName:
           type: string
+        actionKind:
+          type: string
+        dryRun:
+          type: boolean
+          const: true
+        resultType:
+          type: string
+          enum: [agent_draft_candidate, agent_action]
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/AgentDraftCandidate"
+            - $ref: "#/components/schemas/AgentAction"
+
+    CreateAgentActionRequest:
+      type: object
+      required: [accountSetId, toolName, dryRun, evidenceRefs]
+      properties:
+        accountSetId:
+          type: string
+        toolName:
+          type: string
+          description: Must match a registered AgentTool name.
         dryRun:
           type: boolean
           const: true
@@ -10763,11 +13261,33 @@ components:
           type: object
           additionalProperties: true
 
+    ExecuteAgentActionRequest:
+      type: object
+      required: [executedBy, userTokenConfirmed]
+      properties:
+        executedBy:
+          type: string
+        userTokenConfirmed:
+          type: boolean
+          const: true
+          description: Must be true when approvalPolicy.executeRequiresUserToken is enabled; Agent tokens cannot set this boundary on behalf of a real user.
+
+    ReverseAgentActionRequest:
+      type: object
+      required: [reversedBy, reversalReason]
+      properties:
+        reversedBy:
+          type: string
+        reversalReason:
+          type: string
+
     AgentAction:
       type: object
-      required: [id, toolName, dryRun, riskLevel, status, evidenceRefs]
+      required: [id, accountSetId, toolName, dryRun, riskLevel, actionKind, status, approvalRequired, approvalPolicy, evidenceRefs, evidenceSnapshots, payload, dryRunResult, approvalProgress, executionResult, reversalResult, auditSummary]
       properties:
         id:
+          type: string
+        accountSetId:
           type: string
         toolName:
           type: string
@@ -10776,13 +13296,246 @@ components:
         riskLevel:
           type: string
           enum: [low, medium, high]
+        actionKind:
+          type: string
         status:
           type: string
-          enum: [drafted, approval_required, approved, executed, rejected]
+          enum: [created, planning, dry_run_completed, submitted_for_approval, approved, executed, reversed, archived, rejected]
+        approvalRequired:
+          type: boolean
+        approvalPolicy:
+          type: object
+          additionalProperties: true
         evidenceRefs:
           type: array
           items:
             type: string
+        evidenceSnapshots:
+          type: array
+          description: Immutable attachment hash snapshots captured at dry-run time and verified again immediately before execution.
+          items:
+            $ref: "#/components/schemas/AgentEvidenceSnapshot"
+        payload:
+          type: object
+          additionalProperties: true
+        requestedBy:
+          type: string
+        createdAt:
+          type: string
+        dryRunResult:
+          type: object
+          additionalProperties: true
+        approvalRequest:
+          type: object
+          nullable: true
+          additionalProperties: true
+        approvalHistory:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        approvalProgress:
+          $ref: "#/components/schemas/AgentApprovalProgress"
+        executionResult:
+          type: object
+          nullable: true
+          additionalProperties: true
+        reversalResult:
+          type: object
+          nullable: true
+          additionalProperties: true
+        auditSummary:
+          $ref: "#/components/schemas/AgentActionAuditSummary"
+
+    AgentActionQueue:
+      type: object
+      required: [accountSetId, status, riskLevel, toolName, total, items]
+      properties:
+        accountSetId:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        riskLevel:
+          type: string
+          nullable: true
+        toolName:
+          type: string
+          nullable: true
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentActionQueueItem"
+
+    AgentActionQueueItem:
+      type: object
+      required: [id, accountSetId, toolName, actionKind, riskLevel, status, approvalRequired, approvalProgress, dryRunStatus, evidenceCount, requestedBy, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+        toolName:
+          type: string
+        actionKind:
+          type: string
+        riskLevel:
+          type: string
+          enum: [low, medium, high]
+        status:
+          type: string
+          enum: [dry_run_completed, submitted_for_approval, approved, executed, reversed, archived, rejected]
+        approvalRequired:
+          type: boolean
+        approvalProgress:
+          $ref: "#/components/schemas/AgentApprovalProgress"
+        dryRunStatus:
+          type: string
+          nullable: true
+        evidenceCount:
+          type: integer
+        requestedBy:
+          type: string
+        submittedBy:
+          type: string
+          nullable: true
+        submittedAt:
+          type: string
+          nullable: true
+        executedBy:
+          type: string
+          nullable: true
+        executedAt:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+
+    AgentApprovalProgress:
+      type: object
+      required: [approvedCount, requiredCount, remainingCount]
+      properties:
+        approvedCount:
+          type: integer
+        requiredCount:
+          type: integer
+        remainingCount:
+          type: integer
+
+    AgentActionAuditSummary:
+      type: object
+      required: [agentActionId, accountSetId, toolName, actionKind, status, riskLevel, requestedBy, approvalRequired, approvals, evidence, replay, dryRunStatus, executionStatus, reversalStatus, mutationState, nextActions]
+      properties:
+        agentActionId:
+          type: string
+        accountSetId:
+          type: string
+        toolName:
+          type: string
+        actionKind:
+          type: string
+        status:
+          type: string
+        riskLevel:
+          type: string
+          enum: [low, medium, high]
+        requestedBy:
+          type: string
+        approvalRequired:
+          type: boolean
+        approvals:
+          $ref: "#/components/schemas/AgentApprovalProgress"
+        evidence:
+          type: object
+          required: [snapshotCount, verificationStatus, failedCount]
+          properties:
+            snapshotCount:
+              type: integer
+            verificationStatus:
+              type: string
+              enum: [pending, verified, failed]
+            failedCount:
+              type: integer
+        replay:
+          type: object
+          required: [eventCount, eventTypes, lastEventType]
+          properties:
+            eventCount:
+              type: integer
+            eventTypes:
+              type: array
+              items:
+                type: string
+            lastEventType:
+              type: string
+              nullable: true
+        dryRunStatus:
+          type: string
+          nullable: true
+        executionStatus:
+          type: string
+          nullable: true
+        reversalStatus:
+          type: string
+          nullable: true
+        mutationState:
+          type: string
+          enum: [dry_run_only, executed_without_business_mutation, executed_with_business_mutation, reversed_without_business_mutation, reversed_with_business_mutation]
+        nextActions:
+          type: array
+          items:
+            type: string
+            enum: [submit, approve, execute, reverse]
+
+    AgentEvidenceSnapshot:
+      type: object
+      required: [attachmentId, checksum, byteSize, storageProvider, storageKey, capturedAt]
+      properties:
+        attachmentId:
+          type: string
+        checksum:
+          type: string
+          description: SHA-256 checksum captured before approval; execution fails if the current attachment checksum differs.
+        byteSize:
+          type: integer
+        storageProvider:
+          type: string
+        storageKey:
+          type: string
+        capturedAt:
+          type: string
+
+    AgentActionReplay:
+      type: object
+      required: [agentActionId, auditSummary, events]
+      properties:
+        agentActionId:
+          type: string
+        auditSummary:
+          $ref: "#/components/schemas/AgentActionAuditSummary"
+        events:
+          type: array
+          items:
+            type: object
+            required: [id, agentActionId, eventType, actorId, payload, createdAt]
+            properties:
+              id:
+                type: string
+              agentActionId:
+                type: string
+              eventType:
+                type: string
+                enum: [input_received, dry_run_completed, submitted_for_approval, approved, evidence_verified, evidence_verification_failed, restore_drill_outbound_blocked, executed, reversed]
+              actorId:
+                type: string
+              payload:
+                type: object
+                additionalProperties: true
+              createdAt:
+                type: string
 
     AuditLog:
       type: object
@@ -10799,6 +13552,64 @@ components:
         objectId:
           type: string
         occurredAt:
+          type: string
+          format: date-time
+
+    SecurityEventList:
+      type: object
+      required: [accountSetId, eventType, severity, actorId, total, items]
+      properties:
+        accountSetId:
+          type: string
+          nullable: true
+        eventType:
+          type: string
+          nullable: true
+        severity:
+          type: string
+          nullable: true
+        actorId:
+          type: string
+          nullable: true
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SecurityEvent"
+
+    SecurityEvent:
+      type: object
+      required: [id, eventType, severity, source, message, payload, createdAt]
+      properties:
+        id:
+          type: string
+        accountSetId:
+          type: string
+          nullable: true
+        eventType:
+          type: string
+          enum: [permission_denied, idempotency_scope_mismatch]
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        actorId:
+          type: string
+          nullable: true
+        source:
+          type: string
+        objectType:
+          type: string
+          nullable: true
+        objectId:
+          type: string
+          nullable: true
+        message:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+        createdAt:
           type: string
           format: date-time
 

@@ -82,6 +82,21 @@ const phase5ReportExportAiMigrationText = readMigrationText(
 const phase5ReportApprovalCashflowMigrationText = readMigrationText(
   "../prisma/migrations/20260611130000_phase5_report_approval_cashflow/migration.sql"
 );
+const phase6OpsBackupRestoreMigrationText = readMigrationText(
+  "../prisma/migrations/20260612090000_phase6_ops_backup_restore/migration.sql"
+);
+const phase6MigrationJobsMigrationText = readMigrationText(
+  "../prisma/migrations/20260612092000_phase6_migration_jobs/migration.sql"
+);
+const phase6AgentDraftPersistenceMigrationText = readMigrationText(
+  "../prisma/migrations/20260612093000_phase6_agent_draft_persistence/migration.sql"
+);
+const phase6AgentActionPersistenceMigrationText = readMigrationText(
+  "../prisma/migrations/20260612100000_phase6_agent_action_persistence/migration.sql"
+);
+const phase6SecurityEventsMigrationText = readMigrationText(
+  "../prisma/migrations/20260612103000_phase6_security_events/migration.sql"
+);
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 function readMigrationText(relativePath) {
@@ -516,4 +531,82 @@ test("Phase 5 report approval migration creates review queue and exception persi
   assert.match(phase5ReportApprovalCashflowMigrationText, /"exceptionsJson" TEXT NOT NULL DEFAULT '\[\]'/);
   assert.match(phase5ReportApprovalCashflowMigrationText, /CREATE INDEX "ReportApproval_accountSetId_status_idx"/);
   assert.match(phase5ReportApprovalCashflowMigrationText, /CREATE INDEX "ReportApproval_reportRunId_idx"/);
+});
+
+test("Phase 6 Ops backup restore migration creates persistent job tables", () => {
+  for (const table of ["BackupJob", "RestoreJob"]) {
+    assert.match(phase6OpsBackupRestoreMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+
+  assert.match(phase6OpsBackupRestoreMigrationText, /"manifestJson" TEXT NOT NULL/);
+  assert.match(phase6OpsBackupRestoreMigrationText, /"attachmentHashVerificationJson" TEXT NOT NULL/);
+  assert.match(phase6OpsBackupRestoreMigrationText, /"impactScopeJson" TEXT NOT NULL/);
+  assert.match(phase6OpsBackupRestoreMigrationText, /"blockedChannelsJson" TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(phase6OpsBackupRestoreMigrationText, /"validationJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6OpsBackupRestoreMigrationText, /"businessMutation" BOOLEAN NOT NULL DEFAULT false/);
+  assert.match(phase6OpsBackupRestoreMigrationText, /"outboundBlocked" BOOLEAN NOT NULL DEFAULT false/);
+  assert.match(phase6OpsBackupRestoreMigrationText, /CREATE INDEX "BackupJob_accountSetId_createdAt_idx"/);
+  assert.match(phase6OpsBackupRestoreMigrationText, /CREATE INDEX "RestoreJob_accountSetId_createdAt_idx"/);
+  assert.match(phase6OpsBackupRestoreMigrationText, /CREATE INDEX "RestoreJob_sourceBackupJobId_idx"/);
+});
+
+test("Phase 6 migration jobs migration creates persistent dry-run job table", () => {
+  assert.match(phase6MigrationJobsMigrationText, /CREATE TABLE "MigrationJob"/);
+  assert.match(phase6MigrationJobsMigrationText, /"jobType" TEXT NOT NULL/);
+  assert.match(phase6MigrationJobsMigrationText, /"targetObjectType" TEXT NOT NULL/);
+  assert.match(phase6MigrationJobsMigrationText, /"sourceSummaryJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6MigrationJobsMigrationText, /"fieldMappingJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6MigrationJobsMigrationText, /"sourceRowsJson" TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(phase6MigrationJobsMigrationText, /"validationJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6MigrationJobsMigrationText, /"errorReportJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6MigrationJobsMigrationText, /"businessMutation" BOOLEAN NOT NULL DEFAULT false/);
+  assert.match(phase6MigrationJobsMigrationText, /CREATE INDEX "MigrationJob_accountSetId_status_idx"/);
+  assert.match(phase6MigrationJobsMigrationText, /CREATE INDEX "MigrationJob_accountSetId_jobType_idx"/);
+});
+
+test("Phase 6 Agent draft persistence migration creates candidate and LLM run tables", () => {
+  for (const table of ["LlmDraftRun", "AgentDraftCandidate"]) {
+    assert.match(phase6AgentDraftPersistenceMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+
+  assert.match(phase6AgentDraftPersistenceMigrationText, /"inputSummaryJson" TEXT NOT NULL/);
+  assert.match(phase6AgentDraftPersistenceMigrationText, /"sourceContextJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6AgentDraftPersistenceMigrationText, /"draftPayloadJson" TEXT NOT NULL/);
+  assert.match(phase6AgentDraftPersistenceMigrationText, /"ocrResultsJson" TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(phase6AgentDraftPersistenceMigrationText, /"dryRunResultJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6AgentDraftPersistenceMigrationText, /"llmDraftRunId" TEXT/);
+  assert.match(phase6AgentDraftPersistenceMigrationText, /CREATE INDEX "LlmDraftRun_accountSetId_status_idx"/);
+  assert.match(phase6AgentDraftPersistenceMigrationText, /CREATE INDEX "LlmDraftRun_accountSetId_draftType_idx"/);
+  assert.match(phase6AgentDraftPersistenceMigrationText, /CREATE INDEX "AgentDraftCandidate_accountSetId_status_idx"/);
+  assert.match(phase6AgentDraftPersistenceMigrationText, /CREATE INDEX "AgentDraftCandidate_accountSetId_draftType_idx"/);
+});
+
+test("Phase 6 Agent action persistence migration creates action approval and replay tables", () => {
+  for (const table of ["AgentAction", "AgentApproval", "AgentReplayEvent"]) {
+    assert.match(phase6AgentActionPersistenceMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+
+  assert.match(phase6AgentActionPersistenceMigrationText, /"approvalPolicyJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /"evidenceRefsJson" TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /"evidenceSnapshotsJson" TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /"payloadJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /"dryRunResultJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /"executionResultJson" TEXT/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /"reversalResultJson" TEXT/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /"approvalProgressJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /"payloadJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /CREATE INDEX "AgentAction_accountSetId_status_idx"/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /CREATE INDEX "AgentApproval_agentActionId_approvedBy_idx"/);
+  assert.match(phase6AgentActionPersistenceMigrationText, /CREATE INDEX "AgentReplayEvent_agentActionId_createdAt_idx"/);
+});
+
+test("Phase 6 security events migration creates persistent anomaly audit table", () => {
+  assert.match(phase6SecurityEventsMigrationText, /CREATE TABLE "SecurityEvent"/);
+  assert.match(phase6SecurityEventsMigrationText, /"accountSetId" TEXT/);
+  assert.match(phase6SecurityEventsMigrationText, /"eventType" TEXT NOT NULL/);
+  assert.match(phase6SecurityEventsMigrationText, /"severity" TEXT NOT NULL/);
+  assert.match(phase6SecurityEventsMigrationText, /"payloadJson" TEXT NOT NULL DEFAULT '\{\}'/);
+  assert.match(phase6SecurityEventsMigrationText, /CREATE INDEX "SecurityEvent_accountSetId_createdAt_idx"/);
+  assert.match(phase6SecurityEventsMigrationText, /CREATE INDEX "SecurityEvent_eventType_severity_idx"/);
+  assert.match(phase6SecurityEventsMigrationText, /CREATE INDEX "SecurityEvent_actorId_createdAt_idx"/);
 });

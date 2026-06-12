@@ -36,6 +36,31 @@ type DeploymentConfigResponse = {
       retentionDays: number | null;
     };
   };
+  ai: {
+    ocr: {
+      provider: string;
+      model: string;
+      configured: boolean;
+      commandPresent: boolean;
+    };
+    llmDraft: {
+      provider: string;
+      model: string;
+      configured: boolean;
+      timeoutMs: number | null;
+      maxTokens: number | null;
+      baseUrlPresent: boolean;
+      apiKeyRefPresent: boolean;
+      redaction: string;
+    };
+  };
+  restoreDrill: {
+    enabled: boolean;
+    silentSandbox: boolean;
+    outboundBlocked: boolean;
+    blockedChannels: string[];
+    envVar: string | null;
+  };
 };
 
 const statusTag = (configured: boolean) => <Tag color={configured ? 'green' : 'red'}>{configured ? '已配置' : '缺失'}</Tag>;
@@ -94,6 +119,22 @@ export const DeploymentConfig: React.FC = () => {
         <Descriptions.Item label="存储状态">
           {config ? statusTag(config.attachmentStorage.configured) : '-'}
         </Descriptions.Item>
+        <Descriptions.Item label="本地 OCR">{zhStatus(config?.ai.ocr.provider)}</Descriptions.Item>
+        <Descriptions.Item label="OCR 状态">{config ? statusTag(config.ai.ocr.configured) : '-'}</Descriptions.Item>
+        <Descriptions.Item label="OCR 命令">{config ? statusTag(config.ai.ocr.commandPresent) : '-'}</Descriptions.Item>
+        <Descriptions.Item label="草稿大模型">{zhStatus(config?.ai.llmDraft.provider)}</Descriptions.Item>
+        <Descriptions.Item label="大模型状态">{config ? statusTag(config.ai.llmDraft.configured) : '-'}</Descriptions.Item>
+        <Descriptions.Item label="恢复演练">{config ? statusTag(config.restoreDrill.enabled) : '-'}</Descriptions.Item>
+        <Descriptions.Item label="外发阻断">
+          {config ? (
+            <Space wrap>
+              {statusTag(config.restoreDrill.outboundBlocked)}
+              <span>{config.restoreDrill.blockedChannels.join(', ')}</span>
+            </Space>
+          ) : (
+            '-'
+          )}
+        </Descriptions.Item>
       </Descriptions>
 
       <Space wrap>
@@ -140,6 +181,23 @@ export const DeploymentConfig: React.FC = () => {
             {inactiveConfigTag('附件保留天数', 'AIS_ATTACHMENT_RETENTION_DAYS')}
           </>
         )}
+        {configTag(config?.ai.ocr.configured, 'OCR 提供方', 'AIS_OCR_PROVIDER')}
+        {configTag(Boolean(config?.ai.ocr.model), 'OCR 模型', 'AIS_OCR_MODEL')}
+        {configTag(config?.ai.ocr.commandPresent, 'OCR 本地命令', 'AIS_OCR_COMMAND')}
+        {config?.ai.ocr.commandPresent
+          ? configTag(true, 'OCR 命令参数模板', 'AIS_OCR_COMMAND_ARGS')
+          : inactiveConfigTag('OCR 命令参数模板', 'AIS_OCR_COMMAND_ARGS')}
+        {configTag(Boolean(config?.ai.llmDraft.provider), '草稿大模型提供方', 'AIS_LLM_DRAFT_PROVIDER')}
+        {configTag(Boolean(config?.ai.llmDraft.model), '草稿大模型模型', 'AIS_LLM_DRAFT_MODEL')}
+        {configTag(config?.ai.llmDraft.baseUrlPresent, '草稿大模型网关', 'AIS_LLM_DRAFT_BASE_URL')}
+        {configTag(config?.ai.llmDraft.apiKeyRefPresent, '草稿大模型密钥引用', 'AIS_LLM_DRAFT_API_KEY_REF')}
+        {configTag(Boolean(config?.ai.llmDraft.timeoutMs), '草稿大模型超时', 'AIS_LLM_DRAFT_TIMEOUT_MS')}
+        {configTag(Boolean(config?.ai.llmDraft.maxTokens), '草稿大模型 Token 上限', 'AIS_LLM_DRAFT_MAX_TOKENS')}
+        {configTag(Boolean(config?.ai.llmDraft.redaction), '草稿大模型脱敏策略', 'AIS_LLM_DRAFT_REDACTION')}
+        {configTag(config?.restoreDrill.enabled, '恢复演练静默沙箱', 'RESTORE_DRILL')}
+        {config?.restoreDrill.envVar === 'AIS_RESTORE_DRILL'
+          ? configTag(config.restoreDrill.enabled, '恢复演练静默沙箱别名', 'AIS_RESTORE_DRILL')
+          : inactiveConfigTag('恢复演练静默沙箱别名', 'AIS_RESTORE_DRILL')}
       </Space>
     </div>
   );

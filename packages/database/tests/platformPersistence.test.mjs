@@ -13,6 +13,7 @@ function createFakePrisma() {
   const accountSets = new Map();
   const accountSetUsers = new Map();
   const partners = new Map();
+  const inventoryItems = new Map();
   const purchaseOrders = new Map();
   const salesOrders = new Map();
   const purchaseReceipts = new Map();
@@ -40,6 +41,15 @@ function createFakePrisma() {
   const accountPeriodBalances = new Map();
   const bankStatements = new Map();
   const bankReconciliations = new Map();
+  const migrationJobs = new Map();
+  const backupJobs = new Map();
+  const restoreJobs = new Map();
+  const llmDraftRuns = new Map();
+  const agentDraftCandidates = new Map();
+  const agentActions = new Map();
+  const agentApprovals = new Map();
+  const agentReplayEvents = new Map();
+  const securityEvents = new Map();
   let roleNo = 0;
   let userNo = 0;
 
@@ -198,6 +208,21 @@ function createFakePrisma() {
         partners.set(where.id, partner);
         return partner;
       }
+    },
+    inventoryItem: {
+      create: async ({ data }) => {
+        const item = { ...data };
+        inventoryItems.set(item.id, item);
+        return item;
+      },
+      findMany: async ({ where } = {}) => {
+        const rows = [...inventoryItems.values()];
+        return where?.accountSetId ? rows.filter((item) => item.accountSetId === where.accountSetId) : rows;
+      },
+      findFirst: async ({ where }) =>
+        [...inventoryItems.values()].find(
+          (item) => where.OR.some((condition) => item.id === condition.id || item.code === condition.code)
+        ) ?? null
     },
     purchaseOrder: {
       create: async ({ data, include }) => {
@@ -790,6 +815,249 @@ function createFakePrisma() {
         bankReconciliations.set(reconciliation.id, reconciliation);
         return reconciliation;
       }
+    },
+    migrationJob: {
+      create: async ({ data }) => {
+        const job = { ...data };
+        migrationJobs.set(job.id, job);
+        return job;
+      },
+      update: async ({ where, data }) => {
+        const job = { ...migrationJobs.get(where.id), ...data };
+        migrationJobs.set(job.id, job);
+        return job;
+      },
+      findUnique: async ({ where }) => migrationJobs.get(where.id) ?? null,
+      findMany: async ({ where, orderBy } = {}) => {
+        let rows = [...migrationJobs.values()];
+        if (where?.accountSetId) {
+          rows = rows.filter((job) => job.accountSetId === where.accountSetId);
+        }
+        if (where?.status) {
+          rows = rows.filter((job) => job.status === where.status);
+        }
+        if (where?.jobType) {
+          rows = rows.filter((job) => job.jobType === where.jobType);
+        }
+        if (orderBy?.createdAt === "desc") {
+          rows = rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+        }
+        return rows;
+      }
+    },
+    backupJob: {
+      create: async ({ data }) => {
+        const job = { ...data };
+        backupJobs.set(job.id, job);
+        return job;
+      },
+      findMany: async ({ where, orderBy } = {}) => {
+        let rows = [...backupJobs.values()];
+        if (where?.accountSetId) {
+          rows = rows.filter((job) => job.accountSetId === where.accountSetId);
+        }
+        if (where?.status) {
+          rows = rows.filter((job) => job.status === where.status);
+        }
+        if (orderBy?.createdAt === "desc") {
+          rows = rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+        }
+        return rows;
+      },
+      findFirst: async ({ where }) =>
+        [...backupJobs.values()].find((job) =>
+          where.OR.some((condition) => job.id === condition.id || job.snapshotRef === condition.snapshotRef)
+        ) ?? null
+    },
+    restoreJob: {
+      create: async ({ data }) => {
+        const job = { ...data };
+        restoreJobs.set(job.id, job);
+        return job;
+      },
+      findMany: async ({ where, orderBy } = {}) => {
+        let rows = [...restoreJobs.values()];
+        if (where?.accountSetId) {
+          rows = rows.filter((job) => job.accountSetId === where.accountSetId);
+        }
+        if (where?.status) {
+          rows = rows.filter((job) => job.status === where.status);
+        }
+        if (orderBy?.createdAt === "desc") {
+          rows = rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+        }
+        return rows;
+      }
+    },
+    llmDraftRun: {
+      create: async ({ data }) => {
+        const run = { ...data };
+        llmDraftRuns.set(run.id, run);
+        return run;
+      },
+      findMany: async ({ where, orderBy } = {}) => {
+        let rows = [...llmDraftRuns.values()];
+        if (where?.accountSetId) {
+          rows = rows.filter((run) => run.accountSetId === where.accountSetId);
+        }
+        if (where?.status) {
+          rows = rows.filter((run) => run.status === where.status);
+        }
+        if (where?.draftType) {
+          rows = rows.filter((run) => run.draftType === where.draftType);
+        }
+        if (orderBy?.createdAt === "desc") {
+          rows = rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+        }
+        return rows;
+      }
+    },
+    agentDraftCandidate: {
+      create: async ({ data, include }) => {
+        const candidate = { ...data };
+        agentDraftCandidates.set(candidate.id, candidate);
+        return include?.llmDraftRun ? { ...candidate, llmDraftRun: llmDraftRuns.get(candidate.llmDraftRunId) ?? null } : candidate;
+      },
+      update: async ({ where, data, include }) => {
+        const current = agentDraftCandidates.get(where.id);
+        const candidate = { ...current, ...data };
+        agentDraftCandidates.set(candidate.id, candidate);
+        return include?.llmDraftRun ? { ...candidate, llmDraftRun: llmDraftRuns.get(candidate.llmDraftRunId) ?? null } : candidate;
+      },
+      findUnique: async ({ where, include }) => {
+        const candidate = agentDraftCandidates.get(where.id);
+        if (!candidate) return null;
+        return include?.llmDraftRun ? { ...candidate, llmDraftRun: llmDraftRuns.get(candidate.llmDraftRunId) ?? null } : candidate;
+      },
+      findMany: async ({ where, include, orderBy } = {}) => {
+        let rows = [...agentDraftCandidates.values()];
+        if (where?.accountSetId) {
+          rows = rows.filter((candidate) => candidate.accountSetId === where.accountSetId);
+        }
+        if (where?.status) {
+          rows = rows.filter((candidate) => candidate.status === where.status);
+        }
+        if (where?.draftType) {
+          rows = rows.filter((candidate) => candidate.draftType === where.draftType);
+        }
+        if (orderBy?.createdAt === "desc") {
+          rows = rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+        }
+        return include?.llmDraftRun
+          ? rows.map((candidate) => ({ ...candidate, llmDraftRun: llmDraftRuns.get(candidate.llmDraftRunId) ?? null }))
+          : rows;
+      }
+    },
+    agentAction: {
+      create: async ({ data }) => {
+        const action = { ...data };
+        agentActions.set(action.id, action);
+        return action;
+      },
+      update: async ({ where, data }) => {
+        const action = { ...agentActions.get(where.id), ...data };
+        agentActions.set(action.id, action);
+        return action;
+      },
+      findUnique: async ({ where, include }) => {
+        const action = agentActions.get(where.id);
+        if (!action) return null;
+        const approvals = [...agentApprovals.values()].filter((approval) => approval.agentActionId === action.id);
+        return include?.approvals ? { ...action, approvals } : action;
+      },
+      findMany: async ({ where, include, orderBy } = {}) => {
+        let rows = [...agentActions.values()];
+        if (where?.accountSetId) {
+          rows = rows.filter((action) => action.accountSetId === where.accountSetId);
+        }
+        if (where?.status) {
+          rows = rows.filter((action) => action.status === where.status);
+        }
+        if (where?.riskLevel) {
+          rows = rows.filter((action) => action.riskLevel === where.riskLevel);
+        }
+        if (where?.toolName) {
+          rows = rows.filter((action) => action.toolName === where.toolName);
+        }
+        if (orderBy?.createdAt === "desc") {
+          rows = rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+        }
+        if (!include?.approvals) return rows;
+        return rows.map((action) => ({
+          ...action,
+          approvals: [...agentApprovals.values()].filter((approval) => approval.agentActionId === action.id)
+        }));
+      }
+    },
+    agentApproval: {
+      create: async ({ data }) => {
+        const approval = { ...data };
+        agentApprovals.set(approval.id, approval);
+        return approval;
+      },
+      deleteMany: async ({ where }) => {
+        let count = 0;
+        for (const [id, approval] of agentApprovals.entries()) {
+          if (approval.agentActionId === where.agentActionId) {
+            agentApprovals.delete(id);
+            count += 1;
+          }
+        }
+        return { count };
+      }
+    },
+    agentReplayEvent: {
+      create: async ({ data }) => {
+        const event = { ...data };
+        agentReplayEvents.set(event.id, event);
+        return event;
+      },
+      deleteMany: async ({ where }) => {
+        let count = 0;
+        for (const [id, event] of agentReplayEvents.entries()) {
+          if (event.agentActionId === where.agentActionId) {
+            agentReplayEvents.delete(id);
+            count += 1;
+          }
+        }
+        return { count };
+      },
+      findMany: async ({ where, orderBy } = {}) => {
+        let rows = [...agentReplayEvents.values()];
+        if (where?.agentActionId) {
+          rows = rows.filter((event) => event.agentActionId === where.agentActionId);
+        }
+        if (orderBy?.createdAt === "asc") {
+          rows = rows.sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
+        }
+        return rows;
+      }
+    },
+    securityEvent: {
+      create: async ({ data }) => {
+        const event = { ...data };
+        securityEvents.set(event.id, event);
+        return event;
+      },
+      findMany: async ({ where, orderBy } = {}) => {
+        let rows = [...securityEvents.values()];
+        if (where?.accountSetId) {
+          rows = rows.filter((event) => event.accountSetId === where.accountSetId);
+        }
+        if (where?.eventType) {
+          rows = rows.filter((event) => event.eventType === where.eventType);
+        }
+        if (where?.severity) {
+          rows = rows.filter((event) => event.severity === where.severity);
+        }
+        if (where?.actorId) {
+          rows = rows.filter((event) => event.actorId === where.actorId);
+        }
+        if (orderBy?.createdAt === "desc") {
+          rows = rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+        }
+        return rows;
+      }
     }
   };
 }
@@ -987,6 +1255,72 @@ test("Prisma platform persistence stores Phase 2 partners by account set", async
   assert.equal(updated.paymentTerms, "NET45");
   assert.equal(updated.isEnabled, false);
   assert.deepEqual(suppliers.map((partner) => partner.code), ["S001"]);
+});
+
+test("Prisma platform persistence stores Phase 3 inventory item master data", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  const accountSet = await store.createAccountSet({
+    id: "account-set:phase3-inventory-items",
+    code: "P3I",
+    name: "Phase 3 Inventory Items",
+    companyName: "Phase 3 Inventory Co.",
+    baseCurrency: "CNY",
+    accountingStandard: "Small Business Accounting Standards",
+    startYear: 2026,
+    startPeriod: 1,
+    status: "draft",
+    createdBy: "system"
+  });
+
+  const rawMaterial = await store.createInventoryItem({
+    id: "inventory-item:rm-1",
+    accountSetId: accountSet.id,
+    code: "RM001",
+    name: "Raw Material",
+    category: "raw",
+    itemType: "raw_material",
+    unit: "kg",
+    costMethod: "fifo",
+    isBatchManaged: true,
+    isSerialManaged: false,
+    isManufactured: false,
+    shelfLifeDays: 180,
+    isEnabled: true,
+    createdBy: "migration-user",
+    createdAt: "now",
+    updatedAt: "now"
+  });
+  await store.createInventoryItem({
+    id: "inventory-item:fg-1",
+    accountSetId: accountSet.id,
+    code: "FG001",
+    name: "Finished Good",
+    category: "finished",
+    itemType: "finished_good",
+    unit: "pcs",
+    costMethod: "moving_average",
+    isBatchManaged: false,
+    isSerialManaged: false,
+    isManufactured: true,
+    shelfLifeDays: null,
+    isEnabled: true,
+    createdBy: "migration-user",
+    createdAt: "now",
+    updatedAt: "now"
+  });
+
+  const listed = await store.listInventoryItems(accountSet.id);
+  const found = await store.findInventoryItem(rawMaterial.id);
+
+  assert.deepEqual(
+    listed.map((item) => [item.code, item.name, item.unit, item.costMethod, item.isBatchManaged, item.isManufactured]),
+    [
+      ["FG001", "Finished Good", "pcs", "moving_average", false, true],
+      ["RM001", "Raw Material", "kg", "fifo", true, false]
+    ]
+  );
+  assert.equal(found.code, "RM001");
+  assert.equal(found.shelfLifeDays, 180);
 });
 
 test("Prisma platform persistence stores Phase 2 purchase and sales orders", async () => {
@@ -2014,4 +2348,329 @@ test("Prisma platform persistence stores bank statements and reconciliation stat
   assert.equal(matched.status, "matched");
   assert.equal(matched.matchedCount, 1);
   assert.equal(listed[0].status, "reconciled");
+});
+
+test("Prisma platform persistence stores Phase 6 Ops backup and restore jobs", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+
+  const backup = await store.createBackupJob({
+    id: "backup-job:ops:1",
+    accountSetId: "account-set:ops",
+    backupType: "full",
+    status: "completed",
+    dryRun: false,
+    businessMutation: false,
+    includeAttachments: true,
+    retentionDays: 30,
+    requestedBy: "ops-user",
+    createdAt: "2026-06-12T01:00:00.000Z",
+    completedAt: "2026-06-12T01:00:01.000Z",
+    snapshotRef: "backup-snapshot:account-set:ops:1",
+    checksum: "sha256:backup",
+    manifest: {
+      accountSetId: "account-set:ops",
+      accountSetCode: "OPS",
+      tableCounts: { vouchers: 2 }
+    },
+    attachmentHashVerification: {
+      status: "completed",
+      attachmentCount: 1,
+      verifiedCount: 1,
+      failedCount: 0
+    }
+  });
+  const foundBackup = await store.findBackupJob("backup-snapshot:account-set:ops:1");
+  const backups = await store.listBackupJobs("account-set:ops", { status: "completed" });
+  const restore = await store.createRestoreJob({
+    id: "restore-job:ops:1",
+    accountSetId: "account-set:ops",
+    sourceBackupJobId: backup.id,
+    status: "dry_run_completed",
+    dryRun: true,
+    restoreMode: "silent_sandbox",
+    targetEnvironment: "restore_drill",
+    restorePointLabel: "phase6-drill",
+    requestedBy: "ops-user",
+    createdAt: "2026-06-12T01:05:00.000Z",
+    completedAt: "2026-06-12T01:05:01.000Z",
+    businessMutation: false,
+    outboundBlocked: true,
+    blockedChannels: ["webhook", "email", "bank_api"],
+    impactScope: {
+      accountSetId: "account-set:ops",
+      sourceBackupJobId: backup.id,
+      tableCounts: { vouchers: 2 }
+    },
+    validation: {
+      status: "passed",
+      backupChecksum: "sha256:backup"
+    }
+  });
+  const restores = await store.listRestoreJobs("account-set:ops", { status: "dry_run_completed" });
+
+  assert.equal(backup.checksum, "sha256:backup");
+  assert.equal(foundBackup.id, backup.id);
+  assert.equal(backups.length, 1);
+  assert.equal(backups[0].manifest.tableCounts.vouchers, 2);
+  assert.equal(restore.outboundBlocked, true);
+  assert.deepEqual(restores[0].blockedChannels, ["webhook", "email", "bank_api"]);
+  assert.equal(restores[0].impactScope.sourceBackupJobId, backup.id);
+  assert.equal(restores[0].validation.status, "passed");
+});
+
+test("Prisma platform persistence stores Phase 6 migration jobs", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+
+  const job = await store.createMigrationJob({
+    id: "migration-job:ops:1",
+    accountSetId: "account-set:migration",
+    jobType: "opening_balance",
+    sourceType: "excel",
+    targetObjectType: "opening_balance",
+    status: "draft",
+    dryRun: true,
+    businessMutation: false,
+    requestedBy: "migration-user",
+    createdAt: "2026-06-12T00:30:00.000Z",
+    completedAt: null,
+    sourceSummary: { rowCount: 2, fieldCount: 3 },
+    fieldMapping: { accountCode: "accountCode", debit: "debit", credit: "credit" },
+    sourceRows: [
+      { accountCode: "1002", debit: 500, credit: 0 },
+      { accountCode: "3001", debit: 0, credit: 500 }
+    ],
+    validation: { status: "pending" },
+    errorReport: { errors: [], warnings: [] },
+    importSummary: null
+  });
+  const dryRun = await store.updateMigrationJob({
+    ...job,
+    status: "dry_run_completed",
+    completedAt: "2026-06-12T00:31:00.000Z",
+    validation: {
+      status: "passed",
+      trialBalance: { debit: 500, credit: 500, difference: 0 }
+    },
+    errorReport: { errors: [], warnings: [] }
+  });
+  const loaded = await store.findMigrationJob(job.id);
+  const listed = await store.listMigrationJobs("account-set:migration", {
+    status: "dry_run_completed",
+    jobType: "opening_balance"
+  });
+
+  assert.equal(job.status, "draft");
+  assert.equal(dryRun.validation.trialBalance.difference, 0);
+  assert.equal(loaded.sourceRows.length, 2);
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].fieldMapping.accountCode, "accountCode");
+});
+
+test("Prisma platform persistence stores Phase 6 Agent draft candidates and LLM runs", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+
+  const run = await store.createLlmDraftRun({
+    id: "llm-draft-run:ops:1",
+    accountSetId: "account-set:agent-draft",
+    provider: "local-rule-based",
+    model: "local-draft-rules-v1",
+    status: "completed",
+    inputSummary: {
+      draftType: "voucher",
+      sourceObjectType: "attachment",
+      sourceObjectId: "attachment:1",
+      ocrText: "office expense 880",
+      evidenceRefs: ["attachment:1"]
+    },
+    outputSchema: "voucher",
+    createdAt: "2026-06-12T02:00:00.000Z"
+  });
+  const candidate = await store.createAgentDraftCandidate({
+    id: "agent-draft-candidate:ops:1",
+    accountSetId: "account-set:agent-draft",
+    fiscalPeriodId: "period:2026:6",
+    draftType: "voucher",
+    sourceObjectType: "attachment",
+    sourceObjectId: "attachment:1",
+    userInstruction: "Generate voucher from OCR evidence.",
+    status: "candidate",
+    dryRun: true,
+    riskLevel: "medium",
+    requiresHumanConfirmation: true,
+    sourceContext: { sourceObjectType: "attachment" },
+    matchedMasterData: [{ type: "account", code: "6602" }],
+    unmatchedItems: [{ field: "counterparty", reason: "missing" }],
+    draftPayload: { documentType: "voucher", lines: [] },
+    ocrResults: [{ attachmentId: "attachment:1", extractedText: "office expense 880" }],
+    dryRunResult: { status: "review_required", warnings: ["missing counterparty"] },
+    warnings: ["needs review"],
+    confidence: 0.68,
+    evidenceRefs: ["attachment:1"],
+    llmDraftRun: run,
+    createdBy: "agent-user",
+    createdAt: "2026-06-12T02:00:01.000Z"
+  });
+  const loaded = await store.findAgentDraftCandidate(candidate.id);
+  const listedCandidates = await store.listAgentDraftCandidates("account-set:agent-draft", { status: "candidate" });
+  const listedRuns = await store.listLlmDraftRuns("account-set:agent-draft", { draftType: "voucher", status: "completed" });
+  const rejected = await store.updateAgentDraftCandidate({
+    ...candidate,
+    status: "rejected",
+    rejectedBy: "reviewer",
+    rejectedAt: "2026-06-12T02:05:00.000Z",
+    rejectionReason: "Need clearer evidence."
+  });
+
+  assert.equal(run.inputSummary.ocrText, "office expense 880");
+  assert.equal(candidate.llmDraftRun.id, run.id);
+  assert.equal(loaded.draftPayload.documentType, "voucher");
+  assert.equal(listedCandidates.length, 1);
+  assert.equal(listedCandidates[0].ocrResults[0].attachmentId, "attachment:1");
+  assert.equal(listedRuns.length, 1);
+  assert.equal(listedRuns[0].inputSummary.draftType, "voucher");
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.rejectedBy, "reviewer");
+});
+
+test("Prisma platform persistence stores Phase 6 Agent action approvals and replay events", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  const action = await store.createAgentAction({
+    id: "agent-action:ops:1",
+    accountSetId: "account-set:agent-action",
+    toolName: "run_close_checklist",
+    dryRun: true,
+    riskLevel: "high",
+    actionKind: "dry_run",
+    status: "dry_run_completed",
+    approvalRequired: true,
+    approvalPolicy: {
+      approvalRequired: true,
+      requiresHumanConfirmation: true,
+      minApprovals: 2,
+      executeRequiresUserToken: true
+    },
+    evidenceRefs: ["period:2026-06"],
+    evidenceSnapshots: [],
+    payload: { fiscalYear: 2026, periodNo: 6 },
+    requestedBy: "agent-user",
+    createdAt: "2026-06-12T03:00:00.000Z",
+    dryRunResult: { status: "ready_for_approval", businessMutation: false },
+    approvalRequest: null,
+    approvalHistory: [],
+    approvalProgress: { approvedCount: 0, requiredCount: 2, remainingCount: 2 },
+    executionResult: null,
+    reversalResult: null
+  });
+  await store.replaceAgentReplayEvents(action.id, [
+    {
+      id: "agent-replay-event:1",
+      agentActionId: action.id,
+      eventType: "input_received",
+      actorId: "agent-user",
+      payload: { toolName: "run_close_checklist" },
+      createdAt: "2026-06-12T03:00:00.000Z"
+    },
+    {
+      id: "agent-replay-event:2",
+      agentActionId: action.id,
+      eventType: "dry_run_completed",
+      actorId: "system",
+      payload: { status: "ready_for_approval" },
+      createdAt: "2026-06-12T03:00:01.000Z"
+    }
+  ]);
+  const approvedAction = await store.updateAgentAction({
+    ...action,
+    status: "approved",
+    approvalRequest: { submittedBy: "agent-user", submittedAt: "2026-06-12T03:01:00.000Z" },
+    approvalHistory: [
+      {
+        id: "agent-approval:1",
+        agentActionId: action.id,
+        approvedBy: "controller",
+        approvedAt: "2026-06-12T03:02:00.000Z",
+        approvalComment: "first"
+      },
+      {
+        id: "agent-approval:2",
+        agentActionId: action.id,
+        approvedBy: "cfo",
+        approvedAt: "2026-06-12T03:03:00.000Z",
+        approvalComment: "second"
+      }
+    ],
+    approvalProgress: { approvedCount: 2, requiredCount: 2, remainingCount: 0 }
+  });
+  await store.replaceAgentReplayEvents(action.id, [
+    ...(await store.listAgentReplayEvents(action.id)),
+    {
+      id: "agent-replay-event:3",
+      agentActionId: action.id,
+      eventType: "approved",
+      actorId: "controller",
+      payload: { approvedBy: "controller" },
+      createdAt: "2026-06-12T03:02:00.000Z"
+    }
+  ]);
+  const loaded = await store.findAgentAction(action.id);
+  const listed = await store.listAgentActions("account-set:agent-action", { status: "approved" });
+  const replay = await store.listAgentReplayEvents(action.id);
+
+  assert.equal(action.status, "dry_run_completed");
+  assert.equal(approvedAction.status, "approved");
+  assert.equal(loaded.approvalHistory.length, 2);
+  assert.deepEqual(loaded.approvalHistory.map((approval) => approval.approvedBy), ["controller", "cfo"]);
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].approvalProgress.remainingCount, 0);
+  assert.deepEqual(replay.map((event) => event.eventType), ["input_received", "dry_run_completed", "approved"]);
+  assert.equal(replay[0].payload.toolName, "run_close_checklist");
+});
+
+test("Prisma platform persistence stores Phase 6 security events", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+
+  const event = await store.createSecurityEvent({
+    id: "security-event:phase6:1",
+    accountSetId: "account-set:security",
+    eventType: "permission_denied",
+    severity: "high",
+    actorId: "viewer",
+    source: "api",
+    objectType: "permission",
+    objectId: "agent_action.create",
+    message: "Actor viewer lacks agent_action.create.",
+    payload: {
+      method: "POST",
+      path: "/agent-actions",
+      permission: "agent_action.create"
+    },
+    createdAt: "2026-06-12T04:00:00.000Z"
+  });
+  await store.createSecurityEvent({
+    id: "security-event:phase6:2",
+    accountSetId: "account-set:other-security",
+    eventType: "idempotency_scope_mismatch",
+    severity: "medium",
+    actorId: "system",
+    source: "api",
+    objectType: "idempotency_key",
+    objectId: "shared-key",
+    message: "Idempotency-Key reused across account sets.",
+    payload: {
+      cachedScope: "account-set:a",
+      requestedScope: "account-set:b"
+    },
+    createdAt: "2026-06-12T04:05:00.000Z"
+  });
+  const listed = await store.listSecurityEvents("account-set:security", {
+    eventType: "permission_denied",
+    severity: "high",
+    actorId: "viewer"
+  });
+
+  assert.equal(event.objectId, "agent_action.create");
+  assert.equal(event.payload.permission, "agent_action.create");
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].id, event.id);
+  assert.equal(listed[0].payload.path, "/agent-actions");
 });

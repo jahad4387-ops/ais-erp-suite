@@ -11,6 +11,14 @@ function blockAfter(marker) {
   return contract.slice(start, nextPath === -1 ? contract.length : nextPath);
 }
 
+function schemaBlock(marker, nextMarker) {
+  const start = contract.indexOf(marker);
+  assert.notEqual(start, -1, `${marker} must exist in the OpenAPI contract.`);
+  const end = nextMarker ? contract.indexOf(nextMarker, start + marker.length) : -1;
+  assert.notEqual(end, -1, `${nextMarker} must exist after ${marker}.`);
+  return contract.slice(start, end);
+}
+
 test("Phase 1 write endpoints require idempotency and risk metadata", () => {
   const writePaths = [
     "/account-sets:",
@@ -119,7 +127,16 @@ test("Phase 1 write endpoints require idempotency and risk metadata", () => {
     "/report-runs/{reportRunId}/submit-review:",
     "/report-approvals/{reportApprovalId}/approve:",
     "/report-runs/{reportRunId}/exports:",
-    "/report-runs/{reportRunId}/interpretations:"
+    "/report-runs/{reportRunId}/interpretations:",
+    "/agent/draft-candidates:",
+    "/agent/draft-candidates/{agentDraftCandidateId}/convert:",
+    "/agent/draft-candidates/{agentDraftCandidateId}/reject:",
+    "/ai/ocr-preview:",
+    "/ai/llm-draft-runs:",
+    "/agent-actions/{agentActionId}/submit:",
+    "/agent-actions/{agentActionId}/approve:",
+    "/agent-actions/{agentActionId}/execute:",
+    "/agent-actions/{agentActionId}/reverse:"
   ];
 
   for (const path of writePaths) {
@@ -185,6 +202,7 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "InventoryOpeningBalance:",
     "InventoryOpeningTrialBalance:",
     "InventoryMovement:",
+    "InventoryMovementDraft:",
     "InventoryMovementLine:",
     "InventoryBalance:",
     "InventoryCostLayer:",
@@ -233,7 +251,34 @@ test("Phase 1 contract exposes schemas needed by backend, frontend, and Agent to
     "ReportTraceLink:",
     "ReportExport:",
     "AiReportInterpretation:",
+    "AgentTool:",
+    "InvokeAgentToolRequest:",
+    "AgentToolInvocationResult:",
     "AgentAction:",
+    "AgentActionQueue:",
+    "AgentActionQueueItem:",
+    "ExecuteAgentActionRequest:",
+    "ReverseAgentActionRequest:",
+    "AgentApprovalProgress:",
+    "AgentEvidenceSnapshot:",
+    "AgentActionReplay:",
+    "AgentDraftCandidate:",
+    "AgentDraftCandidateQueue:",
+    "AgentDraftCandidateQueueItem:",
+    "AgentDraftResolvedUnmatchedItem:",
+    "AgentDraftSourceContext:",
+    "AgentDraftSourceObject:",
+    "OcrPreview:",
+    "AgentDraftOcrResult:",
+    "AgentMasterDataDraft:",
+    "AgentPayrollAllocationDraft:",
+    "AgentAssetChangeDraft:",
+    "AgentReportInterpretationDraft:",
+    "ConvertAgentDraftCandidateRequest:",
+    "RejectAgentDraftCandidateRequest:",
+    "LlmDraftRun:",
+    "LlmDraftMetrics:",
+    "LlmDraftProviderMetric:",
     "AuditLog:",
     "ErrorResponse:"
   ];
@@ -369,6 +414,8 @@ test("Phase 3 production workflow endpoints document work orders, material requi
   assert.match(receiptBlock, /ProductReceipt/);
   assert.match(contract, /directMaterialCost:/, "Work orders must expose accumulated direct material cost.");
   assert.match(contract, /sourceMovementId:/, "Production documents must expose inventory movement traceability.");
+  assert.match(contract, /draft_pending_cost/, "Product receipt drafts must document pending-cost status before posting.");
+  assert.match(contract, /enum: \[draft, posted\]/, "Production documents must document draft and posted statuses.");
   assert.match(contract, /direct_material_only/, "Product receipts must document pre-allocation cost status.");
 });
 
@@ -642,6 +689,63 @@ test("deployment configuration check endpoint is documented", () => {
   assert.match(block, /summary: Inspect deployment configuration/);
   assert.match(block, /x-permission: account_set.view/);
   assert.match(block, /DeploymentConfig/);
+  assert.match(contract, /llmDraft/);
+  assert.match(contract, /AIS_LLM_DRAFT_PROVIDER/);
+  assert.match(contract, /AIS_OCR_PROVIDER/);
+  assert.match(contract, /AIS_OCR_COMMAND/);
+  assert.match(contract, /commandPresent/);
+  assert.match(contract, /idempotency/);
+  assert.match(contract, /ttlHours/);
+  assert.match(contract, /AIS_IDEMPOTENCY_TTL_HOURS/);
+  assert.match(contract, /restoreDrill/);
+  assert.match(contract, /RESTORE_DRILL/);
+  assert.match(contract, /blockedChannels/);
+});
+
+test("Phase 6 Ops migration backup and restore job endpoints document dry-run contracts", () => {
+  const migrationsBlock = blockAfter("  /ops/migrations/jobs:");
+  const migrationDryRunBlock = blockAfter("  /ops/migrations/jobs/{migrationJobId}/dry-run:");
+  const migrationImportBlock = blockAfter("  /ops/migrations/jobs/{migrationJobId}/import:");
+  const backupsBlock = blockAfter("  /ops/backups:");
+  const restoresBlock = blockAfter("  /ops/restores:");
+  const executeRestoreBlock = blockAfter("  /ops/restores/execute:");
+
+  assert.match(migrationsBlock, /CreateMigrationJobRequest/);
+  assert.match(migrationsBlock, /MigrationJob/);
+  assert.match(migrationsBlock, /x-permission: ops\.migration\.manage/);
+  assert.match(migrationDryRunBlock, /summary: Dry-run a Phase 6 migration job without mutating business data/);
+  assert.match(migrationDryRunBlock, /migrationJobId/);
+  assert.match(migrationDryRunBlock, /MigrationJob/);
+  assert.match(migrationDryRunBlock, /x-agent-allowed: false/);
+  assert.match(migrationImportBlock, /summary: Import an approved Phase 6 migration job into formal business records/);
+  assert.match(migrationImportBlock, /partner_master jobs into partner master data/);
+  assert.match(migrationImportBlock, /inventory_item_master jobs into inventory item master data/);
+  assert.match(migrationImportBlock, /x-risk-level: high/);
+  assert.match(migrationImportBlock, /MIGRATION_DRY_RUN_REQUIRED|MIGRATION_IMPORT_UNSUPPORTED/);
+  assert.match(migrationImportBlock, /fiscalYear/);
+  assert.match(migrationImportBlock, /periodNo/);
+  assert.match(backupsBlock, /summary: Create an auditable backup job/);
+  assert.match(backupsBlock, /CreateBackupJobRequest/);
+  assert.match(backupsBlock, /BackupJob/);
+  assert.match(backupsBlock, /x-permission: ops\.backup\.manage/);
+  assert.match(restoresBlock, /RestoreJob/);
+  assert.match(restoresBlock, /x-permission: ops\.backup\.manage/);
+  assert.match(executeRestoreBlock, /summary: Execute a restore dry-run inside the restore-drill sandbox/);
+  assert.match(executeRestoreBlock, /CreateRestoreJobRequest/);
+  assert.match(executeRestoreBlock, /RestoreJob/);
+  assert.match(executeRestoreBlock, /x-agent-allowed: false/);
+  assert.match(executeRestoreBlock, /RESTORE_DRILL_REQUIRED/);
+  assert.match(contract, /BackupJob:/);
+  assert.match(contract, /RestoreJob:/);
+  assert.match(contract, /MigrationJob:/);
+  assert.match(contract, /sourceSummary/);
+  assert.match(contract, /fieldMapping/);
+  assert.match(contract, /dry_run_completed/);
+  assert.match(contract, /importSummary/);
+  assert.match(contract, /restoreMode/);
+  assert.match(contract, /silent_sandbox/);
+  assert.match(contract, /businessMutation/);
+  assert.match(contract, /attachmentHashVerification/);
 });
 
 test("account-set user grants are documented for scoped authorization", () => {
@@ -728,7 +832,15 @@ test("Agent-facing endpoints expose dry-run and evidence fields", () => {
   const exceptionBlock = blockAfter("  /ai/exception-checks:");
   const planAiDetailBlock = blockAfter("  /ai/voucher-drafts/{aiSuggestionId}:");
   const planAiConvertBlock = blockAfter("  /ai/voucher-drafts/{aiSuggestionId}/convert-to-voucher:");
+  const agentToolsBlock = blockAfter("  /agent-tools:");
+  const agentToolInvokeBlock = blockAfter("  /agent-tools/{toolName}/invoke:");
   const agentBlock = blockAfter("  /agent-actions:");
+  const agentDetailBlock = blockAfter("  /agent-actions/{agentActionId}:");
+  const agentSubmitBlock = blockAfter("  /agent-actions/{agentActionId}/submit:");
+  const agentApproveBlock = blockAfter("  /agent-actions/{agentActionId}/approve:");
+  const agentExecuteBlock = blockAfter("  /agent-actions/{agentActionId}/execute:");
+  const agentReverseBlock = blockAfter("  /agent-actions/{agentActionId}/reverse:");
+  const agentReplayBlock = blockAfter("  /agent-actions/{agentActionId}/replay:");
 
   assert.match(aiBlock, /CreateAiVoucherSuggestionRequest/, "AI endpoint must reference its request schema.");
   assert.match(aiBlock, /AiVoucherSuggestion/, "AI endpoint must reference its response schema.");
@@ -743,12 +855,201 @@ test("Agent-facing endpoints expose dry-run and evidence fields", () => {
   assert.match(planAiDetailBlock, /AiVoucherSuggestion/, "Plan AI draft detail endpoint must return an AI draft suggestion.");
   assert.match(planAiConvertBlock, /ConvertAiVoucherSuggestionRequest/, "Plan AI draft conversion endpoint must document human review.");
   assert.match(planAiConvertBlock, /Voucher/, "Plan AI draft conversion endpoint must return the formal voucher draft.");
+  assert.match(agentToolsBlock, /AgentTool/, "Agent tool registry endpoint must return registered tool metadata.");
+  assert.match(agentToolsBlock, /x-permission: agent_action\.view/);
+  assert.match(agentToolInvokeBlock, /InvokeAgentToolRequest/, "Agent tool invoke endpoint must document request payload.");
+  assert.match(agentToolInvokeBlock, /AgentToolInvocationResult/, "Agent tool invoke endpoint must document dry-run result.");
+  assert.match(agentToolInvokeBlock, /x-agent-allowed: true/);
+  assert.match(contract, /suggest_purchase_order_draft/, "Agent tool registry must document draft generation tools.");
+  assert.match(contract, /suggest_material_requisition_draft/, "Agent tool registry must document production material draft generation.");
+  assert.match(contract, /suggest_product_receipt_draft/, "Agent tool registry must document finished goods receipt draft generation.");
+  assert.match(contract, /approvalPolicy/, "Agent tool schema must expose approval policy.");
+  assert.match(contract, /inputSchema/, "Agent tool schema must expose input schema.");
   assert.match(agentBlock, /CreateAgentActionRequest/, "Agent endpoint must reference its request schema.");
   assert.match(agentBlock, /AgentAction/, "Agent endpoint must reference its response schema.");
+  assert.match(agentBlock, /get:/, "Agent action list endpoint must be documented.");
+  assert.match(agentBlock, /AgentActionQueue/, "Agent action list endpoint must return a queue schema.");
+  assert.match(agentBlock, /x-risk-level: low/, "Agent action list endpoint must be low-risk read-only.");
+  assert.match(agentDetailBlock, /AgentAction/, "Agent detail endpoint must return the current action state.");
+  assert.match(agentSubmitBlock, /AgentAction/, "Agent submit endpoint must return submitted action state.");
+  assert.match(agentApproveBlock, /AgentAction/, "Agent approve endpoint must return approved action state.");
+  assert.match(agentExecuteBlock, /AgentAction/, "Agent execute endpoint must return executed action state.");
+  assert.match(agentExecuteBlock, /ExecuteAgentActionRequest/, "Agent execute endpoint must document explicit user token confirmation.");
+  assert.match(agentReverseBlock, /AgentAction/, "Agent reverse endpoint must return reversed action state.");
+  assert.match(agentReverseBlock, /ReverseAgentActionRequest/, "Agent reverse endpoint must document reversal reason.");
+  assert.match(agentReverseBlock, /x-agent-allowed: false/, "Agent reverse endpoint must require a real user boundary.");
+  assert.match(agentReplayBlock, /AgentActionReplay/, "Agent replay endpoint must return replay events.");
+  assert.match(contract, /dry_run_completed/, "AgentAction schema must use the Phase 6 state machine.");
+  assert.match(contract, /submitted_for_approval/, "AgentAction schema must expose approval submission state.");
+  assert.match(contract, /approvalProgress/, "AgentAction schema must expose multi-approver progress.");
+  assert.match(contract, /auditSummary/, "AgentAction schema must expose a human-readable audit summary.");
+  assert.match(contract, /AgentActionAuditSummary/, "AgentAction audit summary schema must be documented.");
+  assert.match(contract, /verificationStatus/, "AgentAction audit summary must expose evidence verification status.");
+  assert.match(contract, /mutationState/, "AgentAction audit summary must expose mutation state.");
+  assert.match(contract, /nextActions/, "AgentAction audit summary must expose next available actions.");
+  assert.match(agentReplayBlock, /auditSummary/, "Agent replay endpoint must return the same audit summary as action detail.");
+  assert.match(contract, /AgentActionQueueItem/, "AgentAction queue item schema must be documented.");
+  assert.match(contract, /evidenceCount/, "AgentAction queue must expose evidence counts.");
+  assert.match(contract, /remainingCount/, "Agent approval progress must expose remaining approvals.");
+  assert.match(contract, /userTokenConfirmed/, "Agent execution request must expose explicit user token confirmation.");
+  assert.match(contract, /executionResult/, "AgentAction schema must expose execution result.");
+  assert.match(contract, /reversed/, "AgentAction schema must expose reversal state.");
+  assert.match(contract, /reversalResult/, "AgentAction schema must expose reversal result.");
+  assert.match(contract, /evidenceSnapshots/, "AgentAction schema must expose immutable evidence snapshots.");
+  assert.match(contract, /AgentEvidenceSnapshot/, "AgentAction schema must reference evidence snapshot hashes.");
+  assert.match(contract, /evidence_verified/, "Agent replay schema must expose successful evidence verification.");
+  assert.match(contract, /evidence_verification_failed/, "Agent replay schema must expose failed evidence verification.");
+  assert.match(contract, /restore_drill_outbound_blocked/, "Agent replay schema must expose restore-drill outbound blocking.");
   assert.match(contract, /name: Idempotency-Key/, "Idempotency-Key header must be defined.");
+  assert.match(contract, /IDEMPOTENCY_SCOPE_MISMATCH/, "Idempotency-Key docs must mention account-set scope protection.");
+  assert.match(contract, /default TTL is 7 days/, "Idempotency-Key docs must mention the default TTL.");
+  assert.match(contract, /expired keys are purged/, "Idempotency-Key docs must mention expired-key behavior.");
   assert.match(contract, /dryRun/, "Agent-facing schemas must expose dryRun.");
   assert.match(contract, /evidenceRefs/, "Agent-facing schemas must expose evidenceRefs.");
   assert.match(contract, /approvalRequired/, "AI suggestions must expose approvalRequired.");
+});
+
+test("Phase 6 security events endpoint documents anomaly audit contract", () => {
+  const securityEventsBlock = blockAfter("  /security/events:");
+
+  assert.match(securityEventsBlock, /x-permission: security_event\.view/);
+  assert.match(securityEventsBlock, /x-agent-allowed: false/);
+  assert.match(securityEventsBlock, /SecurityEventList/);
+  assert.match(securityEventsBlock, /accountSetId/);
+  assert.match(securityEventsBlock, /eventType/);
+  assert.match(securityEventsBlock, /severity/);
+  assert.match(securityEventsBlock, /actorId/);
+  assert.match(contract, /SecurityEvent:/);
+  assert.match(contract, /permission_denied/);
+  assert.match(contract, /idempotency_scope_mismatch/);
+  assert.match(contract, /payload:/);
+});
+
+test("Phase 6 Agent draft candidate endpoints document local OCR and LLM draft adapter contracts", () => {
+  const draftBlock = blockAfter("  /agent/draft-candidates:");
+  const draftDetailBlock = blockAfter("  /agent/draft-candidates/{agentDraftCandidateId}:");
+  const draftConvertBlock = blockAfter("  /agent/draft-candidates/{agentDraftCandidateId}/convert:");
+  const draftRejectBlock = blockAfter("  /agent/draft-candidates/{agentDraftCandidateId}/reject:");
+  const ocrPreviewBlock = blockAfter("  /ai/ocr-preview:");
+  const llmBlock = blockAfter("  /ai/llm-draft-runs:");
+  const llmMetricsBlock = blockAfter("  /ai/llm-draft-runs/metrics:");
+
+  assert.match(draftBlock, /x-permission: ai\.generate_draft/);
+  assert.match(draftBlock, /CreateAgentDraftCandidateRequest/);
+  assert.match(draftBlock, /AgentDraftCandidate/);
+  assert.match(draftBlock, /AgentDraftCandidateQueue/);
+  assert.match(draftBlock, /accountSetId/);
+  assert.match(draftBlock, /draftType/);
+  assert.match(draftBlock, /status/);
+  assert.match(draftDetailBlock, /x-permission: ai\.generate_draft/);
+  assert.match(draftDetailBlock, /AgentDraftCandidate/);
+  assert.match(draftConvertBlock, /x-permission: agent_draft\.convert/);
+  assert.match(draftConvertBlock, /ConvertAgentDraftCandidateRequest/);
+  assert.match(draftConvertBlock, /Voucher/);
+  assert.match(draftConvertBlock, /PurchaseOrder/);
+  assert.match(draftConvertBlock, /SalesOrder/);
+  assert.match(draftConvertBlock, /InventoryMovementDraft/);
+  assert.match(draftConvertBlock, /MaterialRequisition/);
+  assert.match(draftConvertBlock, /ProductReceipt/);
+  assert.match(draftConvertBlock, /StockCountPreview/);
+  assert.match(draftConvertBlock, /AgentMasterDataDraft/);
+  assert.match(draftConvertBlock, /AgentPayrollAllocationDraft/);
+  assert.match(draftConvertBlock, /AgentAssetChangeDraft/);
+  assert.match(draftConvertBlock, /AgentReportInterpretationDraft/);
+  assert.match(draftRejectBlock, /x-permission: agent_draft\.convert/);
+  assert.match(draftRejectBlock, /x-agent-allowed: false/);
+  assert.match(draftRejectBlock, /RejectAgentDraftCandidateRequest/);
+  assert.match(draftRejectBlock, /AgentDraftCandidate/);
+  assert.match(ocrPreviewBlock, /x-permission: ai\.generate_draft/);
+  assert.match(ocrPreviewBlock, /OcrPreview/);
+  assert.match(llmBlock, /x-permission: ai\.generate_draft/);
+  assert.match(llmBlock, /get:/);
+  assert.match(llmBlock, /LlmDraftRunList/);
+  assert.match(llmBlock, /status/);
+  assert.match(llmBlock, /LlmDraftRun/);
+  assert.match(llmMetricsBlock, /x-permission: ai\.generate_draft/);
+  assert.match(llmMetricsBlock, /x-risk-level: low/);
+  assert.match(llmMetricsBlock, /LlmDraftMetrics/);
+  assert.match(llmMetricsBlock, /draftType/);
+  assert.match(contract, /attachmentIds:/);
+  assert.match(contract, /reviewedOcrResults:/);
+  assert.match(contract, /resolvedUnmatchedItems:/);
+  assert.match(contract, /AgentDraftResolvedUnmatchedItem/);
+  assert.match(contract, /originalExtractedText:/);
+  assert.match(contract, /reviewedBy:/);
+  assert.match(contract, /rejectedBy:/);
+  assert.match(contract, /rejectionReason:/);
+  assert.match(contract, /ocrResults:/);
+  assert.match(contract, /AgentDraftSourceContext:/);
+  assert.match(contract, /AgentDraftSourceObject:/);
+  assert.match(contract, /sourceObject:/);
+  assert.match(contract, /work_order/);
+  assert.match(contract, /workOrderNo:/);
+  assert.match(contract, /bomLines:/);
+  const sourceObjectStart = contract.indexOf("    AgentDraftSourceObject:");
+  const sourceObjectEnd = contract.indexOf("    AgentDraftCandidate:", sourceObjectStart);
+  const sourceObjectBlock = contract.slice(sourceObjectStart, sourceObjectEnd);
+  assert.match(sourceObjectBlock, /enum: \[work_order, purchase_order, sales_order, inventory_movement, stock_count, voucher, payroll_run, fixed_asset, report_run\]/);
+  assert.match(sourceObjectBlock, /orderNo:/);
+  assert.match(sourceObjectBlock, /supplierId:/);
+  assert.match(sourceObjectBlock, /customerId:/);
+  assert.match(sourceObjectBlock, /documentNo:/);
+  assert.match(sourceObjectBlock, /movementType:/);
+  assert.match(sourceObjectBlock, /countNo:/);
+  assert.match(sourceObjectBlock, /voucherNo:/);
+  assert.match(sourceObjectBlock, /voucherDate:/);
+  assert.match(sourceObjectBlock, /runNo:/);
+  assert.match(sourceObjectBlock, /totalCompanyCost:/);
+  assert.match(sourceObjectBlock, /assetNo:/);
+  assert.match(sourceObjectBlock, /assetName:/);
+  assert.match(sourceObjectBlock, /netValue:/);
+  assert.match(sourceObjectBlock, /currentDepartmentId:/);
+  assert.match(sourceObjectBlock, /templateVersionId:/);
+  assert.match(sourceObjectBlock, /snapshotHash:/);
+  assert.match(sourceObjectBlock, /cellCount:/);
+  assert.match(sourceObjectBlock, /evidenceRef:/);
+  assert.match(sourceObjectBlock, /traceLinks:/);
+  assert.match(sourceObjectBlock, /actualQuantity:/);
+  assert.match(sourceObjectBlock, /totalAdjustmentAmount:/);
+  assert.match(sourceObjectBlock, /lines:/);
+  assert.match(sourceObjectBlock, /itemCode:/);
+  assert.match(sourceObjectBlock, /accountName:/);
+  assert.match(sourceObjectBlock, /debit:/);
+  assert.match(sourceObjectBlock, /credit:/);
+  assert.match(contract, /local-ocr-placeholder/);
+  assert.match(contract, /local-command-ocr/);
+  assert.match(contract, /local-tesseract/);
+  assert.match(contract, /completed_empty/);
+  assert.match(contract, /configured-local-ocr/);
+  assert.match(contract, /openai-compatible/);
+  assert.match(contract, /llmDraftRun:/);
+  assert.match(contract, /LlmDraftRunListItem:/);
+  assert.match(contract, /schemaSuccessRate:/);
+  assert.match(contract, /adoptionRate:/);
+  assert.match(contract, /humanCorrectionRate:/);
+  assert.match(contract, /providerBreakdown:/);
+  assert.match(contract, /errorMessage:/);
+  assert.match(contract, /requiresHumanConfirmation:/);
+  assert.match(contract, /unmatchedItems:/);
+  assert.match(contract, /purchase_order/);
+  assert.match(contract, /inventory_movement/);
+  assert.match(contract, /material_requisition/);
+  assert.match(contract, /product_receipt/);
+  assert.match(contract, /depreciation_run/);
+  assert.match(contract, /dryRun:/);
+
+  const convertBlock = blockAfter("  /agent/draft-candidates/{agentDraftCandidateId}/convert:");
+  assert.match(convertBlock, /AgentDepreciationRunDraft/);
+  assert.match(convertBlock, /non-mutating depreciation dry-run drafts/);
+  const convertRequestBlock = schemaBlock("    ConvertAgentDraftCandidateRequest:", "    RejectAgentDraftCandidateRequest:");
+  assert.match(convertRequestBlock, /runNo:/);
+  assert.match(convertRequestBlock, /documentType is depreciation_run/);
+  assert.match(convertRequestBlock, /required: \[documentType\]/);
+  const depreciationDraftBlock = schemaBlock("    AgentDepreciationRunDraft:", "    AgentAssetChangeDraft:");
+  assert.match(depreciationDraftBlock, /documentType:/);
+  assert.match(depreciationDraftBlock, /enum: \[depreciation_run\]/);
+  assert.match(depreciationDraftBlock, /const: true/);
+  assert.match(depreciationDraftBlock, /DepreciationRunLine/);
 });
 
 test("audit log endpoint is documented with permission metadata", () => {

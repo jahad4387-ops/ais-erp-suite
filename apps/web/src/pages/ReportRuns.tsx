@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Checkbox, Form, Input, InputNumber, Select, Space, Table, Tag, Typography } from 'antd';
 import { LockOutlined, PlayCircleOutlined, ReloadOutlined, SearchOutlined, SyncOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 import { useAppContext } from '../context/AppContext';
 
 type ReportRunCell = {
@@ -67,6 +68,17 @@ type ReportRunCellDrilldown = {
 };
 
 const { Text, Title } = Typography;
+
+const statusLabel: Record<string, string> = {
+  calculated: '已计算',
+  locked: '已锁定',
+  draft: '草稿',
+};
+
+const runModeLabel: Record<string, string> = {
+  formal: '正式',
+  simulation: '模拟',
+};
 
 export const ReportRuns: React.FC = () => {
   const [form] = Form.useForm();
@@ -145,25 +157,25 @@ export const ReportRuns: React.FC = () => {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
         <div>
-          <Title level={3} style={{ margin: 0 }}>Report Runs</Title>
-          <Text type="secondary">Formula snapshots, calculatedValue, traceLinks, and locked snapshot renderMode.</Text>
+          <Title level={3} style={{ margin: 0 }}>报表计算</Title>
+          <Text type="secondary">执行报表取数、保存快照、查看追溯链并锁定正式报表。</Text>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={fetchRuns} loading={loading}>Refresh</Button>
+        <Button icon={<ReloadOutlined />} onClick={fetchRuns} loading={loading}>刷新</Button>
       </div>
 
       <Form form={form} layout="inline" initialValues={{ fiscalYear: currentYear, periodNo: currentPeriod, runMode: 'formal', includeUnposted: false }} style={{ marginBottom: 16 }}>
         <Form.Item name="templateVersionId" rules={[{ required: true }]}>
-          <Input style={{ width: 260 }} placeholder="Published template version id" />
+          <Input style={{ width: 260 }} placeholder="已发布模板版本ID" />
         </Form.Item>
-        <Form.Item name="fiscalYear"><InputNumber style={{ width: 120 }} placeholder="Year" /></Form.Item>
-        <Form.Item name="periodNo"><InputNumber style={{ width: 120 }} placeholder="Period" /></Form.Item>
+        <Form.Item name="fiscalYear"><InputNumber style={{ width: 120 }} placeholder="年度" /></Form.Item>
+        <Form.Item name="periodNo"><InputNumber style={{ width: 120 }} placeholder="期间" /></Form.Item>
         <Form.Item name="runMode">
-          <Select style={{ width: 140 }} options={[{ value: 'formal', label: 'Formal' }, { value: 'simulation', label: 'Simulation' }]} />
+          <Select style={{ width: 140 }} options={[{ value: 'formal', label: '正式' }, { value: 'simulation', label: '模拟' }]} />
         </Form.Item>
         <Form.Item name="includeUnposted" valuePropName="checked">
-          <Checkbox>includeUnposted</Checkbox>
+          <Checkbox>包含未记账凭证</Checkbox>
         </Form.Item>
-        <Button type="primary" icon={<PlayCircleOutlined />} onClick={createRun}>Run</Button>
+        <Button type="primary" icon={<PlayCircleOutlined />} onClick={createRun}>计算</Button>
       </Form>
 
       <Table
@@ -173,23 +185,37 @@ export const ReportRuns: React.FC = () => {
         pagination={false}
         onRow={(record) => ({ onClick: () => { setSelectedRunId(record.id); setSelectedRun(record); setCellDrilldown(null); } })}
         columns={[
-          { title: 'Run id', dataIndex: 'id' },
-          { title: 'Template version', dataIndex: 'templateVersionId' },
-          { title: 'Year', dataIndex: 'fiscalYear' },
-          { title: 'Period', dataIndex: 'periodNo' },
+          { title: '计算ID', dataIndex: 'id' },
+          { title: '模板版本', dataIndex: 'templateVersionId' },
+          { title: '年度', dataIndex: 'fiscalYear' },
+          { title: '期间', dataIndex: 'periodNo' },
           {
-            title: 'Status',
+            title: '状态',
             dataIndex: 'status',
-            render: (status: string) => <Tag color={status === 'locked' ? 'green' : 'blue'}>{status}</Tag>,
+            render: (status: string) => <Tag color={status === 'locked' ? 'green' : 'blue'}>{statusLabel[status] ?? status}</Tag>,
           },
-          { title: 'Render', dataIndex: 'renderMode' },
+          { title: '模式', render: (_, record) => runModeLabel[record.runMode] ?? record.renderMode },
+          {
+            title: 'Agent',
+            render: (_, record) => (
+              <AgentDraftEntryButton
+                size="small"
+                draftType="report_interpretation"
+                sourceObjectType="report_run"
+                sourceObjectId={record.id}
+                userInstruction={`Generate report interpretation draft from ${record.snapshotHash}.`}
+              >
+                Agent
+              </AgentDraftEntryButton>
+            ),
+          },
         ]}
       />
 
       <Space style={{ marginTop: 16 }}>
-        <Button icon={<ReloadOutlined />} onClick={() => loadRunDetail()} disabled={!selectedRunId}>Detail</Button>
-        <Button icon={<SyncOutlined />} onClick={recalculateRun} disabled={!selectedRunId}>Recalculate</Button>
-        <Button icon={<LockOutlined />} onClick={lockRun} disabled={!selectedRunId}>Lock</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => loadRunDetail()} disabled={!selectedRunId}>详情</Button>
+        <Button icon={<SyncOutlined />} onClick={recalculateRun} disabled={!selectedRunId}>重新计算</Button>
+        <Button icon={<LockOutlined />} onClick={lockRun} disabled={!selectedRunId}>锁定</Button>
       </Space>
 
       {selectedRun && (
@@ -201,18 +227,18 @@ export const ReportRuns: React.FC = () => {
             pagination={false}
             size="small"
             columns={[
-              { title: 'Sheet', dataIndex: 'sheetCode' },
-              { title: 'Cell', dataIndex: 'cellAddress' },
-              { title: 'Label', dataIndex: 'label' },
-              { title: 'Formula', dataIndex: 'formulaText' },
-              { title: 'Value', dataIndex: 'calculatedValue' },
-              { title: 'Format', dataIndex: 'displayFormat' },
-              { title: 'Trace', dataIndex: 'traceId' },
+              { title: '页签', dataIndex: 'sheetCode' },
+              { title: '单元格', dataIndex: 'cellAddress' },
+              { title: '标签', dataIndex: 'label' },
+              { title: '公式', dataIndex: 'formulaText' },
+              { title: '数值', dataIndex: 'calculatedValue' },
+              { title: '格式', dataIndex: 'displayFormat' },
+              { title: '追溯ID', dataIndex: 'traceId' },
               {
-                title: 'Drilldown',
+                title: '穿透',
                 render: (_, record: ReportRunCell) => (
                   <Button size="small" icon={<SearchOutlined />} onClick={() => loadCellDrilldown(record)}>
-                    Open
+                    打开
                   </Button>
                 ),
               },
@@ -229,11 +255,11 @@ export const ReportRuns: React.FC = () => {
                 pagination={false}
                 size="small"
                 columns={[
-                  { title: 'Account', dataIndex: 'accountCode' },
-                  { title: 'Year', dataIndex: 'fiscalYear' },
-                  { title: 'Period', dataIndex: 'periodNo' },
-                  { title: 'Snapshot amount', dataIndex: 'snapshotAmount' },
-                  { title: 'Source', dataIndex: 'sourceType' },
+                  { title: '科目', dataIndex: 'accountCode' },
+                  { title: '年度', dataIndex: 'fiscalYear' },
+                  { title: '期间', dataIndex: 'periodNo' },
+                  { title: '快照金额', dataIndex: 'snapshotAmount' },
+                  { title: '来源', dataIndex: 'sourceType' },
                 ]}
               />
               <Table
@@ -242,11 +268,11 @@ export const ReportRuns: React.FC = () => {
                 pagination={false}
                 size="small"
                 columns={[
-                  { title: 'Account', dataIndex: 'accountCode' },
-                  { title: 'Name', dataIndex: 'accountName' },
-                  { title: 'Debit', dataIndex: 'debit' },
-                  { title: 'Credit', dataIndex: 'credit' },
-                  { title: 'Voucher', dataIndex: 'voucherNo' },
+                  { title: '科目', dataIndex: 'accountCode' },
+                  { title: '名称', dataIndex: 'accountName' },
+                  { title: '借方', dataIndex: 'debit' },
+                  { title: '贷方', dataIndex: 'credit' },
+                  { title: '凭证', dataIndex: 'voucherNo' },
                 ]}
               />
               <Table
@@ -255,9 +281,9 @@ export const ReportRuns: React.FC = () => {
                 pagination={false}
                 size="small"
                 columns={[
-                  { title: 'Voucher no', dataIndex: 'voucherNo' },
-                  { title: 'Date', dataIndex: 'voucherDate' },
-                  { title: 'Status', dataIndex: 'status' },
+                  { title: '凭证号', dataIndex: 'voucherNo' },
+                  { title: '日期', dataIndex: 'voucherDate' },
+                  { title: '状态', dataIndex: 'status' },
                 ]}
               />
             </div>

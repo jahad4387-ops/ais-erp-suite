@@ -81,42 +81,42 @@ export const ReportExportCenter: React.FC = () => {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
         <div>
-          <Title level={3} style={{ margin: 0 }}>Report Export Center</Title>
-          <Text type="secondary">Audited Excel/PDF exports and evidence-backed AI report interpretations.</Text>
+          <Title level={3} style={{ margin: 0 }}>报表导出中心</Title>
+          <Text type="secondary">导出经审计的 Excel/PDF 报表，并维护带证据引用的 AI 解读。</Text>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={fetchExports} loading={loading}>Refresh</Button>
+        <Button icon={<ReloadOutlined />} onClick={fetchExports} loading={loading}>刷新</Button>
       </div>
 
       <Form form={form} layout="vertical" initialValues={{
         fileType: 'excel',
-        summary: 'Operating summary draft.',
-        keyFindings: 'Cash closing balance changed.',
+        summary: '经营摘要草稿。',
+        keyFindings: '现金期末余额发生变化。',
         warnings: '',
         evidenceRefs: 'report_cell:BS!B12',
       }}>
         <Space align="start" size={16} wrap>
-          <Form.Item name="reportRunId" label="Report run id" rules={[{ required: true }]}>
+          <Form.Item name="reportRunId" label="报表计算ID" rules={[{ required: true }]}>
             <Input style={{ width: 280 }} onChange={(event) => setReportRunId(event.target.value)} />
           </Form.Item>
-          <Form.Item name="fileType" label="File type">
+          <Form.Item name="fileType" label="文件类型">
             <Select style={{ width: 140 }} options={[{ value: 'excel', label: 'Excel' }, { value: 'pdf', label: 'PDF' }]} />
           </Form.Item>
-          <Button type="primary" icon={<DownloadOutlined />} onClick={createExport} style={{ marginTop: 30 }}>Export</Button>
+          <Button type="primary" icon={<DownloadOutlined />} onClick={createExport} style={{ marginTop: 30 }}>导出</Button>
         </Space>
 
-        <Form.Item name="summary" label="AI summary">
+        <Form.Item name="summary" label="AI 摘要">
           <Input />
         </Form.Item>
-        <Form.Item name="keyFindings" label="keyFindings">
+        <Form.Item name="keyFindings" label="关键发现">
           <Input.TextArea rows={2} />
         </Form.Item>
-        <Form.Item name="warnings" label="warnings">
+        <Form.Item name="warnings" label="风险提示">
           <Input.TextArea rows={2} />
         </Form.Item>
-        <Form.Item name="evidenceRefs" label="evidenceRefs">
+        <Form.Item name="evidenceRefs" label="证据引用">
           <Input.TextArea rows={2} />
         </Form.Item>
-        <Button icon={<RobotOutlined />} onClick={createInterpretation} disabled={!reportRunId}>Create Interpretation</Button>
+        <Button icon={<RobotOutlined />} onClick={createInterpretation} disabled={!reportRunId}>生成解读</Button>
       </Form>
 
       <Table
@@ -125,12 +125,12 @@ export const ReportExportCenter: React.FC = () => {
         loading={loading}
         style={{ marginTop: 16 }}
         columns={[
-          { title: 'Export id', dataIndex: 'id' },
-          { title: 'Run', dataIndex: 'reportRunId' },
-          { title: 'Type', dataIndex: 'fileType' },
-          { title: 'Snapshot', dataIndex: 'snapshotHash' },
-          { title: 'Download', dataIndex: 'downloadUrl' },
-          { title: 'Notice', dataIndex: 'sensitiveFieldNotice' },
+          { title: '导出ID', dataIndex: 'id' },
+          { title: '计算单', dataIndex: 'reportRunId' },
+          { title: '类型', dataIndex: 'fileType' },
+          { title: '快照', dataIndex: 'snapshotHash' },
+          { title: '下载地址', dataIndex: 'downloadUrl' },
+          { title: '提示', dataIndex: 'sensitiveFieldNotice' },
         ]}
       />
 
@@ -140,10 +140,10 @@ export const ReportExportCenter: React.FC = () => {
         pagination={false}
         style={{ marginTop: 16 }}
         columns={[
-          { title: 'Summary', dataIndex: 'summary' },
-          { title: 'keyFindings', dataIndex: 'keyFindings', render: (rows: string[]) => rows?.join('; ') },
-          { title: 'warnings', dataIndex: 'warnings', render: (rows: string[]) => rows?.join('; ') },
-          { title: 'evidenceRefs', dataIndex: 'evidenceRefs', render: (rows: string[]) => rows?.join('; ') },
+          { title: '摘要', dataIndex: 'summary' },
+          { title: '关键发现', dataIndex: 'keyFindings', render: (rows: string[]) => rows?.join('; ') },
+          { title: '风险提示', dataIndex: 'warnings', render: (rows: string[]) => rows?.join('; ') },
+          { title: '证据引用', dataIndex: 'evidenceRefs', render: (rows: string[]) => rows?.join('; ') },
         ]}
       />
     </div>

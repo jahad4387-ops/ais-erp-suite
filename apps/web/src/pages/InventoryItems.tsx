@@ -19,11 +19,13 @@ type InventoryItem = {
 };
 
 const costMethodOptions = [
-  { value: 'moving_average', label: 'Moving average' },
-  { value: 'fifo', label: 'FIFO' },
-  { value: 'specific_identification', label: 'Specific identification' },
-  { value: 'monthly_weighted_average', label: 'Monthly weighted average' },
+  { value: 'moving_average', label: '移动平均' },
+  { value: 'fifo', label: '先进先出' },
+  { value: 'specific_identification', label: '个别计价' },
+  { value: 'monthly_weighted_average', label: '月末加权平均' },
 ];
+
+const batchCostMethodGuardrail = 'BATCH_COST_METHOD_CONFLICT';
 
 export const InventoryItems: React.FC = () => {
   const [form] = Form.useForm();
@@ -66,7 +68,7 @@ export const InventoryItems: React.FC = () => {
 
   const handleSave = async () => {
     if (!currentAccountSetId) {
-      message.error('Please select an account set first.');
+      message.error('请先选择账套。');
       return;
     }
     const values = await form.validateFields();
@@ -83,16 +85,24 @@ export const InventoryItems: React.FC = () => {
     }
   };
 
+  const handleFormValuesChange = (changedValues: Partial<InventoryItem>) => {
+    const isBatchManaged = changedValues.isBatchManaged ?? form.getFieldValue('isBatchManaged');
+    if (isBatchManaged && form.getFieldValue('costMethod') === 'moving_average') {
+      form.setFieldValue('costMethod', 'fifo');
+      message.info('启用批次管理后，计价方法已切换为先进先出。');
+    }
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, gap: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Inventory Items</h2>
+        <h2 style={{ margin: 0 }}>存货档案</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchItems}>
-            Refresh
+            刷新
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            New
+            新增
           </Button>
         </Space>
       </div>
@@ -100,55 +110,56 @@ export const InventoryItems: React.FC = () => {
         style={{ marginBottom: 16 }}
         type="info"
         showIcon
-        description="BATCH_COST_METHOD_CONFLICT: batch-managed items must use FIFO or specific identification."
+        data-guardrail={batchCostMethodGuardrail}
+        description="批次管理的存货必须使用先进先出或个别计价，避免批次成本与计价方法冲突。"
       />
       <Table
         rowKey="id"
         loading={loading}
         dataSource={items}
         columns={[
-          { title: 'Code', dataIndex: 'code', width: 140 },
-          { title: 'Name', dataIndex: 'name' },
-          { title: 'Unit', dataIndex: 'unit', width: 90 },
-          { title: 'Cost method', dataIndex: 'costMethod', width: 190 },
-          { title: 'Batch', dataIndex: 'isBatchManaged', width: 90, render: (value: boolean) => <Tag color={value ? 'blue' : 'default'}>{value ? 'Yes' : 'No'}</Tag> },
-          { title: 'Manufactured', dataIndex: 'isManufactured', width: 130, render: (value: boolean) => <Tag color={value ? 'purple' : 'default'}>{value ? 'Yes' : 'No'}</Tag> },
+          { title: '编码', dataIndex: 'code', width: 140 },
+          { title: '名称', dataIndex: 'name' },
+          { title: '单位', dataIndex: 'unit', width: 90 },
+          { title: '计价方法', dataIndex: 'costMethod', width: 190 },
+          { title: '批次', dataIndex: 'isBatchManaged', width: 90, render: (value: boolean) => <Tag color={value ? 'blue' : 'default'}>{value ? '是' : '否'}</Tag> },
+          { title: '自制', dataIndex: 'isManufactured', width: 130, render: (value: boolean) => <Tag color={value ? 'purple' : 'default'}>{value ? '是' : '否'}</Tag> },
         ]}
       />
-      <Modal title="New inventory item" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)}>
-        <Form form={form} layout="vertical">
-          <Form.Item name="code" label="Code" rules={[{ required: true }]}>
+      <Modal title="新增存货档案" open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} okText="确定" cancelText="取消">
+        <Form form={form} layout="vertical" onValuesChange={handleFormValuesChange}>
+          <Form.Item name="code" label="编码" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+          <Form.Item name="name" label="名称" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="category" label="Category">
+          <Form.Item name="category" label="分类">
             <Input />
           </Form.Item>
-          <Form.Item name="itemType" label="Item type">
+          <Form.Item name="itemType" label="存货类型">
             <Select
               options={[
-                { value: 'raw_material', label: 'Raw material' },
-                { value: 'finished_good', label: 'Finished good' },
-                { value: 'semi_finished', label: 'Semi-finished' },
+                { value: 'raw_material', label: '原材料' },
+                { value: 'finished_good', label: '产成品' },
+                { value: 'semi_finished', label: '半成品' },
               ]}
             />
           </Form.Item>
-          <Form.Item name="unit" label="Unit" rules={[{ required: true }]}>
+          <Form.Item name="unit" label="单位" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="costMethod" label="Cost method" rules={[{ required: true }]}>
+          <Form.Item name="costMethod" label="计价方法" rules={[{ required: true }]}>
             <Select options={costMethodOptions} />
           </Form.Item>
           <Form.Item name="isBatchManaged" valuePropName="checked">
-            <Checkbox>Batch managed</Checkbox>
+            <Checkbox>启用批次管理</Checkbox>
           </Form.Item>
           <Form.Item name="isSerialManaged" valuePropName="checked">
-            <Checkbox>Serial managed</Checkbox>
+            <Checkbox>启用序列号管理</Checkbox>
           </Form.Item>
           <Form.Item name="isManufactured" valuePropName="checked">
-            <Checkbox>Manufactured item</Checkbox>
+            <Checkbox>自制件</Checkbox>
           </Form.Item>
         </Form>
       </Modal>

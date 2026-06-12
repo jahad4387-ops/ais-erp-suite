@@ -36,6 +36,7 @@ import { AccountCodeRules } from './pages/AccountCodeRules';
 import { PostingBatches } from './pages/PostingBatches';
 import { VoucherReview } from './pages/VoucherReview';
 import { DeploymentConfig } from './pages/DeploymentConfig';
+import { BackupRestoreWorkbench } from './pages/BackupRestoreWorkbench';
 import { Partners } from './pages/Partners';
 import { Orders } from './pages/Orders';
 import { Fulfillment } from './pages/Fulfillment';
@@ -219,6 +220,7 @@ const AppFrame: React.FC = () => {
                   { key: '2', icon: <DesktopOutlined />, label: <Link to="/account-sets">账套管理</Link> },
                   { key: '8', label: <Link to="/roles">用户与角色权限</Link> },
                   { key: 'deployment-config', label: <Link to="/deployment-config">部署配置</Link> },
+                  { key: 'backup-restore', label: <Link to="/backup-restore">备份恢复</Link> },
                   { key: 'audit-logs', label: <Link to="/audit-logs">操作日志</Link> },
                 ],
               },
@@ -304,12 +306,12 @@ const AppFrame: React.FC = () => {
                 icon: <AuditOutlined />,
                 label: '报表',
                 children: [
-                  { key: 'report-templates', label: <Link to="/report-templates">Report Templates</Link> },
-                  { key: 'ufo-report-designer', label: <Link to="/ufo-report-designer">UFO Designer</Link> },
-                  { key: 'report-runs', label: <Link to="/report-runs">Report Runs</Link> },
-                  { key: 'report-approvals', label: <Link to="/report-approvals">Report Approvals</Link> },
-                  { key: 'report-export-center', label: <Link to="/report-export-center">Export Center</Link> },
-                  { key: 'management-analysis', label: <Link to="/management-analysis">Management Analysis</Link> },
+                  { key: 'report-templates', label: <Link to="/report-templates">报表模板</Link> },
+                  { key: 'ufo-report-designer', label: <Link to="/ufo-report-designer">UFO 报表设计</Link> },
+                  { key: 'report-runs', label: <Link to="/report-runs">报表计算</Link> },
+                  { key: 'report-approvals', label: <Link to="/report-approvals">报表审批</Link> },
+                  { key: 'report-export-center', label: <Link to="/report-export-center">导出中心</Link> },
+                  { key: 'management-analysis', label: <Link to="/management-analysis">经营分析</Link> },
                   { key: 'trial', label: <Link to="/reports/trial-balance">试算平衡表</Link> },
                   { key: 'balances', label: <Link to="/reports/account-balances">科目余额表</Link> },
                   { key: 'detail', label: <Link to="/reports/detail-ledger">明细账</Link> },
@@ -428,6 +430,7 @@ const AppFrame: React.FC = () => {
                 <Route path="/users" element={<Navigate to="/roles" replace />} />
                 <Route path="/roles" element={<RequireAuth><UserAccess /></RequireAuth>} />
                 <Route path="/deployment-config" element={<RequireAuth><DeploymentConfig /></RequireAuth>} />
+                <Route path="/backup-restore" element={<RequireAuth><BackupRestoreWorkbench /></RequireAuth>} />
                 <Route path="/audit-logs" element={<RequireAuth><AuditLogs /></RequireAuth>} />
               </Routes>
             </div>
