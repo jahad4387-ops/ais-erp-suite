@@ -4,14 +4,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const appPath = fileURLToPath(new URL("../src/App.tsx", import.meta.url));
+const navigationPath = fileURLToPath(new URL("../src/navigation.tsx", import.meta.url));
 const pagePath = fileURLToPath(new URL("../src/pages/VoucherReview.tsx", import.meta.url));
 
 test("voucher review workbench is reachable from general-ledger navigation", () => {
-  const source = readFileSync(appPath, "utf8");
+  const appSource = readFileSync(appPath, "utf8");
+  const navigationSource = readFileSync(navigationPath, "utf8");
 
-  assert.match(source, /import \{ VoucherReview \} from '\.\/pages\/VoucherReview';/);
-  assert.match(source, /to="\/vouchers\/review"/);
-  assert.match(source, /<Route path="\/vouchers\/review" element=\{<RequireAuth><VoucherReview \/><\/RequireAuth>\} \/>/);
+  assert.match(appSource, /import \{ VoucherReview \} from '\.\/pages\/VoucherReview';/);
+  assert.match(navigationSource, /to: '\/vouchers\/review'/);
+  assert.match(appSource, /<Route path="\/vouchers\/review" element=\{<RequireAuth><VoucherReview \/><\/RequireAuth>\} \/>/);
 });
 
 test("voucher review workbench supports planned filters and batch actions", () => {

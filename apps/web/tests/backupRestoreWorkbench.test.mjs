@@ -4,14 +4,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const appPath = fileURLToPath(new URL("../src/App.tsx", import.meta.url));
+const navigationPath = fileURLToPath(new URL("../src/navigation.tsx", import.meta.url));
 const pagePath = fileURLToPath(new URL("../src/pages/BackupRestoreWorkbench.tsx", import.meta.url));
 
 test("Phase 6 backup restore workbench is reachable from platform management navigation", () => {
-  const source = readFileSync(appPath, "utf8");
+  const appSource = readFileSync(appPath, "utf8");
+  const navigationSource = readFileSync(navigationPath, "utf8");
 
-  assert.match(source, /import \{ BackupRestoreWorkbench \} from '\.\/pages\/BackupRestoreWorkbench';/);
-  assert.match(source, /to="\/backup-restore"/);
-  assert.match(source, /<Route path="\/backup-restore" element=\{<RequireAuth><BackupRestoreWorkbench \/><\/RequireAuth>\} \/>/);
+  assert.match(appSource, /import \{ BackupRestoreWorkbench \} from '\.\/pages\/BackupRestoreWorkbench';/);
+  assert.match(navigationSource, /to: '\/backup-restore'/);
+  assert.match(appSource, /<Route path="\/backup-restore" element=\{<RequireAuth><BackupRestoreWorkbench \/><\/RequireAuth>\} \/>/);
 });
 
 test("Phase 6 backup restore workbench wires backup, restore, and restore-drill APIs", () => {

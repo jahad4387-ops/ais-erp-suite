@@ -4,14 +4,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const appPath = fileURLToPath(new URL("../src/App.tsx", import.meta.url));
+const navigationPath = fileURLToPath(new URL("../src/navigation.tsx", import.meta.url));
 const pagePath = fileURLToPath(new URL("../src/pages/AccountCodeRules.tsx", import.meta.url));
 
 test("account code rules page is reachable from master data navigation", () => {
-  const source = readFileSync(appPath, "utf8");
+  const appSource = readFileSync(appPath, "utf8");
+  const navigationSource = readFileSync(navigationPath, "utf8");
 
-  assert.match(source, /import \{ AccountCodeRules \} from '\.\/pages\/AccountCodeRules';/);
-  assert.match(source, /to="\/account-code-rules"/);
-  assert.match(source, /<Route path="\/account-code-rules" element=\{<RequireAuth><AccountCodeRules \/><\/RequireAuth>\} \/>/);
+  assert.match(appSource, /import \{ AccountCodeRules \} from '\.\/pages\/AccountCodeRules';/);
+  assert.match(navigationSource, /to: '\/account-code-rules'/);
+  assert.match(appSource, /<Route path="\/account-code-rules" element=\{<RequireAuth><AccountCodeRules \/><\/RequireAuth>\} \/>/);
 });
 
 test("account code rules page saves planned segment-based rules", () => {

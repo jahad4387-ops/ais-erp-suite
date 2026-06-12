@@ -31,19 +31,19 @@ test("inventory, payroll, and fixed asset pages use Chinese operational labels",
 });
 
 test("report pages and report menu use Chinese operational labels", () => {
-  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const navigation = readFileSync(new URL("../src/navigation.tsx", import.meta.url), "utf8");
   const reportTemplates = page("ReportTemplates");
   const reportRuns = page("ReportRuns");
   const reportApprovals = page("ReportApprovals");
   const reportExportCenter = page("ReportExportCenter");
   const managementAnalysis = page("ManagementAnalysis");
 
-  assert.match(app, /报表模板/);
-  assert.match(app, /UFO 报表设计/);
-  assert.match(app, /报表计算/);
-  assert.match(app, /报表审批/);
-  assert.match(app, /导出中心/);
-  assert.match(app, /经营分析/);
+  assert.match(navigation, /报表模板/);
+  assert.match(navigation, /UFO 报表设计/);
+  assert.match(navigation, /报表计算/);
+  assert.match(navigation, /报表审批/);
+  assert.match(navigation, /导出中心/);
+  assert.match(navigation, /经营分析/);
   assert.match(reportTemplates, /报表模板/);
   assert.match(reportTemplates, /单元格属性/);
   assert.match(reportRuns, /报表计算/);
@@ -51,7 +51,7 @@ test("report pages and report menu use Chinese operational labels", () => {
   assert.match(reportExportCenter, /报表导出中心/);
   assert.match(managementAnalysis, /经营分析/);
 
-  for (const source of [app, reportTemplates, reportRuns, reportApprovals, reportExportCenter, managementAnalysis]) {
+  for (const source of [navigation, reportTemplates, reportRuns, reportApprovals, reportExportCenter, managementAnalysis]) {
     assert.doesNotMatch(source, /Report Templates/);
     assert.doesNotMatch(source, /Report Runs/);
     assert.doesNotMatch(source, /Report Approvals/);

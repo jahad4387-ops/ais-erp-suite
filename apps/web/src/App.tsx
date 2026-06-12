@@ -2,17 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Button, ConfigProvider, Layout, Menu, Space, Tag, Typography, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import {
-  DesktopOutlined,
-  PieChartOutlined,
-  FileOutlined,
-  TeamOutlined,
-  UserOutlined,
-  AuditOutlined,
-  BookOutlined,
-  RobotOutlined,
-  LoginOutlined,
-} from '@ant-design/icons';
+import { LoginOutlined } from '@ant-design/icons';
 import { AccountSets } from './pages/AccountSets';
 import { Vouchers } from './pages/Vouchers';
 import { VoucherEntry } from './pages/VoucherEntry';
@@ -72,6 +62,7 @@ import { FixedAssetReconciliation } from './pages/FixedAssetReconciliation';
 import { api } from './api';
 import { AppProvider, useAppContext } from './context/AppContext';
 import { zhActor, zhRole } from './i18n';
+import { buildMainMenuItems } from './navigation';
 
 const { Header, Content, Footer, Sider } = Layout;
 const { Text, Title } = Typography;
@@ -210,116 +201,7 @@ const AppFrame: React.FC = () => {
             theme="dark"
             defaultSelectedKeys={['1']}
             mode="inline"
-            items={[
-              { key: '1', icon: <PieChartOutlined />, label: <Link to="/">工作台</Link> },
-              {
-                key: 'platform',
-                icon: <TeamOutlined />,
-                label: '平台管理',
-                children: [
-                  { key: '2', icon: <DesktopOutlined />, label: <Link to="/account-sets">账套管理</Link> },
-                  { key: '8', label: <Link to="/roles">用户与角色权限</Link> },
-                  { key: 'deployment-config', label: <Link to="/deployment-config">部署配置</Link> },
-                  { key: 'backup-restore', label: <Link to="/backup-restore">备份恢复</Link> },
-                  { key: 'audit-logs', label: <Link to="/audit-logs">操作日志</Link> },
-                ],
-              },
-              {
-                key: 'master-data',
-                icon: <UserOutlined />,
-                label: '基础档案',
-                children: [
-                  { key: 'suppliers', label: <Link to="/suppliers">供应商档案</Link> },
-                  { key: 'customers', label: <Link to="/customers">客户档案</Link> },
-                  { key: 'accounts', label: <Link to="/accounts">会计科目</Link> },
-                  { key: 'account-code-rules', label: <Link to="/account-code-rules">科目编码规则</Link> },
-                  { key: 'auxiliaries', label: <Link to="/auxiliaries">辅助核算</Link> },
-                  { key: 'opening-balances', label: <Link to="/opening-balances">期初余额</Link> },
-                  { key: 'periods', label: <Link to="/periods">会计期间</Link> },
-                ],
-              },
-              {
-                key: 'inventory-production',
-                icon: <FileOutlined />,
-                label: '存货生产',
-                children: [
-                  { key: 'inventory-items', label: <Link to="/inventory-items">存货档案</Link> },
-                  { key: 'boms', label: <Link to="/boms">BOM 维护</Link> },
-                  { key: 'warehouses', label: <Link to="/warehouses">仓库库位</Link> },
-                  {
-                    key: 'inventory-opening-balances',
-                    label: <Link to="/inventory-opening-balances">存货期初</Link>,
-                  },
-                  { key: 'inventory-movements', label: <Link to="/inventory-movements">出入库单</Link> },
-                  { key: 'inventory-transfers', label: <Link to="/inventory-transfers">调拨单</Link> },
-                  { key: 'stock-counts', label: <Link to="/stock-counts">盘点工作台</Link> },
-                  { key: 'work-orders', label: <Link to="/work-orders">生产工单</Link> },
-                  { key: 'material-requisitions', label: <Link to="/material-requisitions">生产领料</Link> },
-                  { key: 'product-receipts', label: <Link to="/product-receipts">完工入库</Link> },
-                  { key: 'mock-cost-inputs', label: <Link to="/mock-cost-inputs">成本输入</Link> },
-                  { key: 'cost-allocations', label: <Link to="/cost-allocations">成本分摊</Link> },
-                  { key: 'cost-voucher-drafts', label: <Link to="/cost-voucher-drafts">成本凭证</Link> },
-                  { key: 'inventory-reconciliation', label: <Link to="/inventory-reconciliation">库存对账</Link> },
-                  { key: 'inventory-ledger', label: <Link to="/inventory-ledger">收发存查询</Link> },
-                ],
-              },
-              {
-                key: 'payroll-assets',
-                icon: <FileOutlined />,
-                label: '薪资固资',
-                children: [
-                  { key: 'payroll-setup', label: <Link to="/payroll-setup">薪资基础</Link> },
-                  { key: 'payroll-runs', label: <Link to="/payroll-runs">工资批次</Link> },
-                  { key: 'fixed-asset-setup', label: <Link to="/fixed-asset-setup">固资基础</Link> },
-                  { key: 'fixed-assets', label: <Link to="/fixed-assets">资产卡片</Link> },
-                  { key: 'depreciation-runs', label: <Link to="/depreciation-runs">折旧计提</Link> },
-                  { key: 'asset-disposals', label: <Link to="/asset-disposals">资产处置</Link> },
-                  { key: 'asset-counts', label: <Link to="/asset-counts">资产盘点</Link> },
-                  { key: 'fixed-asset-reconciliation', label: <Link to="/fixed-asset-reconciliation">固资对账</Link> },
-                ],
-              },
-              {
-                key: 'general-ledger',
-                icon: <BookOutlined />,
-                label: '总账',
-                children: [
-                  { key: 'purchase-orders', label: <Link to="/purchase-orders">采购订单</Link> },
-                  { key: 'purchase-receipts', label: <Link to="/purchase-receipts">采购入库</Link> },
-                  { key: 'purchase-invoices', label: <Link to="/purchase-invoices">采购发票</Link> },
-                  { key: 'sales-orders', label: <Link to="/sales-orders">销售订单</Link> },
-                  { key: 'sales-deliveries', label: <Link to="/sales-deliveries">销售出库</Link> },
-                  { key: 'sales-invoices', label: <Link to="/sales-invoices">销售发票</Link> },
-                  { key: 'counterparty-ledger', label: <Link to="/counterparty-ledger">往来明细</Link> },
-                  { key: 'counterparty-analytics', label: <Link to="/counterparty-analytics">往来分析</Link> },
-                  { key: 'payment-requests', label: <Link to="/payment-requests">付款申请</Link> },
-                  { key: 'customer-receipts', label: <Link to="/customer-receipts">收款单</Link> },
-                  { key: 'ap-settlements', label: <Link to="/ap-settlements">应付核销</Link> },
-                  { key: '3', label: <Link to="/vouchers">凭证管理</Link> },
-                  { key: '4', label: <Link to="/vouchers/new">录入凭证</Link> },
-                  { key: 'voucher-review', label: <Link to="/vouchers/review">审核工作台</Link> },
-                  { key: 'posting-batches', label: <Link to="/posting/batches">记账批次</Link> },
-                  { key: '5', label: <Link to="/bank-reconciliation">银行对账</Link> },
-                ],
-              },
-              {
-                key: 'reports',
-                icon: <AuditOutlined />,
-                label: '报表',
-                children: [
-                  { key: 'report-templates', label: <Link to="/report-templates">报表模板</Link> },
-                  { key: 'ufo-report-designer', label: <Link to="/ufo-report-designer">UFO 报表设计</Link> },
-                  { key: 'report-runs', label: <Link to="/report-runs">报表计算</Link> },
-                  { key: 'report-approvals', label: <Link to="/report-approvals">报表审批</Link> },
-                  { key: 'report-export-center', label: <Link to="/report-export-center">导出中心</Link> },
-                  { key: 'management-analysis', label: <Link to="/management-analysis">经营分析</Link> },
-                  { key: 'trial', label: <Link to="/reports/trial-balance">试算平衡表</Link> },
-                  { key: 'balances', label: <Link to="/reports/account-balances">科目余额表</Link> },
-                  { key: 'detail', label: <Link to="/reports/detail-ledger">明细账</Link> },
-                ],
-              },
-              { key: 'agent', icon: <RobotOutlined />, label: <Link to="/agent">智能助手</Link> },
-              { key: '9', icon: <FileOutlined />, label: '系统设置' },
-            ]}
+            items={buildMainMenuItems()}
           />
         </Sider>
         <Layout>

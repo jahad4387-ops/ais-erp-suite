@@ -4,13 +4,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const appPath = fileURLToPath(new URL("../src/App.tsx", import.meta.url));
+const navigationPath = fileURLToPath(new URL("../src/navigation.tsx", import.meta.url));
 const pagePath = fileURLToPath(new URL("../src/pages/ReportApprovals.tsx", import.meta.url));
 
 test("Phase 5 report approval route is available from the report menu", () => {
   const appSource = readFileSync(appPath, "utf8");
+  const navigationSource = readFileSync(navigationPath, "utf8");
 
   assert.match(appSource, /ReportApprovals/);
-  assert.match(appSource, /to="\/report-approvals"/);
+  assert.match(navigationSource, /to: '\/report-approvals'/);
   assert.match(appSource, /path="\/report-approvals"/);
 });
 

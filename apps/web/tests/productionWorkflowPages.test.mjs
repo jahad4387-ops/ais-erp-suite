@@ -4,11 +4,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const appPath = fileURLToPath(new URL("../src/App.tsx", import.meta.url));
+const navigationPath = fileURLToPath(new URL("../src/navigation.tsx", import.meta.url));
 const workOrdersPath = fileURLToPath(new URL("../src/pages/ProductionWorkOrders.tsx", import.meta.url));
 const requisitionsPath = fileURLToPath(new URL("../src/pages/MaterialRequisitions.tsx", import.meta.url));
 const receiptsPath = fileURLToPath(new URL("../src/pages/ProductReceipts.tsx", import.meta.url));
 
 const appSource = readFileSync(appPath, "utf8");
+const navigationSource = readFileSync(navigationPath, "utf8");
 const workOrdersSource = readFileSync(workOrdersPath, "utf8");
 const requisitionsSource = readFileSync(requisitionsPath, "utf8");
 const receiptsSource = readFileSync(receiptsPath, "utf8");
@@ -17,9 +19,9 @@ test("web app exposes Phase 3 production workflow pages and API wiring", () => {
   assert.match(appSource, /path="\/work-orders"/, "Work order route should be stable.");
   assert.match(appSource, /path="\/material-requisitions"/, "Material requisition route should be stable.");
   assert.match(appSource, /path="\/product-receipts"/, "Product receipt route should be stable.");
-  assert.match(appSource, /to="\/work-orders"/, "Work orders should be reachable from navigation.");
-  assert.match(appSource, /to="\/material-requisitions"/, "Material requisitions should be reachable from navigation.");
-  assert.match(appSource, /to="\/product-receipts"/, "Product receipts should be reachable from navigation.");
+  assert.match(navigationSource, /to: '\/work-orders'/, "Work orders should be reachable from navigation.");
+  assert.match(navigationSource, /to: '\/material-requisitions'/, "Material requisitions should be reachable from navigation.");
+  assert.match(navigationSource, /to: '\/product-receipts'/, "Product receipts should be reachable from navigation.");
   assert.match(workOrdersSource, /api\.get\(`\/work-orders\?/, "Work order page should list work orders.");
   assert.match(workOrdersSource, /api\.post\('\/work-orders'/, "Work order page should create work orders.");
   assert.match(workOrdersSource, /\/work-orders\/\$\{[^}]+\.id\}\/release/, "Work order page should release work orders.");

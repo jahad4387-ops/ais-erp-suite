@@ -4,17 +4,19 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const appPath = fileURLToPath(new URL("../src/App.tsx", import.meta.url));
+const navigationPath = fileURLToPath(new URL("../src/navigation.tsx", import.meta.url));
 const pagePath = fileURLToPath(new URL("../src/pages/ReportTemplates.tsx", import.meta.url));
 
 test("Phase 5 report template routes are available from the report menu", () => {
-  const source = readFileSync(appPath, "utf8");
+  const appSource = readFileSync(appPath, "utf8");
+  const navigationSource = readFileSync(navigationPath, "utf8");
 
-  assert.match(source, /ReportTemplates/);
-  assert.match(source, /UfoReportDesigner/);
-  assert.match(source, /to="\/report-templates"/);
-  assert.match(source, /to="\/ufo-report-designer"/);
-  assert.match(source, /path="\/report-templates"/);
-  assert.match(source, /path="\/ufo-report-designer"/);
+  assert.match(appSource, /ReportTemplates/);
+  assert.match(appSource, /UfoReportDesigner/);
+  assert.match(navigationSource, /to: '\/report-templates'/);
+  assert.match(navigationSource, /to: '\/ufo-report-designer'/);
+  assert.match(appSource, /path="\/report-templates"/);
+  assert.match(appSource, /path="\/ufo-report-designer"/);
 });
 
 test("Phase 5 report template page wires UFO template CRUD and publish APIs", () => {
