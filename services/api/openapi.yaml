@@ -2205,6 +2205,41 @@ paths:
               schema:
                 $ref: "#/components/schemas/ManagementAnalysis"
 
+  /supply-chain/dashboard:
+    get:
+      summary: Build supply chain manufacturing dashboard summary, queues, and Agent suggestions.
+      x-permission: inventory_reconciliation.view
+      x-risk-level: low
+      x-agent-allowed: true
+      parameters:
+        - name: accountSetId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: fiscalYear
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: periodNo
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: asOfDate
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Supply chain manufacturing dashboard summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupplyChainDashboard"
+
   /audit-logs:
     get:
       summary: Query audit logs.
@@ -12132,6 +12167,140 @@ components:
                 type: array
                 items:
                   $ref: "#/components/schemas/ManagementAnalysisDrilldownRow"
+
+    SupplyChainDashboard:
+      type: object
+      required: [accountSetId, fiscalYear, periodNo, asOfDate, summary, queues, workOrderProgress, agentSuggestions]
+      properties:
+        accountSetId:
+          type: string
+        fiscalYear:
+          type: integer
+        periodNo:
+          type: integer
+        asOfDate:
+          type: string
+        summary:
+          type: object
+          required:
+            - pendingOrders
+            - materialShortages
+            - purchaseOverdue
+            - availableToDeliverOrders
+            - inventoryExceptions
+            - workOrdersToIssue
+            - workOrdersToReceive
+            - costPending
+            - pendingAgentApprovals
+          properties:
+            pendingOrders:
+              $ref: "#/components/schemas/SupplyChainDashboardCard"
+            materialShortages:
+              $ref: "#/components/schemas/SupplyChainDashboardCard"
+            purchaseOverdue:
+              $ref: "#/components/schemas/SupplyChainDashboardCard"
+            availableToDeliverOrders:
+              $ref: "#/components/schemas/SupplyChainDashboardCard"
+            inventoryExceptions:
+              $ref: "#/components/schemas/SupplyChainDashboardCard"
+            workOrdersToIssue:
+              $ref: "#/components/schemas/SupplyChainDashboardCard"
+            workOrdersToReceive:
+              $ref: "#/components/schemas/SupplyChainDashboardCard"
+            costPending:
+              $ref: "#/components/schemas/SupplyChainDashboardCard"
+            pendingAgentApprovals:
+              $ref: "#/components/schemas/SupplyChainDashboardCard"
+        queues:
+          type: object
+          properties:
+            pendingOrders:
+              type: array
+              items:
+                type: object
+            purchaseOverdue:
+              type: array
+              items:
+                type: object
+            inventoryExceptions:
+              type: array
+              items:
+                type: object
+            pendingMaterialRequisitions:
+              type: array
+              items:
+                type: object
+            pendingAgentApprovals:
+              type: array
+              items:
+                type: object
+        workOrderProgress:
+          type: object
+          required: [total, released, inProgress, closed]
+          properties:
+            total:
+              type: integer
+            released:
+              type: integer
+            inProgress:
+              type: integer
+            closed:
+              type: integer
+        agentSuggestions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SupplyChainAgentSuggestion"
+
+    SupplyChainDashboardCard:
+      type: object
+      required: [key, label, count, severity, drilldown]
+      properties:
+        key:
+          type: string
+          enum:
+            - pendingOrders
+            - materialShortages
+            - purchaseOverdue
+            - availableToDeliverOrders
+            - inventoryExceptions
+            - workOrdersToIssue
+            - workOrdersToReceive
+            - costPending
+            - pendingAgentApprovals
+        label:
+          type: string
+        count:
+          type: integer
+        severity:
+          type: string
+          enum: [normal, warning, blocking]
+        drilldown:
+          type: object
+          required: [path]
+          properties:
+            path:
+              type: string
+
+    SupplyChainAgentSuggestion:
+      type: object
+      required: [code, title, message, riskLevel, suggestedTool, evidenceRefs]
+      properties:
+        code:
+          type: string
+          enum: [MATERIAL_SHORTAGE_REVIEW, PURCHASE_OVERDUE_FOLLOW_UP]
+        title:
+          type: string
+        message:
+          type: string
+        riskLevel:
+          type: string
+          enum: [low, medium, high]
+        suggestedTool:
+          type: string
+        evidenceRefs:
+          type: array
+          items:
+            type: string
 
     ManagementAnalysisMetric:
       type: object

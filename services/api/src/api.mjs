@@ -737,6 +737,9 @@ function permissionFor(request) {
   if (segments[0] === "management-analysis") {
     return "report.view";
   }
+  if (segments[0] === "supply-chain" && segments[1] === "dashboard") {
+    return "inventory_reconciliation.view";
+  }
   if (segments[0] === "report-exports" || segments[0] === "ai-report-interpretations") {
     return "report.view";
   }
@@ -8950,6 +8953,148 @@ function metric(key, label, amount, count, sourceType, path, extra = {}) {
   };
 }
 
+function dashboardCard(key, label, count, path, severity = "normal") {
+  return {
+    key,
+    label,
+    count,
+    severity,
+    drilldown: { path }
+  };
+}
+
+function rowsForAccountSet(map, accountSetId) {
+  return [...map.values()].filter((row) => row.accountSetId === accountSetId);
+}
+
+function buildSupplyChainDashboard(state, { accountSetId, fiscalYear, periodNo, asOfDate }) {
+  const periodPath = `accountSetId=${accountSetId}&fiscalYear=${fiscalYear}&periodNo=${periodNo}`;
+  const openStatuses = new Set(["draft", "submitted", "approved", "released", "in_progress"]);
+  const purchaseOrders = rowsForAccountSet(state.purchaseOrders, accountSetId).filter((order) =>
+    isInFiscalPeriod(order, fiscalYear, periodNo, "orderDate")
+  );
+  const salesOrders = rowsForAccountSet(state.salesOrders, accountSetId).filter((order) =>
+    isInFiscalPeriod(order, fiscalYear, periodNo, "orderDate")
+  );
+  const inventoryBalances = rowsForAccountSet(state.inventoryBalances, accountSetId);
+  const workOrders = rowsForAccountSet(state.workOrders, accountSetId).filter(
+    (workOrder) =>
+      isInFiscalPeriod(workOrder, fiscalYear, periodNo, "plannedStartDate") ||
+      isInFiscalPeriod(workOrder, fiscalYear, periodNo, "plannedFinishDate")
+  );
+  const materialRequisitions = rowsForAccountSet(state.materialRequisitions, accountSetId);
+  const productReceipts = rowsForAccountSet(state.productReceipts, accountSetId);
+  const agentActions = rowsForAccountSet(state.agentActions, accountSetId);
+
+  const pendingOrders = [...purchaseOrders, ...salesOrders].filter((order) => openStatuses.has(order.status));
+  const purchaseOverdue = purchaseOrders.filter(
+    (order) => openStatuses.has(order.status) && daysPastDue(order.expectedDeliveryDate ?? order.deliveryDate, asOfDate) > 0
+  );
+  const availableToDeliverOrders = salesOrders.filter((order) => ["approved", "released"].includes(order.status));
+  const inventoryExceptions = inventoryBalances.filter(
+    (balance) => Number(balance.quantity ?? 0) < 0 || Number(balance.lockedQuantity ?? 0) > Number(balance.quantity ?? 0)
+  );
+  const materialShortages = inventoryExceptions.filter((balance) => Number(balance.quantity ?? 0) < 0);
+  const workOrdersToIssue = workOrders.filter((workOrder) => workOrder.status === "released");
+  const workOrdersToReceive = workOrders.filter((workOrder) => workOrder.status === "in_progress");
+  const pendingMaterialRequisitions = materialRequisitions.filter((requisition) =>
+    ["draft", "submitted", "approved"].includes(requisition.status)
+  );
+  const costPending = productReceipts.filter((receipt) => !["locked", "allocated", "closed"].includes(receipt.costStatus ?? "pending"));
+  const pendingAgentApprovals = agentActions.filter((action) => ["submitted_for_approval", "approved"].includes(action.status));
+
+  const summary = {
+    pendingOrders: dashboardCard("pendingOrders", "待处理订单", pendingOrders.length, `/purchase-orders?${periodPath}`),
+    materialShortages: dashboardCard(
+      "materialShortages",
+      "缺料预警",
+      materialShortages.length,
+      `/inventory-ledger?${periodPath}`,
+      materialShortages.length > 0 ? "warning" : "normal"
+    ),
+    purchaseOverdue: dashboardCard(
+      "purchaseOverdue",
+      "采购逾期",
+      purchaseOverdue.length,
+      `/purchase-orders?${periodPath}`,
+      purchaseOverdue.length > 0 ? "warning" : "normal"
+    ),
+    availableToDeliverOrders: dashboardCard(
+      "availableToDeliverOrders",
+      "可发货订单",
+      availableToDeliverOrders.length,
+      `/sales-orders?${periodPath}`
+    ),
+    inventoryExceptions: dashboardCard(
+      "inventoryExceptions",
+      "库存异常",
+      inventoryExceptions.length,
+      `/inventory-ledger?${periodPath}`,
+      inventoryExceptions.length > 0 ? "warning" : "normal"
+    ),
+    workOrdersToIssue: dashboardCard("workOrdersToIssue", "待领料工单", workOrdersToIssue.length, `/work-orders?${periodPath}`),
+    workOrdersToReceive: dashboardCard("workOrdersToReceive", "待完工工单", workOrdersToReceive.length, `/work-orders?${periodPath}`),
+    costPending: dashboardCard(
+      "costPending",
+      "成本待处理",
+      costPending.length,
+      `/product-receipts?${periodPath}`,
+      costPending.length > 0 ? "warning" : "normal"
+    ),
+    pendingAgentApprovals: dashboardCard(
+      "pendingAgentApprovals",
+      "Agent审批待办",
+      pendingAgentApprovals.length,
+      `/agent?${periodPath}`,
+      pendingAgentApprovals.length > 0 ? "warning" : "normal"
+    )
+  };
+
+  const agentSuggestions = [];
+  if (materialShortages.length > 0) {
+    agentSuggestions.push({
+      code: "MATERIAL_SHORTAGE_REVIEW",
+      title: "缺料复核",
+      message: `发现 ${materialShortages.length} 条负库存或缺料风险，建议生成补料或采购建议草稿。`,
+      riskLevel: "medium",
+      suggestedTool: "suggest_material_requisition_draft",
+      evidenceRefs: materialShortages.map((balance) => balance.id)
+    });
+  }
+  if (purchaseOverdue.length > 0) {
+    agentSuggestions.push({
+      code: "PURCHASE_OVERDUE_FOLLOW_UP",
+      title: "采购逾期跟进",
+      message: `发现 ${purchaseOverdue.length} 张采购订单逾期，建议生成供应商跟进待办。`,
+      riskLevel: "low",
+      suggestedTool: "search_purchase_orders",
+      evidenceRefs: purchaseOverdue.map((order) => order.id)
+    });
+  }
+
+  return {
+    accountSetId,
+    fiscalYear: Number(fiscalYear),
+    periodNo: Number(periodNo),
+    asOfDate,
+    summary,
+    queues: {
+      pendingOrders: pendingOrders.slice(0, 10),
+      purchaseOverdue: purchaseOverdue.slice(0, 10),
+      inventoryExceptions: inventoryExceptions.slice(0, 10),
+      pendingMaterialRequisitions: pendingMaterialRequisitions.slice(0, 10),
+      pendingAgentApprovals: pendingAgentApprovals.slice(0, 10)
+    },
+    workOrderProgress: {
+      total: workOrders.length,
+      released: workOrdersToIssue.length,
+      inProgress: workOrdersToReceive.length,
+      closed: workOrders.filter((workOrder) => ["closed", "completed"].includes(workOrder.status)).length
+    },
+    agentSuggestions
+  };
+}
+
 async function buildManagementAnalysis(state, { accountSetId, fiscalYear, periodNo, asOfDate }) {
   const purchaseOrders = (await listPurchaseOrders(state, accountSetId)).filter((order) => isInFiscalPeriod(order, fiscalYear, periodNo, "orderDate"));
   const salesInvoices = (await listSalesInvoices(state, accountSetId)).filter((invoice) => isInFiscalPeriod(invoice, fiscalYear, periodNo, "invoiceDate"));
@@ -13790,6 +13935,29 @@ async function route(request, state) {
     return jsonResponse(
       200,
       await buildManagementAnalysis(state, {
+        accountSetId,
+        fiscalYear,
+        periodNo,
+        asOfDate: query.get("asOfDate") ?? new Date().toISOString().slice(0, 10)
+      })
+    );
+  }
+
+  if (request.method === "GET" && request.path.split("?")[0] === "/supply-chain/dashboard") {
+    const query = queryParamsFor(request.path);
+    const accountSetId = query.get("accountSetId");
+    const fiscalYear = Number(query.get("fiscalYear"));
+    const periodNo = Number(query.get("periodNo"));
+    if (!accountSetId || !Number.isInteger(fiscalYear) || !Number.isInteger(periodNo)) {
+      throw new Error("accountSetId, fiscalYear, and periodNo are required.");
+    }
+    const actorId = actorIdFor(request, state);
+    if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
+      return accountSetAccessError(state, actorId, accountSetId);
+    }
+    return jsonResponse(
+      200,
+      buildSupplyChainDashboard(state, {
         accountSetId,
         fiscalYear,
         periodNo,

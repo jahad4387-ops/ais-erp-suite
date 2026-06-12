@@ -683,6 +683,24 @@ test("Phase 5 management analysis endpoint documents metrics, warnings, and dril
   assert.match(contract, /INVENTORY_STAGNATION/);
 });
 
+test("Phase 2 supply chain dashboard endpoint documents summary queues and Agent suggestions", () => {
+  const dashboardBlock = blockAfter("  /supply-chain/dashboard:");
+
+  assert.match(dashboardBlock, /summary: Build supply chain manufacturing dashboard summary/);
+  assert.match(dashboardBlock, /x-permission: inventory_reconciliation\.view/);
+  assert.match(dashboardBlock, /x-risk-level: low/);
+  assert.match(dashboardBlock, /x-agent-allowed: true/);
+  assert.match(dashboardBlock, /SupplyChainDashboard/);
+  assert.match(contract, /SupplyChainDashboardCard/);
+  assert.match(contract, /SupplyChainAgentSuggestion/);
+  assert.match(contract, /pendingOrders/);
+  assert.match(contract, /materialShortages/);
+  assert.match(contract, /inventoryExceptions/);
+  assert.match(contract, /workOrdersToIssue/);
+  assert.match(contract, /pendingAgentApprovals/);
+  assert.match(contract, /MATERIAL_SHORTAGE_REVIEW/);
+});
+
 test("deployment configuration check endpoint is documented", () => {
   const block = blockAfter("  /deployment/config:");
 

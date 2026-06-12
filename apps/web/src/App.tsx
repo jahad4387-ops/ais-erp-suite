@@ -13,6 +13,7 @@ import { ReportRuns } from './pages/ReportRuns';
 import { ReportApprovals } from './pages/ReportApprovals';
 import { ReportExportCenter } from './pages/ReportExportCenter';
 import { ManagementAnalysis } from './pages/ManagementAnalysis';
+import { SupplyChainDashboard } from './pages/SupplyChainDashboard';
 import { BankReconciliation } from './pages/BankReconciliation';
 import { AgentCenter } from './pages/AgentCenter';
 import { Login } from './pages/Login';
@@ -264,6 +265,7 @@ const AppFrame: React.FC = () => {
                 <Route path="/report-approvals" element={<RequireAuth><ReportApprovals /></RequireAuth>} />
                 <Route path="/report-export-center" element={<RequireAuth><ReportExportCenter /></RequireAuth>} />
                 <Route path="/management-analysis" element={<RequireAuth><ManagementAnalysis /></RequireAuth>} />
+                <Route path="/supply-chain/dashboard" element={<RequireAuth><SupplyChainDashboard /></RequireAuth>} />
                 <Route path="/reports/:reportName" element={<RequireAuth><Reports /></RequireAuth>} />
                 <Route path="/bank-reconciliation" element={<RequireAuth><BankReconciliation /></RequireAuth>} />
                 <Route path="/agent" element={<RequireAuth><AgentCenter /></RequireAuth>} />

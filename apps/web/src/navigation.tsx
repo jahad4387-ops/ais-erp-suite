@@ -142,7 +142,7 @@ export const APP_NAVIGATION: AppNavigationItem[] = [
     label: '供应链制造中心',
     icon: <FileOutlined />,
     children: [
-      { key: 'supply-chain-workbench', label: '生产工作台', to: '/' },
+      { key: 'supply-chain-workbench', label: '生产工作台', to: '/supply-chain/dashboard' },
       {
         key: 'supply-chain-order-management',
         label: '订单管理',
