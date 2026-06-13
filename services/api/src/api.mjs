@@ -7395,6 +7395,13 @@ const SUPPLY_CHAIN_AGENT_TOOL_DEFINITIONS = [
     approvalPolicy: LOW_RISK_APPROVAL_POLICY
   },
   {
+    name: "generate_line_side_replenishment",
+    title: "Generate line-side replenishment",
+    description: "Generate line-side warehouse replenishment recommendations from work-order and material demand context.",
+    riskLevel: "medium",
+    approvalPolicy: DRAFT_APPROVAL_POLICY
+  },
+  {
     name: "calculate_work_order_cost",
     title: "Calculate work order cost",
     description: "Run a work-order cost simulation without locking cost pools or creating vouchers.",
@@ -10194,6 +10201,203 @@ function buildCostVoucherDraftRecommendation(workOrderCostEstimate) {
   };
 }
 
+function findProductionPlanForAgentContext(state, accountSetId, fiscalYear, periodNo, sourceObjectId = null) {
+  if (sourceObjectId) {
+    const plan = state.productionPlans.get(sourceObjectId);
+    if (plan?.accountSetId === accountSetId) return plan;
+  }
+  return listByAccountSet(state.productionPlans, accountSetId, "planNo").find(
+    (plan) => Number(plan.fiscalYear) === Number(fiscalYear) && Number(plan.periodNo) === Number(periodNo)
+  );
+}
+
+function buildProductionPlanDraftRecommendation(state, body, asOfDate) {
+  const orders = [...state.salesOrders.values()]
+    .filter((order) => {
+      if (order.accountSetId !== body.accountSetId) return false;
+      if (body.sourceObjectId && order.id !== body.sourceObjectId && order.orderNo !== body.sourceObjectId) return false;
+      return ["approved", "partially_executed", "draft"].includes(order.status ?? "draft");
+    })
+    .sort((left, right) => String(left.requiredDate ?? left.orderDate ?? "").localeCompare(String(right.requiredDate ?? right.orderDate ?? "")));
+
+  const lines = orders.flatMap((order) =>
+    (order.lines ?? [])
+      .map((line) => {
+        const plannedQuantity = Math.max(0, Number(line.quantity ?? 0) - Number(line.shippedQuantity ?? 0));
+        return {
+          sourceOrderId: order.id,
+          sourceOrderNo: order.orderNo,
+          sourceLineId: line.id ?? null,
+          productItemCode: line.itemCode,
+          productItemName: line.itemName,
+          plannedQuantity,
+          plannedStartDate: body.payload?.plannedStartDate ?? asOfDate,
+          plannedFinishDate: body.payload?.plannedFinishDate ?? order.requiredDate ?? order.deliveryDate ?? order.orderDate ?? asOfDate,
+          priority: order.requiredDate ? "due_date" : "normal",
+          status: "planned"
+        };
+      })
+      .filter((line) => line.plannedQuantity > 0)
+  );
+
+  return {
+    documentType: "production_plan_draft",
+    approvalRequired: true,
+    fiscalYear: Number(body.fiscalYear),
+    periodNo: Number(body.periodNo),
+    sourceType: "agent",
+    sourceObjectType: body.sourceObjectType ?? "sales_order",
+    sourceObjectId: body.sourceObjectId ?? null,
+    lines
+  };
+}
+
+function buildWorkOrderDraftBatchRecommendation(state, body) {
+  const plan = findProductionPlanForAgentContext(state, body.accountSetId, body.fiscalYear, body.periodNo, body.sourceObjectId);
+  if (!plan) return null;
+  return {
+    documentType: "work_order_draft_batch",
+    ...buildWorkOrderDraftsFromPlan(plan, body)
+  };
+}
+
+function buildReworkPlanDraftRecommendation(state, body) {
+  const workOrder = agentWorkOrdersForContext(state, body.accountSetId, body.fiscalYear, body.periodNo, body.sourceObjectId)[0] ?? null;
+  if (!workOrder) return null;
+  const quantity = Number(body.payload?.quantity ?? Math.max(1, Number(workOrder.completedQuantity ?? 0) || Number(workOrder.plannedQuantity ?? 1)));
+  return {
+    documentType: "rework_plan_draft",
+    approvalRequired: true,
+    sourceWorkOrderId: workOrder.id,
+    sourceWorkOrderNo: workOrder.workOrderNo,
+    sourceOrderNo: body.payload?.sourceOrderNo ?? workOrder.sourceOrderNo ?? null,
+    originalBatchNo: body.payload?.originalBatchNo ?? null,
+    itemCode: workOrder.productItemCode,
+    itemName: workOrder.productItemName,
+    quantity,
+    reasonCode: body.payload?.reasonCode ?? "quality_exception",
+    status: "draft",
+    materialLines: bomMaterialLinesForWorkOrder(state, workOrder).map((line) => ({
+      itemCode: line.itemCode,
+      itemName: line.itemName,
+      quantity: roundAmount(line.quantity * quantity),
+      source: "bom"
+    }))
+  };
+}
+
+function buildOutsourcingOrderDraftRecommendation(state, body) {
+  const workOrder = agentWorkOrdersForContext(state, body.accountSetId, body.fiscalYear, body.periodNo, body.sourceObjectId)[0] ?? null;
+  if (!workOrder) return null;
+  const quantity = Number(body.payload?.quantity ?? Math.max(1, Number(workOrder.plannedQuantity ?? 0) - Number(workOrder.completedQuantity ?? 0)));
+  return {
+    documentType: "outsourcing_order_draft",
+    approvalRequired: true,
+    supplierId: body.payload?.supplierId ?? null,
+    supplierName: body.payload?.supplierName ?? null,
+    sourceWorkOrderId: workOrder.id,
+    sourceWorkOrderNo: workOrder.workOrderNo,
+    itemCode: workOrder.productItemCode,
+    itemName: workOrder.productItemName,
+    quantity,
+    processName: body.payload?.processName ?? "external_processing",
+    status: "draft",
+    materialIssueLines: bomMaterialLinesForWorkOrder(state, workOrder).map((line) => ({
+      itemCode: line.itemCode,
+      itemName: line.itemName,
+      quantity: roundAmount(line.quantity * quantity),
+      source: "bom"
+    }))
+  };
+}
+
+function buildTraceabilityReportRecommendation(state, body) {
+  const rule =
+    (body.sourceObjectId ? state.traceRules.get(body.sourceObjectId) : null) ??
+    listByAccountSet(state.traceRules, body.accountSetId, "code").find((candidate) => candidate.isEnabled !== false) ??
+    null;
+  const batchNo = body.payload?.batchNo ?? body.batchNo ?? null;
+  const direction = body.payload?.direction ?? rule?.direction ?? "both";
+  const impactedObjects = [];
+  for (const balance of listInventoryBalances(state, body.accountSetId)) {
+    if (batchNo && balance.batchNo !== batchNo) continue;
+    impactedObjects.push({
+      objectType: "inventory_balance",
+      objectId: balance.id,
+      itemCode: balance.itemCode,
+      itemName: balance.itemName,
+      warehouseCode: balance.warehouseCode,
+      batchNo: balance.batchNo ?? null,
+      quantity: Number(balance.quantity ?? 0)
+    });
+  }
+  for (const movement of listInventoryMovements(state, body.accountSetId)) {
+    const matchedLine = (movement.lines ?? []).find((line) => !batchNo || line.batchNo === batchNo || line.itemCode === body.payload?.itemCode);
+    if (!matchedLine) continue;
+    impactedObjects.push({
+      objectType: "inventory_movement",
+      objectId: movement.id,
+      movementNo: movement.movementNo,
+      itemCode: matchedLine.itemCode,
+      batchNo: matchedLine.batchNo ?? null,
+      quantity: Number(matchedLine.quantity ?? 0)
+    });
+  }
+  return {
+    documentType: "traceability_report",
+    ruleId: rule?.id ?? null,
+    ruleCode: rule?.code ?? null,
+    batchNo,
+    direction,
+    impactedObjects,
+    nodes: impactedObjects.map((item) => ({
+      nodeType: item.objectType,
+      objectId: item.objectId,
+      batchNo: item.batchNo ?? batchNo,
+      itemCode: item.itemCode ?? null
+    })),
+    edges: []
+  };
+}
+
+function buildLineSideReplenishmentDraftRecommendation(state, body) {
+  const config =
+    (body.sourceObjectId ? state.lineSideWarehouseConfigs.get(body.sourceObjectId) : null) ??
+    listByAccountSet(state.lineSideWarehouseConfigs, body.accountSetId, "code").find((candidate) => candidate.isEnabled !== false) ??
+    null;
+  if (!config) return null;
+  const workOrder = body.payload?.workOrderId
+    ? state.workOrders.get(body.payload.workOrderId)
+    : agentWorkOrdersForContext(state, body.accountSetId, body.fiscalYear, body.periodNo, null)[0] ?? null;
+  const requestedItemCode = body.payload?.itemCode ?? null;
+  const baseLines =
+    workOrder && !requestedItemCode
+      ? bomMaterialLinesForWorkOrder(state, workOrder).map((line) => ({
+          itemCode: line.itemCode,
+          itemName: line.itemName,
+          replenishmentQuantity: roundAmount(line.quantity * Number(workOrder.plannedQuantity ?? 1))
+        }))
+      : [
+          {
+            itemCode: requestedItemCode,
+            itemName: body.payload?.itemName ?? requestedItemCode,
+            replenishmentQuantity: Number(body.payload?.quantity ?? 0)
+          }
+        ];
+  return {
+    documentType: "line_side_replenishment_draft",
+    approvalRequired: true,
+    lineSideWarehouseId: config.id,
+    lineSideWarehouseCode: config.code,
+    lineSideWarehouseName: config.name,
+    productionLineCode: config.productionLineCode,
+    mainWarehouseCode: config.mainWarehouseCode,
+    workOrderId: workOrder?.id ?? body.payload?.workOrderId ?? null,
+    workOrderNo: workOrder?.workOrderNo ?? null,
+    lines: baseLines.filter((line) => line.itemCode && Number(line.replenishmentQuantity ?? 0) > 0)
+  };
+}
+
 function supplyChainNextActions(toolName, dashboard, context = {}) {
   const materialShortageCount = context.materialShortages?.length ?? dashboard.summary.materialShortages.count;
   const inventoryExceptionCount = context.inventoryAnomalies?.length ?? dashboard.summary.inventoryExceptions.count;
@@ -10211,9 +10415,10 @@ function supplyChainNextActions(toolName, dashboard, context = {}) {
     analyze_inventory_availability: pendingOrderCount > 0 ? ["generate_sales_delivery", "generate_material_requisition"] : [],
     detect_inventory_anomalies: inventoryExceptionCount > 0 ? ["generate_stock_count_plan"] : [],
     generate_stock_count_plan: ["suggest_stock_count_draft"],
-    generate_outsourcing_order: [],
-    generate_rework_plan: [],
-    trace_material_batch: [],
+    generate_outsourcing_order: ["review_outsourcing_order_draft"],
+    generate_rework_plan: ["review_rework_plan_draft"],
+    trace_material_batch: ["review_traceability_report"],
+    generate_line_side_replenishment: ["review_line_side_replenishment_draft"],
     calculate_work_order_cost: costPendingCount > 0 ? ["generate_cost_voucher_draft"] : [],
     generate_cost_voucher_draft: ["create_voucher_draft"],
     run_supply_chain_close_check: []
@@ -10237,6 +10442,12 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
   const productReceiptDraft = buildProductReceiptDraft(state, body.accountSetId, body.fiscalYear, body.periodNo, body.sourceObjectId);
   const workOrderCostEstimate = buildWorkOrderCostEstimate(state, body.accountSetId, body.fiscalYear, body.periodNo, body.sourceObjectId);
   const costVoucherDraftRecommendation = buildCostVoucherDraftRecommendation(workOrderCostEstimate);
+  const productionPlanDraft = buildProductionPlanDraftRecommendation(state, body, asOfDate);
+  const workOrderDrafts = buildWorkOrderDraftBatchRecommendation(state, body);
+  const reworkPlanDraft = buildReworkPlanDraftRecommendation(state, body);
+  const outsourcingOrderDraft = buildOutsourcingOrderDraftRecommendation(state, body);
+  const traceabilityReport = buildTraceabilityReportRecommendation(state, body);
+  const lineSideReplenishmentDraft = buildLineSideReplenishmentDraftRecommendation(state, body);
   const pendingOrders = dashboard.queues.pendingOrders;
   const warnings = dashboard.agentSuggestions.map((suggestion) => suggestion.message);
   const blockingErrors = [];
@@ -10272,6 +10483,12 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
       productReceiptDraft,
       workOrderCostEstimate,
       costVoucherDraftRecommendation,
+      productionPlanDraft,
+      workOrderDrafts,
+      reworkPlanDraft,
+      outsourcingOrderDraft,
+      traceabilityReport,
+      lineSideReplenishmentDraft,
       inventoryExceptions,
       inventoryAnomalies,
       stockCountPlan: {

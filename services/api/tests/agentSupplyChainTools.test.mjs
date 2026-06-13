@@ -26,6 +26,7 @@ const supplyChainToolNames = [
   "generate_outsourcing_order",
   "generate_rework_plan",
   "trace_material_batch",
+  "generate_line_side_replenishment",
   "calculate_work_order_cost",
   "generate_cost_voucher_draft",
   "run_supply_chain_close_check"
@@ -588,4 +589,237 @@ test("Phase 4 product receipt and cost Agents propose completion and costing dry
   assert.equal(voucher.body.result.riskLevel, "high");
   assert.equal(voucher.body.result.dryRunResult.draftPayload.costVoucherDraftRecommendation.documentType, "cost_voucher_draft_recommendation");
   assert.equal(voucher.body.result.dryRunResult.draftPayload.costVoucherDraftRecommendation.approvalRequired, true);
+});
+
+test("Phase 5 Agents return reviewable APS, rework, outsourcing, traceability, and line-side draft payloads", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "SCP5A",
+      name: "Supply Chain Phase 5 Agents",
+      companyName: "Supply Chain Phase 5 Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 6
+    },
+    "agent-phase5-account"
+  );
+  const accountSetId = accountSet.body.id;
+
+  api.state.salesOrders.set("sales-order:p5", {
+    id: "sales-order:p5",
+    accountSetId,
+    customerId: "customer:p5",
+    customerName: "Phase 5 Customer",
+    orderNo: "SO-P5-001",
+    orderDate: "2026-06-13",
+    requiredDate: "2026-06-20",
+    status: "approved",
+    currency: "CNY",
+    exchangeRate: 1,
+    totalAmount: 1000,
+    lines: [
+      {
+        id: "sales-order-line:p5:1",
+        lineNo: 1,
+        itemCode: "FG-P5",
+        itemName: "Finished Phase 5",
+        quantity: 10,
+        unitPrice: 100,
+        totalAmount: 1000,
+        shippedQuantity: 2
+      }
+    ]
+  });
+  api.state.boms.set("bom:fg-p5", {
+    id: "bom:fg-p5",
+    accountSetId,
+    productItemCode: "FG-P5",
+    productItemName: "Finished Phase 5",
+    version: "V1",
+    status: "approved",
+    lines: [
+      {
+        id: "bom-line:p5-mat",
+        bomId: "bom:fg-p5",
+        componentItemCode: "MAT-P5",
+        componentItemName: "Material Phase 5",
+        lineNo: 1,
+        quantity: 2,
+        scrapRate: 0
+      }
+    ]
+  });
+  api.state.workOrders.set("work-order:p5", {
+    id: "work-order:p5",
+    accountSetId,
+    workOrderNo: "WO-P5-001",
+    productItemCode: "FG-P5",
+    productItemName: "Finished Phase 5",
+    bomId: "bom:fg-p5",
+    plannedQuantity: 8,
+    completedQuantity: 1,
+    status: "released",
+    fiscalYear: 2026,
+    periodNo: 6
+  });
+  api.state.inventoryBalances.set("balance:p5-mat", {
+    id: "balance:p5-mat",
+    accountSetId,
+    itemCode: "MAT-P5",
+    itemName: "Material Phase 5",
+    warehouseCode: "MAIN",
+    quantity: 3,
+    lockedQuantity: 0,
+    amount: 30,
+    batchNo: "BATCH-P5-MAT"
+  });
+  api.state.productionPlans.set("production-plan:p5", {
+    id: "production-plan:p5",
+    accountSetId,
+    planNo: "MPS-P5-001",
+    fiscalYear: 2026,
+    periodNo: 6,
+    status: "draft",
+    sourceType: "agent",
+    lines: [
+      {
+        id: "production-plan-line:p5:1",
+        productionPlanId: "production-plan:p5",
+        lineNo: 1,
+        productItemCode: "FG-P5",
+        productItemName: "Finished Phase 5",
+        plannedQuantity: 8,
+        plannedStartDate: "2026-06-14",
+        plannedFinishDate: "2026-06-20",
+        status: "planned"
+      }
+    ]
+  });
+  api.state.traceRules.set("trace-rule:p5", {
+    id: "trace-rule:p5",
+    accountSetId,
+    code: "TRACE-P5",
+    name: "Phase 5 batch trace",
+    objectType: "batch",
+    direction: "both",
+    isEnabled: true
+  });
+  api.state.lineSideWarehouseConfigs.set("line-side:p5", {
+    id: "line-side:p5",
+    accountSetId,
+    code: "LS-P5",
+    name: "Phase 5 Line Side",
+    productionLineCode: "LINE-P5",
+    mainWarehouseCode: "MAIN",
+    isEnabled: true
+  });
+
+  const productionPlan = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_production_plan/invoke",
+    { accountSetId, fiscalYear: 2026, periodNo: 6, dryRun: true, sourceObjectId: "sales-order:p5", evidenceRefs: ["sales-order:p5"] },
+    "agent-phase5-production-plan"
+  );
+  const workOrders = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_work_orders_from_plan/invoke",
+    { accountSetId, fiscalYear: 2026, periodNo: 6, dryRun: true, sourceObjectId: "production-plan:p5", evidenceRefs: ["production-plan:p5"] },
+    "agent-phase5-work-orders"
+  );
+  const rework = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_rework_plan/invoke",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      dryRun: true,
+      sourceObjectId: "work-order:p5",
+      evidenceRefs: ["quality-exception:p5"],
+      payload: { reasonCode: "quality_exception", quantity: 2, originalBatchNo: "BATCH-P5-FG" }
+    },
+    "agent-phase5-rework-plan"
+  );
+  const outsourcing = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_outsourcing_order/invoke",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      dryRun: true,
+      sourceObjectId: "work-order:p5",
+      evidenceRefs: ["capacity-risk:p5"],
+      payload: { supplierId: "supplier:p5", supplierName: "Phase 5 Supplier", processName: "Coating", quantity: 4 }
+    },
+    "agent-phase5-outsourcing-order"
+  );
+  const traceability = await request(
+    api,
+    "POST",
+    "/agent-tools/trace_material_batch/invoke",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      dryRun: true,
+      sourceObjectId: "trace-rule:p5",
+      evidenceRefs: ["inventory-batch:BATCH-P5-MAT"],
+      payload: { batchNo: "BATCH-P5-MAT", direction: "backward" }
+    },
+    "agent-phase5-traceability"
+  );
+  const lineSide = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_line_side_replenishment/invoke",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      dryRun: true,
+      sourceObjectId: "line-side:p5",
+      evidenceRefs: ["work-order:p5"],
+      payload: { workOrderId: "work-order:p5", itemCode: "MAT-P5", quantity: 13 }
+    },
+    "agent-phase5-line-side"
+  );
+
+  assert.equal(productionPlan.status, 201);
+  assert.equal(productionPlan.body.result.dryRunResult.draftPayload.productionPlanDraft.documentType, "production_plan_draft");
+  assert.equal(productionPlan.body.result.dryRunResult.draftPayload.productionPlanDraft.lines[0].sourceOrderNo, "SO-P5-001");
+  assert.equal(productionPlan.body.result.dryRunResult.draftPayload.productionPlanDraft.lines[0].plannedQuantity, 8);
+
+  assert.equal(workOrders.status, 201);
+  assert.equal(workOrders.body.result.dryRunResult.draftPayload.workOrderDrafts.documentType, "work_order_draft_batch");
+  assert.equal(workOrders.body.result.dryRunResult.draftPayload.workOrderDrafts.workOrderDrafts[0].workOrderNo, "WO-MPS-P5-001-01");
+
+  assert.equal(rework.status, 201);
+  assert.equal(rework.body.result.dryRunResult.draftPayload.reworkPlanDraft.documentType, "rework_plan_draft");
+  assert.equal(rework.body.result.dryRunResult.draftPayload.reworkPlanDraft.originalBatchNo, "BATCH-P5-FG");
+  assert.equal(rework.body.result.dryRunResult.draftPayload.reworkPlanDraft.materialLines[0].itemCode, "MAT-P5");
+
+  assert.equal(outsourcing.status, 201);
+  assert.equal(outsourcing.body.result.dryRunResult.draftPayload.outsourcingOrderDraft.documentType, "outsourcing_order_draft");
+  assert.equal(outsourcing.body.result.dryRunResult.draftPayload.outsourcingOrderDraft.supplierName, "Phase 5 Supplier");
+  assert.equal(outsourcing.body.result.dryRunResult.draftPayload.outsourcingOrderDraft.materialIssueLines[0].itemCode, "MAT-P5");
+
+  assert.equal(traceability.status, 201);
+  assert.equal(traceability.body.result.dryRunResult.draftPayload.traceabilityReport.documentType, "traceability_report");
+  assert.equal(traceability.body.result.dryRunResult.draftPayload.traceabilityReport.batchNo, "BATCH-P5-MAT");
+  assert.ok(traceability.body.result.dryRunResult.draftPayload.traceabilityReport.impactedObjects.length >= 1);
+
+  assert.equal(lineSide.status, 201);
+  assert.equal(lineSide.body.result.dryRunResult.draftPayload.lineSideReplenishmentDraft.documentType, "line_side_replenishment_draft");
+  assert.equal(lineSide.body.result.dryRunResult.draftPayload.lineSideReplenishmentDraft.lineSideWarehouseCode, "LS-P5");
+  assert.equal(lineSide.body.result.dryRunResult.draftPayload.lineSideReplenishmentDraft.lines[0].replenishmentQuantity, 13);
 });

@@ -929,6 +929,7 @@ test("Agent-facing endpoints expose dry-run and evidence fields", () => {
   assert.match(contract, /analyze_supply_chain_dashboard/, "Agent tool registry must document supply chain dashboard analysis.");
   assert.match(contract, /detect_material_shortage/, "Agent tool registry must document material shortage analysis.");
   assert.match(contract, /generate_purchase_suggestions/, "Agent tool registry must document purchase suggestion dry-runs.");
+  assert.match(contract, /generate_line_side_replenishment/, "Agent tool registry must document line-side replenishment dry-runs.");
   assert.match(contract, /generate_cost_voucher_draft/, "Agent tool registry must document high-risk cost voucher draft dry-runs.");
   assert.match(contract, /run_supply_chain_close_check/, "Agent tool registry must document supply chain close checks.");
   assert.match(contract, /approvalPolicy/, "Agent tool schema must expose approval policy.");

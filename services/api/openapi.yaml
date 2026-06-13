@@ -14295,6 +14295,7 @@ components:
             - generate_outsourcing_order
             - generate_rework_plan
             - trace_material_batch
+            - generate_line_side_replenishment
             - calculate_work_order_cost
             - generate_cost_voucher_draft
             - run_supply_chain_close_check
