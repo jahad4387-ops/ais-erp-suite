@@ -7180,6 +7180,112 @@ function convertAgentDraftCandidateToReportInterpretationDraft(state, candidate,
   return { reportInterpretationDraft: publicAiReportInterpretation(draft) };
 }
 
+const PHASE5_MANUFACTURING_DRAFT_CONVERSIONS = {
+  production_plan: {
+    documentType: "production_plan_draft",
+    convertedObjectType: "production_plan_draft",
+    responseKey: "productionPlanDraft"
+  },
+  rework_order: {
+    documentType: "rework_order_draft",
+    convertedObjectType: "rework_order_draft",
+    responseKey: "reworkOrderDraft"
+  },
+  outsourcing_order: {
+    documentType: "outsourcing_order_draft",
+    convertedObjectType: "outsourcing_order_draft",
+    responseKey: "outsourcingOrderDraft"
+  },
+  traceability_report: {
+    documentType: "traceability_report_draft",
+    convertedObjectType: "traceability_report_draft",
+    responseKey: "traceabilityReportDraft"
+  },
+  line_side_replenishment: {
+    documentType: "line_side_replenishment_draft",
+    convertedObjectType: "line_side_replenishment_draft",
+    responseKey: "lineSideReplenishmentDraft"
+  }
+};
+
+function convertAgentDraftCandidateToManufacturingPreviewDraft(state, candidate, body, actorId, conversion) {
+  if (candidate.status !== "candidate") {
+    throw new Error("Only candidate Agent drafts can be converted.");
+  }
+  if (typeof body.reviewedBy !== "string" || body.reviewedBy.trim() === "") {
+    throw new Error("reviewedBy is required.");
+  }
+  if (!body.reviewedDraftPayload || typeof body.reviewedDraftPayload !== "object" || Array.isArray(body.reviewedDraftPayload)) {
+    throw new Error("reviewedDraftPayload is required.");
+  }
+  if (body.reviewedDraftPayload.documentType !== conversion.documentType) {
+    throw new Error(`reviewedDraftPayload.documentType must be ${conversion.documentType}.`);
+  }
+
+  assertDraftCandidateAttachmentsAvailable(state, candidate);
+  const draft = {
+    ...body.reviewedDraftPayload,
+    id: body.reviewedDraftPayload.id ?? `${conversion.convertedObjectType}:${randomUUID()}`,
+    accountSetId: candidate.accountSetId,
+    documentType: conversion.documentType,
+    status: "draft",
+    approvalRequired: true,
+    sourceType: "agent_draft",
+    agentDraftCandidateId: candidate.id,
+    sourceObjectType: candidate.sourceObjectType ?? null,
+    sourceObjectId: candidate.sourceObjectId ?? null,
+    evidenceRefs: Array.isArray(candidate.evidenceRefs) ? [...candidate.evidenceRefs] : [],
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    reviewedDraftPayload: body.reviewedDraftPayload,
+    createdBy: body.reviewedBy,
+    createdAt: "now"
+  };
+
+  for (const attachmentId of attachmentIdsForDraftCandidate(candidate)) {
+    const link = {
+      id: `attachment-link:${state.attachmentLinks.length + 1}`,
+      attachmentId,
+      objectType: conversion.convertedObjectType,
+      objectId: draft.id,
+      linkedBy: body.reviewedBy,
+      linkedAt: "now"
+    };
+    state.attachmentLinks.push(link);
+    appendAuditLog(state, {
+      actorId: body.reviewedBy,
+      action: "attachment.link",
+      objectType: conversion.convertedObjectType,
+      objectId: draft.id
+    });
+  }
+
+  const convertedCandidate = {
+    ...candidate,
+    status: "converted",
+    convertedObjectType: conversion.convertedObjectType,
+    convertedObjectId: draft.id,
+    reviewedBy: body.reviewedBy,
+    reviewedAt: "now",
+    resolvedUnmatchedItems: body.resolvedUnmatchedItems ?? [],
+    reviewedDraftPayload: body.reviewedDraftPayload
+  };
+  state.agentDraftCandidates.set(candidate.id, convertedCandidate);
+  appendAuditLog(state, {
+    actorId: body.reviewedBy,
+    action: `${conversion.convertedObjectType}.create`,
+    objectType: conversion.convertedObjectType,
+    objectId: draft.id
+  });
+  appendAuditLog(state, {
+    actorId: body.reviewedBy ?? actorId,
+    action: "agent.draft_candidate.convert",
+    objectType: conversion.convertedObjectType,
+    objectId: draft.id
+  });
+  return { [conversion.responseKey]: draft };
+}
+
 function unsupportedAgentDraftConversion(draftType) {
   const error = new Error(`Agent draft conversion for ${draftType} is not supported yet without a non-mutating business draft model.`);
   error.code = "AGENT_DRAFT_CONVERSION_UNSUPPORTED";
@@ -16359,6 +16465,12 @@ async function route(request, state) {
         const result = convertAgentDraftCandidateToReportInterpretationDraft(state, candidate, conversionBody, actorId);
         await persistConvertedAgentDraftCandidate();
         return jsonResponse(201, result.reportInterpretationDraft);
+      }
+      const manufacturingConversion = PHASE5_MANUFACTURING_DRAFT_CONVERSIONS[candidate.draftType];
+      if (manufacturingConversion) {
+        const result = convertAgentDraftCandidateToManufacturingPreviewDraft(state, candidate, conversionBody, actorId, manufacturingConversion);
+        await persistConvertedAgentDraftCandidate();
+        return jsonResponse(201, result[manufacturingConversion.responseKey]);
       }
       throw unsupportedAgentDraftConversion(candidate.draftType);
     } catch (error) {

@@ -202,6 +202,29 @@ test("agent center supports reviewed report interpretation draft conversion", ()
   assert.match(source, /reviewedDraftPayload/);
 });
 
+test("agent center supports reviewed Phase 5 manufacturing draft conversions", () => {
+  const source = readFileSync(agentCenterPath, "utf8");
+
+  for (const draftType of ["production_plan", "rework_order", "outsourcing_order", "traceability_report", "line_side_replenishment"]) {
+    assert.match(source, new RegExp(`draftCandidate\\.draftType === '${draftType}'`), `${draftType} should be allowed for conversion.`);
+  }
+  assert.match(source, /documentType: 'production_plan_draft'/);
+  assert.match(source, /plannedQuantity/);
+  assert.match(source, /navigate\('\/production-plans'\)/);
+  assert.match(source, /documentType: 'rework_order_draft'/);
+  assert.match(source, /reasonCode: 'quality_exception'/);
+  assert.match(source, /navigate\('\/rework-orders'\)/);
+  assert.match(source, /documentType: 'outsourcing_order_draft'/);
+  assert.match(source, /processName: 'external_processing'/);
+  assert.match(source, /navigate\('\/outsourcing-orders'\)/);
+  assert.match(source, /documentType: 'traceability_report_draft'/);
+  assert.match(source, /impactedObjects/);
+  assert.match(source, /navigate\('\/traceability'\)/);
+  assert.match(source, /documentType: 'line_side_replenishment_draft'/);
+  assert.match(source, /replenishmentQuantity/);
+  assert.match(source, /navigate\('\/line-side-warehouses'\)/);
+});
+
 test("agent center lists the Agent draft review queue", () => {
   const source = readFileSync(agentCenterPath, "utf8");
 

@@ -548,6 +548,85 @@ export const AgentCenter: React.FC = () => {
             2,
           ),
         );
+      } else if (result.draftType === 'production_plan') {
+        setReviewedDraftPayloadText(
+          JSON.stringify(
+            {
+              documentType: 'production_plan_draft',
+              fiscalYear: currentYear,
+              periodNo: currentPeriod,
+              lines: result.draftPayload?.lines ?? [
+                { productItemCode: '', productItemName: '', plannedQuantity: 0, plannedStartDate: '', plannedFinishDate: '' },
+              ],
+            },
+            null,
+            2,
+          ),
+        );
+      } else if (result.draftType === 'rework_order') {
+        setReviewedDraftPayloadText(
+          JSON.stringify(
+            {
+              documentType: 'rework_order_draft',
+              sourceWorkOrderId: result.sourceObjectId ?? '',
+              originalBatchNo: '',
+              itemCode: '',
+              itemName: '',
+              quantity: 0,
+              reasonCode: 'quality_exception',
+              materialLines: [],
+            },
+            null,
+            2,
+          ),
+        );
+      } else if (result.draftType === 'outsourcing_order') {
+        setReviewedDraftPayloadText(
+          JSON.stringify(
+            {
+              documentType: 'outsourcing_order_draft',
+              supplierId: '',
+              supplierName: '',
+              sourceWorkOrderId: result.sourceObjectId ?? '',
+              itemCode: '',
+              itemName: '',
+              quantity: 0,
+              processName: 'external_processing',
+              materialIssueLines: [],
+            },
+            null,
+            2,
+          ),
+        );
+      } else if (result.draftType === 'traceability_report') {
+        setReviewedDraftPayloadText(
+          JSON.stringify(
+            {
+              documentType: 'traceability_report_draft',
+              batchNo: '',
+              direction: 'both',
+              impactedObjects: [],
+              nodes: [],
+              edges: [],
+            },
+            null,
+            2,
+          ),
+        );
+      } else if (result.draftType === 'line_side_replenishment') {
+        setReviewedDraftPayloadText(
+          JSON.stringify(
+            {
+              documentType: 'line_side_replenishment_draft',
+              lineSideWarehouseCode: '',
+              mainWarehouseCode: '',
+              workOrderId: result.sourceObjectId ?? '',
+              lines: [{ itemCode: '', itemName: '', replenishmentQuantity: 0 }],
+            },
+            null,
+            2,
+          ),
+        );
       } else {
         setReviewedDraftPayloadText('');
       }
@@ -619,6 +698,11 @@ export const AgentCenter: React.FC = () => {
         'depreciation_run',
         'asset_change',
         'report_interpretation',
+        'production_plan',
+        'rework_order',
+        'outsourcing_order',
+        'traceability_report',
+        'line_side_replenishment',
       ].includes(draftCandidate.draftType)
     ) {
       message.error('当前只支持将凭证、采购订单、销售订单、仓库或盘点候选草稿转为系统草稿');
@@ -657,6 +741,16 @@ export const AgentCenter: React.FC = () => {
         navigate('/fixed-assets');
       } else if (draftCandidate.draftType === 'report_interpretation') {
         navigate('/report-runs');
+      } else if (draftCandidate.draftType === 'production_plan') {
+        navigate('/production-plans');
+      } else if (draftCandidate.draftType === 'rework_order') {
+        navigate('/rework-orders');
+      } else if (draftCandidate.draftType === 'outsourcing_order') {
+        navigate('/outsourcing-orders');
+      } else if (draftCandidate.draftType === 'traceability_report') {
+        navigate('/traceability');
+      } else if (draftCandidate.draftType === 'line_side_replenishment') {
+        navigate('/line-side-warehouses');
       } else {
         navigate('/vouchers');
       }

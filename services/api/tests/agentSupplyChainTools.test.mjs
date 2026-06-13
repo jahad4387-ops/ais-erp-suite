@@ -823,3 +823,128 @@ test("Phase 5 Agents return reviewable APS, rework, outsourcing, traceability, a
   assert.equal(lineSide.body.result.dryRunResult.draftPayload.lineSideReplenishmentDraft.lineSideWarehouseCode, "LS-P5");
   assert.equal(lineSide.body.result.dryRunResult.draftPayload.lineSideReplenishmentDraft.lines[0].replenishmentQuantity, 13);
 });
+
+test("Phase 5 Agent draft candidates convert into non-mutating manufacturing previews after human review", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "SCP5C",
+      name: "Supply Chain Phase 5 Conversions",
+      companyName: "Supply Chain Phase 5 Conversion Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 6
+    },
+    "agent-phase5-conversion-account"
+  );
+  const accountSetId = accountSet.body.id;
+  const conversions = [
+    {
+      draftType: "production_plan",
+      sourceObjectType: "production_plan_page",
+      responseField: "productionPlanDraft",
+      convertedObjectType: "production_plan_draft",
+      reviewedDraftPayload: {
+        documentType: "production_plan_draft",
+        fiscalYear: 2026,
+        periodNo: 6,
+        lines: [{ productItemCode: "FG-CNV", productItemName: "Finished Conversion", plannedQuantity: 6 }]
+      }
+    },
+    {
+      draftType: "rework_order",
+      sourceObjectType: "rework_order_page",
+      responseField: "reworkOrderDraft",
+      convertedObjectType: "rework_order_draft",
+      reviewedDraftPayload: {
+        documentType: "rework_order_draft",
+        itemCode: "FG-CNV",
+        itemName: "Finished Conversion",
+        quantity: 1,
+        reasonCode: "quality_exception"
+      }
+    },
+    {
+      draftType: "outsourcing_order",
+      sourceObjectType: "outsourcing_order_page",
+      responseField: "outsourcingOrderDraft",
+      convertedObjectType: "outsourcing_order_draft",
+      reviewedDraftPayload: {
+        documentType: "outsourcing_order_draft",
+        supplierName: "Conversion Supplier",
+        itemCode: "FG-CNV",
+        itemName: "Finished Conversion",
+        quantity: 3,
+        processName: "Coating"
+      }
+    },
+    {
+      draftType: "traceability_report",
+      sourceObjectType: "traceability_page",
+      responseField: "traceabilityReportDraft",
+      convertedObjectType: "traceability_report_draft",
+      reviewedDraftPayload: {
+        documentType: "traceability_report_draft",
+        batchNo: "BATCH-CNV",
+        direction: "backward",
+        impactedObjects: [{ objectType: "inventory_balance", objectId: "balance:cnv" }]
+      }
+    },
+    {
+      draftType: "line_side_replenishment",
+      sourceObjectType: "line_side_warehouse_page",
+      responseField: "lineSideReplenishmentDraft",
+      convertedObjectType: "line_side_replenishment_draft",
+      reviewedDraftPayload: {
+        documentType: "line_side_replenishment_draft",
+        lineSideWarehouseCode: "LS-CNV",
+        mainWarehouseCode: "MAIN",
+        lines: [{ itemCode: "MAT-CNV", replenishmentQuantity: 5 }]
+      }
+    }
+  ];
+
+  for (const conversion of conversions) {
+    const candidate = await request(
+      api,
+      "POST",
+      "/agent/draft-candidates",
+      {
+        accountSetId,
+        fiscalPeriodId: "period:scp5c:2026:6",
+        draftType: conversion.draftType,
+        sourceObjectType: conversion.sourceObjectType,
+        userInstruction: `Generate ${conversion.draftType} preview.`,
+        evidenceRefs: [`${conversion.sourceObjectType}:evidence`],
+        dryRun: true
+      },
+      `agent-phase5-conversion-candidate-${conversion.draftType}`
+    );
+    const converted = await request(
+      api,
+      "POST",
+      `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+      {
+        reviewedBy: "phase5-reviewer",
+        reviewedDraftPayload: conversion.reviewedDraftPayload
+      },
+      `agent-phase5-conversion-${conversion.draftType}`
+    );
+
+    assert.equal(candidate.status, 201);
+    assert.equal(converted.status, 201, `${conversion.draftType} should convert after review.`);
+    assert.equal(converted.body.documentType, conversion.reviewedDraftPayload.documentType);
+    assert.equal(converted.body.status, "draft");
+    assert.equal(converted.body.sourceType, "agent_draft");
+    assert.equal(converted.body.agentDraftCandidateId, candidate.body.id);
+    assert.equal(converted.body.approvalRequired, true);
+    assert.deepEqual(converted.body.reviewedDraftPayload, conversion.reviewedDraftPayload);
+    assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "converted");
+    assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).convertedObjectType, conversion.convertedObjectType);
+    assert.ok(api.state.auditLogs.some((log) => log.action === "agent.draft_candidate.convert" && log.objectId === converted.body.id));
+  }
+});

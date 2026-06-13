@@ -932,6 +932,7 @@ test("Agent-facing endpoints expose dry-run and evidence fields", () => {
   assert.match(contract, /generate_line_side_replenishment/, "Agent tool registry must document line-side replenishment dry-runs.");
   assert.match(contract, /generate_cost_voucher_draft/, "Agent tool registry must document high-risk cost voucher draft dry-runs.");
   assert.match(contract, /run_supply_chain_close_check/, "Agent tool registry must document supply chain close checks.");
+  assert.match(contract, /production_plan, rework_order, outsourcing_order, traceability_report, line_side_replenishment/, "Agent draft type schema must document Phase 5 manufacturing draft candidates.");
   assert.match(contract, /approvalPolicy/, "Agent tool schema must expose approval policy.");
   assert.match(contract, /inputSchema/, "Agent tool schema must expose input schema.");
   assert.match(agentBlock, /CreateAgentActionRequest/, "Agent endpoint must reference its request schema.");

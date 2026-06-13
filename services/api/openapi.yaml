@@ -14316,7 +14316,7 @@ components:
         draftType:
           type: string
           nullable: true
-          enum: [master_data, purchase_order, sales_order, inventory_movement, material_requisition, product_receipt, stock_count, voucher, payroll_allocation, depreciation_run, asset_change, report_interpretation, null]
+          enum: [master_data, purchase_order, sales_order, inventory_movement, material_requisition, product_receipt, stock_count, voucher, payroll_allocation, depreciation_run, asset_change, production_plan, rework_order, outsourcing_order, traceability_report, line_side_replenishment, report_interpretation, null]
         agentTokenAllowed:
           type: boolean
         approvalPolicy:
