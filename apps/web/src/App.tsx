@@ -20,6 +20,7 @@ import { ReworkOrders } from './pages/ReworkOrders';
 import { OutsourcingOrders } from './pages/OutsourcingOrders';
 import { Traceability } from './pages/Traceability';
 import { LineSideWarehouses } from './pages/LineSideWarehouses';
+import { EquipmentManagement } from './pages/EquipmentManagement';
 import { BankReconciliation } from './pages/BankReconciliation';
 import { AgentCenter } from './pages/AgentCenter';
 import { Login } from './pages/Login';
@@ -278,6 +279,7 @@ const AppFrame: React.FC = () => {
                 <Route path="/outsourcing-orders" element={<RequireAuth><OutsourcingOrders /></RequireAuth>} />
                 <Route path="/traceability" element={<RequireAuth><Traceability /></RequireAuth>} />
                 <Route path="/line-side-warehouses" element={<RequireAuth><LineSideWarehouses /></RequireAuth>} />
+                <Route path="/equipment-management" element={<RequireAuth><EquipmentManagement /></RequireAuth>} />
                 <Route path="/reports/:reportName" element={<RequireAuth><Reports /></RequireAuth>} />
                 <Route path="/bank-reconciliation" element={<RequireAuth><BankReconciliation /></RequireAuth>} />
                 <Route path="/agent" element={<RequireAuth><AgentCenter /></RequireAuth>} />

@@ -168,6 +168,7 @@ export const APP_NAVIGATION: AppNavigationItem[] = [
         label: '库存管理',
         children: [
           { key: 'supply-chain-inventory-items', label: '物料库存', to: '/inventory-items' },
+          { key: 'supply-chain-generate-delivery', label: '生成发货单', to: '/sales-deliveries' },
           { key: 'supply-chain-warehouses', label: '仓库库位', to: '/warehouses' },
           { key: 'supply-chain-inventory-opening-balances', label: '存货期初', to: '/inventory-opening-balances' },
           { key: 'supply-chain-inventory-movements', label: '出入库单', to: '/inventory-movements' },
@@ -194,7 +195,7 @@ export const APP_NAVIGATION: AppNavigationItem[] = [
           { key: 'supply-chain-product-items', label: '产品与物料', to: '/inventory-items' },
         ],
       },
-      { key: 'supply-chain-device-management', label: '设备管理', disabled: true },
+      { key: 'supply-chain-device-management', label: '设备管理', to: '/equipment-management' },
       { key: 'supply-chain-outsourcing', label: '委外管理', to: '/outsourcing-orders' },
       { key: 'supply-chain-traceability-rules', label: '追溯规则', to: '/traceability' },
       { key: 'supply-chain-line-side-warehouse', label: '线边仓管理', to: '/line-side-warehouses' },
