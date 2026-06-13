@@ -215,6 +215,18 @@ test("agent center lists the Agent draft review queue", () => {
   assert.match(source, /evidenceCount/);
 });
 
+test("agent center exposes matched master data and draft generation provenance", () => {
+  const source = readFileSync(agentCenterPath, "utf8");
+
+  assert.match(source, /data-testid="agent-draft-matched-master-data"/);
+  assert.match(source, /matchedMasterData/);
+  assert.match(source, /data-testid="agent-draft-llm-input-summary"/);
+  assert.match(source, /llmDraftRun\?\.inputSummary/);
+  assert.match(source, /originalExtractedText/);
+  assert.match(source, /reviewedBy/);
+  assert.match(source, /reviewedAt/);
+});
+
 test("agent center exposes Phase 6 Agent Action approval and replay workflow", () => {
   const source = readFileSync(agentCenterPath, "utf8");
 
@@ -224,6 +236,8 @@ test("agent center exposes Phase 6 Agent Action approval and replay workflow", (
   assert.match(source, /loadAgentActionQueue/);
   assert.match(source, /loadAgentActionDetail/);
   assert.match(source, /accountSetId=\$\{encodeURIComponent\(currentAccountSetId\)\}/);
+  assert.match(source, /'page=1'/);
+  assert.match(source, /'pageSize=50'/);
   assert.match(source, /status=\$\{encodeURIComponent\(agentActionFilters\.status\)\}/);
   assert.match(source, /riskLevel=\$\{encodeURIComponent\(agentActionFilters\.riskLevel\)\}/);
   assert.match(source, /toolName=\$\{encodeURIComponent\(agentActionFilters\.toolName\)\}/);

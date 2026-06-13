@@ -8299,6 +8299,186 @@ test("Phase 6 Agent draft generation uses configured OCR and LLM adapters", asyn
   assert.equal(candidate.body.draftPayload.lines[0].unitPrice, 11);
 });
 
+test("Phase 6 Agent draft generation matches supplier and inventory item master data before review", async () => {
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "match-model",
+      async generateDraft() {
+        return {
+          provider: "openai-compatible",
+          model: "match-model",
+          status: "completed",
+          draftPayload: {
+            documentType: "purchase_order",
+            businessDate: "2026-06-13",
+            supplierCode: "SUP-MATCH",
+            lines: [{ itemCode: "ITEM-MATCH", itemName: "Matched Item", quantity: 4, unitPrice: 25, amount: 100 }]
+          },
+          unmatchedItems: [],
+          outputSchema: "purchase_order"
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6MATCH",
+      name: "Phase 6 Match Draft",
+      companyName: "Phase 6 Match Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-match-account-set"
+  );
+  const supplier = await request(
+    api,
+    "POST",
+    "/partners",
+    {
+      accountSetId: accountSet.body.id,
+      partnerType: "supplier",
+      code: "SUP-MATCH",
+      name: "Matched Supplier",
+      createdBy: "master-data-user"
+    },
+    "phase6-match-supplier"
+  );
+  const item = await request(
+    api,
+    "POST",
+    "/inventory-items",
+    {
+      accountSetId: accountSet.body.id,
+      code: "ITEM-MATCH",
+      name: "Matched Item",
+      unit: "pcs",
+      costMethod: "moving_average",
+      createdBy: "master-data-user"
+    },
+    "phase6-match-item"
+  );
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "purchase_order",
+      sourceObjectType: "uploaded_quote",
+      userInstruction: "Generate a purchase order draft for SUP-MATCH and ITEM-MATCH.",
+      evidenceRefs: ["quote:match-001"],
+      dryRun: true
+    },
+    "phase6-match-draft-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(candidate.body.draftPayload.supplierId, supplier.body.id);
+  assert.equal(candidate.body.draftPayload.lines[0].itemId, item.body.id);
+  assert.ok(candidate.body.matchedMasterData.some((match) => match.field === "supplierId" && match.objectId === supplier.body.id));
+  assert.ok(candidate.body.matchedMasterData.some((match) => match.field === "lines[0].itemId" && match.objectId === item.body.id));
+  assert.ok(!candidate.body.unmatchedItems.some((unmatched) => unmatched.field === "supplierId"));
+  assert.ok(!candidate.body.unmatchedItems.some((unmatched) => unmatched.field === "lines[0].itemId"));
+  assert.equal(candidate.body.dryRunResult.status, "ready_for_confirmation");
+});
+
+test("Phase 6 Agent voucher draft generation matches chart accounts before review", async () => {
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "voucher-match-model",
+      async generateDraft() {
+        return {
+          provider: "openai-compatible",
+          model: "voucher-match-model",
+          status: "completed",
+          draftPayload: {
+            documentType: "voucher",
+            lines: [
+              { summary: "Office supplies", accountName: "Office Expense", debit: 100, credit: 0 },
+              { summary: "Bank payment", accountName: "Bank Deposits", debit: 0, credit: 100 }
+            ]
+          },
+          unmatchedItems: [],
+          outputSchema: "voucher"
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6VMATCH",
+      name: "Phase 6 Voucher Match",
+      companyName: "Phase 6 Voucher Match Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-voucher-match-account-set"
+  );
+  await request(
+    api,
+    "POST",
+    "/accounts",
+    {
+      accountSetId: accountSet.body.id,
+      code: "6602",
+      name: "Office Expense",
+      accountType: "expense",
+      normalBalance: "debit"
+    },
+    "phase6-voucher-match-expense"
+  );
+  await request(
+    api,
+    "POST",
+    "/accounts",
+    {
+      accountSetId: accountSet.body.id,
+      code: "1002",
+      name: "Bank Deposits",
+      accountType: "asset",
+      normalBalance: "debit"
+    },
+    "phase6-voucher-match-bank"
+  );
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "voucher",
+      sourceObjectType: "uploaded_invoice",
+      userInstruction: "Generate a voucher draft for office supplies paid by bank.",
+      evidenceRefs: ["invoice:voucher-match"],
+      dryRun: true
+    },
+    "phase6-voucher-match-draft-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(candidate.body.draftPayload.lines[0].accountCode, "6602");
+  assert.equal(candidate.body.draftPayload.lines[1].accountCode, "1002");
+  assert.ok(candidate.body.matchedMasterData.some((match) => match.field === "lines[0].accountCode" && match.objectType === "account"));
+  assert.ok(candidate.body.matchedMasterData.some((match) => match.field === "lines[1].accountCode" && match.objectType === "account"));
+  assert.ok(!candidate.body.unmatchedItems.some((unmatched) => unmatched.field === "lines[0].accountCode"));
+  assert.ok(!candidate.body.unmatchedItems.some((unmatched) => unmatched.field === "lines[1].accountCode"));
+  assert.equal(candidate.body.dryRunResult.status, "ready_for_confirmation");
+});
+
 test("Phase 6 Agent OCR preview supports human-corrected text before LLM draft generation", async () => {
   const api = createApi();
   const accountSet = await request(
@@ -10673,6 +10853,7 @@ test("Phase 6 Agent payroll allocation candidates convert into non-mutating payr
     },
     "phase6-payroll-draft-candidate"
   );
+  assert.ok(candidate.body.unmatchedItems.some((unmatched) => unmatched.field === "payrollRunId"));
   const payrollAllocationCountBefore = api.state.payrollAllocations.size;
   const payrollCostPoolCountBefore = api.state.payrollCostPools.size;
 
@@ -10682,6 +10863,7 @@ test("Phase 6 Agent payroll allocation candidates convert into non-mutating payr
     `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
     {
       reviewedBy: "payroll-reviewer",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(candidate, "PAY-202606"),
       reviewedDraftPayload: {
         documentType: "payroll_allocation",
         payrollRunId: "PAY-202606",
@@ -10720,6 +10902,88 @@ test("Phase 6 Agent payroll allocation candidates convert into non-mutating payr
       (link) => link.attachmentId === attachment.body.id && link.objectType === "payroll_allocation_draft" && link.objectId === converted.body.id
     )
   );
+});
+
+test("Phase 6 Agent payroll allocation draft generation matches payroll run before review", async () => {
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "payroll-match-model",
+      async generateDraft() {
+        return {
+          provider: "openai-compatible",
+          model: "payroll-match-model",
+          status: "completed",
+          draftPayload: {
+            documentType: "payroll_allocation",
+            runNo: "PAY-MATCH-202606",
+            fiscalYear: 2026,
+            periodNo: 6,
+            rules: [
+              {
+                departmentId: "D-PROD",
+                targetType: "department",
+                costType: "direct_labor",
+                allocationRate: 1,
+                amount: 12000
+              }
+            ]
+          },
+          unmatchedItems: [],
+          outputSchema: "payroll_allocation"
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6PAYMATCH",
+      name: "Phase 6 Payroll Match",
+      companyName: "Phase 6 Payroll Match Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-payroll-match-account-set"
+  );
+  api.state.payrollRuns.set("payroll-run:p6-match", {
+    id: "payroll-run:p6-match",
+    accountSetId: accountSet.body.id,
+    runNo: "PAY-MATCH-202606",
+    fiscalYear: 2026,
+    periodNo: 6,
+    status: "approved",
+    totalCompanyCost: 12000,
+    createdBy: "payroll-user",
+    createdAt: "now",
+    lines: []
+  });
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "payroll_allocation",
+      sourceObjectType: "uploaded_payroll_allocation_sheet",
+      userInstruction: "Generate payroll allocation for PAY-MATCH-202606.",
+      evidenceRefs: ["payroll:match"],
+      dryRun: true
+    },
+    "phase6-payroll-match-draft-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(candidate.body.draftPayload.payrollRunId, "payroll-run:p6-match");
+  assert.equal(candidate.body.draftPayload.runNo, "PAY-MATCH-202606");
+  assert.ok(candidate.body.matchedMasterData.some((match) => match.field === "payrollRunId" && match.objectId === "payroll-run:p6-match"));
+  assert.ok(!candidate.body.unmatchedItems.some((unmatched) => unmatched.field === "payrollRunId"));
+  assert.equal(candidate.body.dryRunResult.status, "ready_for_confirmation");
 });
 
 test("Phase 6 Agent asset-change candidates convert into non-mutating fixed asset change drafts", async () => {
@@ -10780,6 +11044,7 @@ test("Phase 6 Agent asset-change candidates convert into non-mutating fixed asse
     },
     "phase6-asset-draft-candidate"
   );
+  assert.ok(candidate.body.unmatchedItems.some((unmatched) => unmatched.field === "fixedAssetId"));
   const assetBefore = api.state.fixedAssets.get("fixed-asset:p6-agent");
   const transferCountBefore = api.state.assetTransfers.size;
   const valueChangeCountBefore = api.state.assetValueChanges.size;
@@ -10790,6 +11055,7 @@ test("Phase 6 Agent asset-change candidates convert into non-mutating fixed asse
     `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
     {
       reviewedBy: "asset-reviewer",
+      resolvedUnmatchedItems: resolveAgentUnmatchedItems(candidate, "fixed-asset:p6-agent"),
       reviewedDraftPayload: {
         documentType: "asset_change",
         changeKind: "transfer",
@@ -10827,6 +11093,83 @@ test("Phase 6 Agent asset-change candidates convert into non-mutating fixed asse
       (link) => link.attachmentId === attachment.body.id && link.objectType === "asset_change_draft" && link.objectId === converted.body.id
     )
   );
+});
+
+test("Phase 6 Agent asset-change draft generation matches fixed asset master data before review", async () => {
+  const api = createApi({
+    llmDraftAdapter: {
+      provider: "openai-compatible",
+      model: "asset-match-model",
+      async generateDraft() {
+        return {
+          provider: "openai-compatible",
+          model: "asset-match-model",
+          status: "completed",
+          draftPayload: {
+            documentType: "asset_change",
+            changeKind: "transfer",
+            assetNo: "FA-P6-MATCH",
+            changeDate: "2026-06-13",
+            toDepartmentId: "D-QA",
+            toDepartmentName: "Quality Assurance",
+            amount: null,
+            reason: "Move matched asset to QA."
+          },
+          unmatchedItems: [],
+          outputSchema: "asset_change"
+        };
+      }
+    }
+  });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6FAMATCH",
+      name: "Phase 6 Asset Match",
+      companyName: "Phase 6 Asset Match Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-asset-match-account-set"
+  );
+  api.state.fixedAssets.set("fixed-asset:p6-match", {
+    id: "fixed-asset:p6-match",
+    accountSetId: accountSet.body.id,
+    assetNo: "FA-P6-MATCH",
+    assetName: "Matched fixed asset",
+    originalValue: 88000,
+    accumulatedDepreciation: 8000,
+    netValue: 80000,
+    currentDepartmentId: "D-MFG",
+    currentDepartmentName: "Manufacturing",
+    usageStatus: "in_use"
+  });
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId: accountSet.body.id,
+      draftType: "asset_change",
+      sourceObjectType: "uploaded_asset_change_request",
+      userInstruction: "Generate an asset change draft for FA-P6-MATCH.",
+      evidenceRefs: ["asset-change:match"],
+      dryRun: true
+    },
+    "phase6-asset-match-draft-candidate"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(candidate.body.draftPayload.fixedAssetId, "fixed-asset:p6-match");
+  assert.equal(candidate.body.draftPayload.assetNo, "FA-P6-MATCH");
+  assert.ok(candidate.body.matchedMasterData.some((match) => match.field === "fixedAssetId" && match.objectId === "fixed-asset:p6-match"));
+  assert.ok(!candidate.body.unmatchedItems.some((unmatched) => unmatched.field === "fixedAssetId"));
+  assert.equal(candidate.body.dryRunResult.status, "ready_for_confirmation");
 });
 
 test("Phase 6 Agent depreciation-run candidates convert into non-mutating depreciation dry-run drafts", async () => {
@@ -11442,7 +11785,9 @@ test("Phase 6 Agent actions move through approval and replay without mutating bu
     "input_received",
     "dry_run_completed",
     "submitted_for_approval",
+    "evidence_verified",
     "approved",
+    "evidence_verified",
     "approved",
     "evidence_verified",
     "executed"
@@ -11451,11 +11796,21 @@ test("Phase 6 Agent actions move through approval and replay without mutating bu
   const replay = await request(api, "GET", `/agent-actions/${encodeURIComponent(action.body.id)}/replay`);
   assert.equal(replay.status, 200);
   assert.equal(replay.body.auditSummary.agentActionId, action.body.id);
-  assert.equal(replay.body.auditSummary.replay.eventCount, 7);
+  assert.equal(replay.body.auditSummary.replay.eventCount, 9);
   assert.equal(replay.body.auditSummary.replay.lastEventType, "executed");
   assert.deepEqual(
     replay.body.events.map((event) => event.eventType),
-    ["input_received", "dry_run_completed", "submitted_for_approval", "approved", "approved", "evidence_verified", "executed"]
+    [
+      "input_received",
+      "dry_run_completed",
+      "submitted_for_approval",
+      "evidence_verified",
+      "approved",
+      "evidence_verified",
+      "approved",
+      "evidence_verified",
+      "executed"
+    ]
   );
   assert.ok(
     api.state.auditLogs.some(
@@ -11579,10 +11934,20 @@ test("Phase 6 Agent actions approvals and replay persist through platform store 
   assert.equal(queue.body.total, 1);
   assert.equal(queue.body.items[0].id, created.body.id);
   assert.equal(replay.status, 200);
-  assert.equal(replay.body.auditSummary.replay.eventCount, 7);
+  assert.equal(replay.body.auditSummary.replay.eventCount, 9);
   assert.deepEqual(
     replay.body.events.map((event) => event.eventType),
-    ["input_received", "dry_run_completed", "submitted_for_approval", "approved", "approved", "evidence_verified", "executed"]
+    [
+      "input_received",
+      "dry_run_completed",
+      "submitted_for_approval",
+      "evidence_verified",
+      "approved",
+      "evidence_verified",
+      "approved",
+      "evidence_verified",
+      "executed"
+    ]
   );
 });
 
@@ -12552,6 +12917,56 @@ test("Phase 6 Agent actions can be listed by account set and approval status", a
   assert.equal(submittedQueue.body.items[0].approvalProgress.remainingCount, 2);
 });
 
+test("Phase 6 Agent action queue supports pagination for production workloads", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "P6PAGE",
+      name: "Phase 6 Agent Action Pagination",
+      companyName: "Phase 6 Agent Pagination Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 1
+    },
+    "phase6-agent-pagination-account-set"
+  );
+  for (const periodNo of [1, 2, 3]) {
+    await request(
+      api,
+      "POST",
+      "/agent-actions",
+      {
+        accountSetId: accountSet.body.id,
+        toolName: "run_close_checklist",
+        dryRun: true,
+        evidenceRefs: [`period:2026-${String(periodNo).padStart(2, "0")}`],
+        payload: { fiscalYear: 2026, periodNo },
+        requestedBy: "agent-user"
+      },
+      `phase6-agent-pagination-action-${periodNo}`
+    );
+  }
+
+  const firstPage = await request(api, "GET", `/agent-actions?accountSetId=${encodeURIComponent(accountSet.body.id)}&page=1&pageSize=1`);
+  const secondPage = await request(api, "GET", `/agent-actions?accountSetId=${encodeURIComponent(accountSet.body.id)}&page=2&pageSize=1`);
+
+  assert.equal(firstPage.status, 200);
+  assert.equal(firstPage.body.total, 3);
+  assert.equal(firstPage.body.page, 1);
+  assert.equal(firstPage.body.pageSize, 1);
+  assert.equal(firstPage.body.items.length, 1);
+  assert.equal(secondPage.status, 200);
+  assert.equal(secondPage.body.total, 3);
+  assert.equal(secondPage.body.page, 2);
+  assert.equal(secondPage.body.pageSize, 1);
+  assert.equal(secondPage.body.items.length, 1);
+  assert.notEqual(secondPage.body.items[0].id, firstPage.body.items[0].id);
+});
+
 test("Phase 6 Agent actions reverse executed records through the audit trail", async () => {
   const api = createApi();
   const accountSet = await request(
@@ -12747,6 +13162,109 @@ test("Phase 6 Agent action execution blocks tampered attachment evidence", async
         (event) => event.agentActionId === action.body.id && event.eventType === "evidence_verification_failed"
       )
     );
+    const securityEvents = await request(
+      api,
+      "GET",
+      `/security/events?accountSetId=${encodeURIComponent(accountSet.body.id)}&eventType=evidence_verification_failed&severity=high`
+    );
+    assert.equal(securityEvents.status, 200);
+    assert.equal(securityEvents.body.total, 1);
+    assert.equal(securityEvents.body.items[0].objectType, "agent_action");
+    assert.equal(securityEvents.body.items[0].objectId, action.body.id);
+    assert.equal(securityEvents.body.items[0].actorId, "controller");
+    assert.equal(securityEvents.body.items[0].payload.mismatches[0].attachmentId, upload.body.id);
+  } finally {
+    rmSync(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test("Phase 6 Agent approval blocks tampered attachment evidence", async () => {
+  const storageRoot = mkdtempSync(join(tmpdir(), "ais-agent-approval-evidence-"));
+  const api = createApi({ attachmentStorageRoot: storageRoot });
+  try {
+    const accountSet = await request(
+      api,
+      "POST",
+      "/account-sets",
+      {
+        code: "P6APPEVD",
+        name: "Phase 6 Approval Evidence",
+        companyName: "Phase 6 Approval Evidence Co.",
+        baseCurrency: "CNY",
+        accountingStandard: "Small Business Accounting Standards",
+        startYear: 2026,
+        startPeriod: 1
+      },
+      "phase6-approval-evidence-account-set"
+    );
+    const evidenceContent = Buffer.from("approval proof");
+    const upload = await request(
+      api,
+      "POST",
+      "/attachments/upload",
+      {
+        accountSetId: accountSet.body.id,
+        filename: "approval-evidence.txt",
+        contentType: "text/plain",
+        byteSize: evidenceContent.length,
+        contentBase64: evidenceContent.toString("base64"),
+        uploadedBy: "agent-user"
+      },
+      "phase6-approval-evidence-upload"
+    );
+    const action = await request(
+      api,
+      "POST",
+      "/agent-actions",
+      {
+        accountSetId: accountSet.body.id,
+        toolName: "run_close_checklist",
+        dryRun: true,
+        evidenceRefs: [upload.body.id],
+        payload: { fiscalYear: 2026, periodNo: 1 },
+        requestedBy: "agent-user"
+      },
+      "phase6-approval-evidence-action"
+    );
+    await request(
+      api,
+      "POST",
+      `/agent-actions/${encodeURIComponent(action.body.id)}/submit`,
+      { submittedBy: "agent-user" },
+      "phase6-approval-evidence-submit"
+    );
+    api.state.attachments.set(upload.body.id, {
+      ...api.state.attachments.get(upload.body.id),
+      checksum: "sha256:tampered-before-approval"
+    });
+
+    const approved = await request(
+      api,
+      "POST",
+      `/agent-actions/${encodeURIComponent(action.body.id)}/approve`,
+      { approvedBy: "controller" },
+      "phase6-approval-evidence-approve"
+    );
+
+    assert.equal(approved.status, 409);
+    assert.equal(approved.body.code, "AGENT_EVIDENCE_HASH_MISMATCH");
+    assert.equal(api.state.agentActions.get(action.body.id).status, "submitted_for_approval");
+    assert.ok(
+      api.state.agentReplayEvents.some(
+        (event) => event.agentActionId === action.body.id && event.eventType === "evidence_verification_failed"
+      )
+    );
+    const securityEvents = await request(
+      api,
+      "GET",
+      `/security/events?accountSetId=${encodeURIComponent(accountSet.body.id)}&eventType=evidence_verification_failed&severity=high`
+    );
+    assert.equal(securityEvents.status, 200);
+    assert.equal(securityEvents.body.total, 1);
+    assert.equal(securityEvents.body.items[0].objectType, "agent_action");
+    assert.equal(securityEvents.body.items[0].objectId, action.body.id);
+    assert.equal(securityEvents.body.items[0].actorId, "controller");
+    assert.equal(securityEvents.body.items[0].payload.mismatches[0].attachmentId, upload.body.id);
   } finally {
     rmSync(storageRoot, { recursive: true, force: true });
   }

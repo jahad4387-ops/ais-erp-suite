@@ -965,7 +965,7 @@ function createFakePrisma() {
         const approvals = [...agentApprovals.values()].filter((approval) => approval.agentActionId === action.id);
         return include?.approvals ? { ...action, approvals } : action;
       },
-      findMany: async ({ where, include, orderBy } = {}) => {
+      findMany: async ({ where, include, orderBy, skip = 0, take } = {}) => {
         let rows = [...agentActions.values()];
         if (where?.accountSetId) {
           rows = rows.filter((action) => action.accountSetId === where.accountSetId);
@@ -982,11 +982,28 @@ function createFakePrisma() {
         if (orderBy?.createdAt === "desc") {
           rows = rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
         }
+        rows = rows.slice(skip, take === undefined ? undefined : skip + take);
         if (!include?.approvals) return rows;
         return rows.map((action) => ({
           ...action,
           approvals: [...agentApprovals.values()].filter((approval) => approval.agentActionId === action.id)
         }));
+      },
+      count: async ({ where } = {}) => {
+        let rows = [...agentActions.values()];
+        if (where?.accountSetId) {
+          rows = rows.filter((action) => action.accountSetId === where.accountSetId);
+        }
+        if (where?.status) {
+          rows = rows.filter((action) => action.status === where.status);
+        }
+        if (where?.riskLevel) {
+          rows = rows.filter((action) => action.riskLevel === where.riskLevel);
+        }
+        if (where?.toolName) {
+          rows = rows.filter((action) => action.toolName === where.toolName);
+        }
+        return rows.length;
       }
     },
     agentApproval: {
@@ -2624,6 +2641,45 @@ test("Prisma platform persistence stores Phase 6 Agent action approvals and repl
   assert.equal(listed[0].approvalProgress.remainingCount, 0);
   assert.deepEqual(replay.map((event) => event.eventType), ["input_received", "dry_run_completed", "approved"]);
   assert.equal(replay[0].payload.toolName, "run_close_checklist");
+});
+
+test("Prisma platform persistence paginates Phase 6 Agent action queues", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  for (const index of [1, 2, 3]) {
+    await store.createAgentAction({
+      id: `agent-action:page:${index}`,
+      accountSetId: "account-set:agent-action-page",
+      toolName: "run_close_checklist",
+      dryRun: true,
+      riskLevel: "high",
+      actionKind: "dry_run",
+      status: "dry_run_completed",
+      approvalRequired: true,
+      approvalPolicy: { minApprovals: 2 },
+      evidenceRefs: [`period:2026-0${index}`],
+      evidenceSnapshots: [],
+      payload: { fiscalYear: 2026, periodNo: index },
+      requestedBy: "agent-user",
+      createdAt: `2026-06-12T03:0${index}:00.000Z`,
+      dryRunResult: { status: "ready_for_approval", businessMutation: false },
+      approvalRequest: null,
+      approvalHistory: [],
+      approvalProgress: { approvedCount: 0, requiredCount: 2, remainingCount: 2 },
+      executionResult: null,
+      reversalResult: null
+    });
+  }
+
+  const total = await store.countAgentActions("account-set:agent-action-page", { status: "dry_run_completed" });
+  const secondPage = await store.listAgentActions("account-set:agent-action-page", {
+    status: "dry_run_completed",
+    page: 2,
+    pageSize: 1
+  });
+
+  assert.equal(total, 3);
+  assert.equal(secondPage.length, 1);
+  assert.equal(secondPage[0].id, "agent-action:page:2");
 });
 
 test("Prisma platform persistence stores Phase 6 security events", async () => {

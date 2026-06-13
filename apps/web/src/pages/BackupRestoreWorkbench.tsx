@@ -241,6 +241,7 @@ const zhStatus = (status?: string) => {
     failed: '失败',
     permission_denied: '权限拒绝',
     idempotency_scope_mismatch: '幂等范围冲突',
+    evidence_verification_failed: '证据校验失败',
     low: '低',
     medium: '中',
     high: '高',
@@ -759,12 +760,13 @@ export const BackupRestoreWorkbench: React.FC = () => {
   const securityPane = (
     <div style={{ display: 'grid', gap: 16, width: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-        <Text type="secondary">集中查看权限拒绝、幂等范围冲突等 Phase 6 安全事件。</Text>
+        <Text type="secondary">集中查看权限拒绝、幂等范围冲突、证据 Hash 校验失败等 Phase 6 安全事件。</Text>
         <Button data-testid="ops-security-events-refresh" icon={<ReloadOutlined />} loading={loading} onClick={fetchData}>
           刷新安全事件
         </Button>
       </div>
       <Table
+        data-testid="ops-security-events-table"
         rowKey="id"
         size="small"
         loading={loading}
@@ -785,6 +787,14 @@ export const BackupRestoreWorkbench: React.FC = () => {
             ),
           },
           { title: '消息', dataIndex: 'message', ellipsis: true },
+          {
+            title: '载荷',
+            render: (_, row) => (
+              <pre data-testid="ops-security-event-payload" style={{ margin: 0, maxWidth: 320, whiteSpace: 'pre-wrap' }}>
+                {jsonPretty(row.payload)}
+              </pre>
+            ),
+          },
         ]}
       />
     </div>

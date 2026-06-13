@@ -136,6 +136,8 @@ export const AgentCenter: React.FC = () => {
     try {
       const query = [
         `accountSetId=${encodeURIComponent(currentAccountSetId)}`,
+        'page=1',
+        'pageSize=50',
         agentActionFilters.status ? `status=${encodeURIComponent(agentActionFilters.status)}` : null,
         agentActionFilters.riskLevel ? `riskLevel=${encodeURIComponent(agentActionFilters.riskLevel)}` : null,
         agentActionFilters.toolName ? `toolName=${encodeURIComponent(agentActionFilters.toolName)}` : null,
@@ -1370,6 +1372,26 @@ export const AgentCenter: React.FC = () => {
                   </pre>
                 }
               />
+              <Card size="small" title="系统匹配主数据" data-testid="agent-draft-matched-master-data">
+                <Table
+                  size="small"
+                  pagination={false}
+                  rowKey={(record: any) => `${record.field}:${record.objectId}`}
+                  dataSource={draftCandidate.matchedMasterData ?? []}
+                  columns={[
+                    { title: '字段', dataIndex: 'field' },
+                    { title: '对象', dataIndex: 'objectType' },
+                    { title: '编码', dataIndex: 'code', render: (value: string | null) => value ?? '-' },
+                    { title: '名称', dataIndex: 'name', render: (value: string | null) => value ?? '-' },
+                    { title: '置信度', dataIndex: 'confidence', render: (value: number) => `${Math.round((value ?? 0) * 100)}%` },
+                  ]}
+                />
+              </Card>
+              <Card size="small" title="LLM 输入摘要" data-testid="agent-draft-llm-input-summary">
+                <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
+                  {JSON.stringify(draftCandidate.llmDraftRun?.inputSummary ?? {}, null, 2)}
+                </pre>
+              </Card>
               <Table
                 size="small"
                 pagination={false}
@@ -1379,7 +1401,10 @@ export const AgentCenter: React.FC = () => {
                   { title: '附件', dataIndex: 'attachmentId' },
                   { title: '本地 OCR', dataIndex: 'status' },
                   { title: '置信度', dataIndex: 'confidence', render: (value: number) => `${Math.round(value * 100)}%` },
+                  { title: '原始文本', dataIndex: 'originalExtractedText', render: (value: string | null) => value ?? '-' },
                   { title: '抽取文本', dataIndex: 'extractedText' },
+                  { title: '修正人', dataIndex: 'reviewedBy', render: (value: string | null) => value ?? '-' },
+                  { title: '修正时间', dataIndex: 'reviewedAt', render: (value: string | null) => value ?? '-' },
                 ]}
               />
               <Alert

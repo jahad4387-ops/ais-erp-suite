@@ -1549,6 +1549,12 @@ export function createPlatformPersistence(prisma) {
     },
 
     async listAgentActions(accountSetId, filters = {}) {
+      const page = Number(filters.page);
+      const pageSize = Number(filters.pageSize);
+      const pagination =
+        Number.isFinite(page) && Number.isFinite(pageSize) && page > 0 && pageSize > 0
+          ? { skip: (page - 1) * pageSize, take: Math.min(pageSize, 100) }
+          : {};
       const actions = await prisma.agentAction.findMany({
         where: {
           ...(accountSetId ? { accountSetId } : {}),
@@ -1557,9 +1563,21 @@ export function createPlatformPersistence(prisma) {
           ...(filters.toolName ? { toolName: filters.toolName } : {})
         },
         include: { approvals: true },
-        orderBy: { createdAt: "desc" }
+        orderBy: { createdAt: "desc" },
+        ...pagination
       });
       return actions.map(agentActionToDto);
+    },
+
+    async countAgentActions(accountSetId, filters = {}) {
+      return prisma.agentAction.count({
+        where: {
+          ...(accountSetId ? { accountSetId } : {}),
+          ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.riskLevel ? { riskLevel: filters.riskLevel } : {}),
+          ...(filters.toolName ? { toolName: filters.toolName } : {})
+        }
+      });
     },
 
     async replaceAgentReplayEvents(agentActionId, events) {

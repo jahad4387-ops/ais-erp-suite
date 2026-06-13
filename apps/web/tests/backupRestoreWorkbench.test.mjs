@@ -58,3 +58,14 @@ test("Phase 6 ops workbench wires migration jobs and security event audit APIs",
   assert.match(source, /eventType/);
   assert.match(source, /severity/);
 });
+
+test("Phase 6 ops security audit surfaces Agent evidence tamper events", () => {
+  const source = readFileSync(pagePath, "utf8");
+
+  assert.match(source, /evidence_verification_failed/);
+  assert.match(source, /data-testid="ops-security-events-table"/);
+  assert.match(source, /data-testid="ops-security-event-payload"/);
+  assert.match(source, /jsonPretty\(row\.payload\)/);
+  assert.match(source, /objectType/);
+  assert.match(source, /objectId/);
+});

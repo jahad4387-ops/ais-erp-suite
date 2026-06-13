@@ -542,6 +542,18 @@ function queryParamsFor(path) {
   return new URLSearchParams(query);
 }
 
+function paginationParamsFor(query) {
+  const page = Number.parseInt(query.get("page") ?? "", 10);
+  const pageSize = Number.parseInt(query.get("pageSize") ?? "", 10);
+  if (!Number.isFinite(page) || !Number.isFinite(pageSize) || page <= 0 || pageSize <= 0) {
+    return null;
+  }
+  return {
+    page,
+    pageSize: Math.min(pageSize, 100)
+  };
+}
+
 function requireIdempotencyKey(request) {
   if (request.method === "POST" && request.path === "/auth/login") {
     return null;
@@ -2121,6 +2133,217 @@ async function listInventoryItemsWithPersistence(state, accountSetId) {
 
 function findInventoryItemByIdentifier(state, identifier) {
   return [...state.inventoryItems.values()].find((item) => item.id === identifier || item.code === identifier) ?? null;
+}
+
+function normalizedMasterDataMatchValue(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function payloadValuesForKeys(payload, keys) {
+  return keys.map((key) => normalizedMasterDataMatchValue(payload?.[key])).filter(Boolean);
+}
+
+function findUniqueMasterDataMatch(records, values, selectors) {
+  const lookupValues = new Set(values.filter(Boolean));
+  if (lookupValues.size === 0) return null;
+  const matches = records.filter((record) =>
+    selectors.some((selector) => lookupValues.has(normalizedMasterDataMatchValue(selector(record))))
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function matchedMasterDataEvidence(field, objectType, object, matchMethod) {
+  return {
+    field,
+    objectType,
+    objectId: object.id,
+    code: object.code ?? object.assetNo ?? null,
+    name: object.name ?? object.assetName ?? null,
+    matchMethod,
+    confidence: 0.96
+  };
+}
+
+function matchLineMasterData(lines, records, targetField, codeFields, nameFields, objectType, matches) {
+  if (!Array.isArray(lines)) return;
+  for (const [index, line] of lines.entries()) {
+    const values = [
+      ...payloadValuesForKeys(line, [targetField]),
+      ...payloadValuesForKeys(line, codeFields),
+      ...payloadValuesForKeys(line, nameFields)
+    ];
+    const matched = findUniqueMasterDataMatch(records, values, [
+      (record) => record.id,
+      (record) => record.code,
+      (record) => record.name
+    ]);
+    if (!matched) continue;
+    line[targetField] = matched.id;
+    matches.push(matchedMasterDataEvidence(`lines[${index}].${targetField}`, objectType, matched, "exact"));
+  }
+}
+
+async function listAccountsForMasterDataMatch(state, accountSetId) {
+  const persistedAccounts = state.config.platformStore?.listAccounts ? await state.config.platformStore.listAccounts(accountSetId) : [];
+  const accountsById = new Map(persistedAccounts.map((account) => [account.id, account]));
+  for (const account of listAccounts(state)) {
+    if (!account.accountSetId || account.accountSetId === accountSetId) {
+      accountsById.set(account.id, account);
+    }
+  }
+  return [...accountsById.values()];
+}
+
+async function matchVoucherAccountMasterData(state, accountSetId, payload, matches) {
+  if (!Array.isArray(payload.lines)) return;
+  const accounts = await listAccountsForMasterDataMatch(state, accountSetId);
+  for (const [index, line] of payload.lines.entries()) {
+    const matched = findUniqueMasterDataMatch(
+      accounts,
+      [
+        ...payloadValuesForKeys(line, ["accountCode", "accountId"]),
+        ...payloadValuesForKeys(line, ["accountName", "name"])
+      ],
+      [(record) => record.id, (record) => record.code, (record) => record.name]
+    );
+    if (!matched) continue;
+    line.accountCode = matched.code;
+    matches.push(matchedMasterDataEvidence(`lines[${index}].accountCode`, "account", matched, "exact"));
+  }
+}
+
+async function matchAgentDraftMasterData(state, accountSetId, draftType, draftPayload) {
+  const payload = structuredClone(draftPayload ?? {});
+  const matches = [];
+
+  if (draftType === "purchase_order" || draftType === "sales_order") {
+    const partnerType = draftType === "purchase_order" ? "supplier" : "customer";
+    const targetField = draftType === "purchase_order" ? "supplierId" : "customerId";
+    const partners = await listPartners(state, accountSetId, partnerType);
+    const partner = findUniqueMasterDataMatch(
+      partners,
+      [
+        ...payloadValuesForKeys(payload, [targetField, "counterpartyId", "partnerId"]),
+        ...payloadValuesForKeys(payload, [`${partnerType}Code`, "counterpartyCode", "partnerCode"]),
+        ...payloadValuesForKeys(payload, [`${partnerType}Name`, "counterpartyName", "partnerName"])
+      ],
+      [(record) => record.id, (record) => record.code, (record) => record.name]
+    );
+    if (partner) {
+      payload[targetField] = partner.id;
+      matches.push(matchedMasterDataEvidence(targetField, "partner", partner, "exact"));
+    }
+  }
+
+  const inventoryItems = await listInventoryItemsWithPersistence(state, accountSetId);
+  if (["purchase_order", "sales_order", "inventory_movement", "stock_count"].includes(draftType)) {
+    matchLineMasterData(
+      payload.lines,
+      inventoryItems,
+      "itemId",
+      ["itemCode", "inventoryItemCode", "sku", "code"],
+      ["itemName", "inventoryItemName", "name"],
+      "inventory_item",
+      matches
+    );
+  }
+  if (draftType === "material_requisition") {
+    matchLineMasterData(
+      payload.lines,
+      inventoryItems,
+      "componentItemId",
+      ["componentItemCode", "itemCode", "inventoryItemCode", "code"],
+      ["componentItemName", "itemName", "inventoryItemName", "name"],
+      "inventory_item",
+      matches
+    );
+  }
+  if (draftType === "product_receipt") {
+    matchLineMasterData(
+      payload.lines,
+      inventoryItems,
+      "productItemId",
+      ["productItemCode", "itemCode", "inventoryItemCode", "code"],
+      ["productItemName", "itemName", "inventoryItemName", "name"],
+      "inventory_item",
+      matches
+    );
+  }
+
+  const warehouses = listWarehouses(state, accountSetId);
+  if (["inventory_movement", "material_requisition", "product_receipt"].includes(draftType)) {
+    const warehouse = findUniqueMasterDataMatch(
+      warehouses,
+      [
+        ...payloadValuesForKeys(payload, ["warehouseId"]),
+        ...payloadValuesForKeys(payload, ["warehouseCode"]),
+        ...payloadValuesForKeys(payload, ["warehouseName"])
+      ],
+      [(record) => record.id, (record) => record.code, (record) => record.name]
+    );
+    if (warehouse) {
+      payload.warehouseId = warehouse.id;
+      matches.push(matchedMasterDataEvidence("warehouseId", "warehouse", warehouse, "exact"));
+    }
+    matchLineMasterData(payload.lines, warehouses, "warehouseId", ["warehouseCode", "code"], ["warehouseName", "name"], "warehouse", matches);
+  }
+
+  if (draftType === "voucher") {
+    await matchVoucherAccountMasterData(state, accountSetId, payload, matches);
+  }
+
+  if (draftType === "asset_change") {
+    const assets = listFixedAssets(state, accountSetId);
+    const asset = findUniqueMasterDataMatch(
+      assets,
+      [
+        ...payloadValuesForKeys(payload, ["fixedAssetId"]),
+        ...payloadValuesForKeys(payload, ["assetNo"]),
+        ...payloadValuesForKeys(payload, ["assetName", "name"])
+      ],
+      [(record) => record.id, (record) => record.assetNo, (record) => record.assetName ?? record.name]
+    );
+    if (asset) {
+      payload.fixedAssetId = asset.id;
+      payload.assetNo = asset.assetNo;
+      payload.assetName = asset.assetName ?? asset.name ?? null;
+      payload.fromDepartmentId = payload.fromDepartmentId ?? asset.currentDepartmentId ?? null;
+      payload.fromDepartmentName = payload.fromDepartmentName ?? asset.currentDepartmentName ?? null;
+      matches.push(matchedMasterDataEvidence("fixedAssetId", "fixed_asset", asset, "exact"));
+    }
+  }
+
+  if (draftType === "payroll_allocation") {
+    const payrollRuns = listPayrollRuns(state, accountSetId);
+    const payrollRun = findUniqueMasterDataMatch(
+      payrollRuns,
+      [
+        ...payloadValuesForKeys(payload, ["payrollRunId"]),
+        ...payloadValuesForKeys(payload, ["runNo"])
+      ],
+      [(record) => record.id, (record) => record.runNo]
+    );
+    if (payrollRun) {
+      payload.payrollRunId = payrollRun.id;
+      payload.runNo = payrollRun.runNo;
+      payload.fiscalYear = payload.fiscalYear ?? payrollRun.fiscalYear ?? null;
+      payload.periodNo = payload.periodNo ?? payrollRun.periodNo ?? null;
+      matches.push(matchedMasterDataEvidence("payrollRunId", "payroll_run", payrollRun, "exact"));
+    }
+  }
+
+  return { draftPayload: payload, matchedMasterData: matches };
+}
+
+function mergeUnmatchedItems(...unmatchedLists) {
+  const byField = new Map();
+  for (const unmatchedList of unmatchedLists) {
+    for (const item of unmatchedList ?? []) {
+      if (!item?.field || byField.has(item.field)) continue;
+      byField.set(item.field, item);
+    }
+  }
+  return [...byField.values()];
 }
 
 function listBoms(state, accountSetId) {
@@ -4792,6 +5015,12 @@ function unmatchedItemsForDraft(draftType, draftPayload) {
       }
     }
   }
+  if (draftType === "payroll_allocation" && !draftPayload.payrollRunId) {
+    items.push({ field: "payrollRunId", reason: "Payroll run must be matched before saving the payroll allocation draft." });
+  }
+  if (draftType === "asset_change" && !draftPayload.fixedAssetId) {
+    items.push({ field: "fixedAssetId", reason: "Fixed asset must be matched before saving the asset change draft." });
+  }
   return items;
 }
 
@@ -5392,15 +5621,22 @@ async function createAgentDraftCandidate(state, body, actorId) {
   const sourceContext = await resolveAgentDraftSourceContext(state, body);
   let llmDraftRun;
   let draftPayload;
-  let unmatchedItems;
+  let llmUnmatchedItems;
   try {
-    ({ llmDraftRun, draftPayload, unmatchedItems } = await runLlmDraftAdapter(state, { ...body, sourceContext, ocrResults, evidenceRefs }));
+    ({ llmDraftRun, draftPayload, unmatchedItems: llmUnmatchedItems } = await runLlmDraftAdapter(state, { ...body, sourceContext, ocrResults, evidenceRefs }));
   } catch (error) {
     const failedRun = createFailedLlmDraftRun(state, { ...body, sourceContext, evidenceRefs }, ocrResults, error);
     state.llmDraftRuns.set(failedRun.id, failedRun);
     throw error;
   }
   state.llmDraftRuns.set(llmDraftRun.id, llmDraftRun);
+  const matched = await matchAgentDraftMasterData(state, body.accountSetId, body.draftType, draftPayload);
+  draftPayload = matched.draftPayload;
+  const matchedFields = new Set(matched.matchedMasterData.map((item) => item.field));
+  const unmatchedItems = mergeUnmatchedItems(
+    unmatchedItemsForDraft(body.draftType, draftPayload),
+    (llmUnmatchedItems ?? []).filter((item) => !matchedFields.has(item.field))
+  );
   const candidate = {
     id: `agent-draft-candidate:${randomUUID()}`,
     accountSetId: body.accountSetId,
@@ -5414,7 +5650,7 @@ async function createAgentDraftCandidate(state, body, actorId) {
     riskLevel: "medium",
     requiresHumanConfirmation: true,
     sourceContext,
-    matchedMasterData: [],
+    matchedMasterData: matched.matchedMasterData,
     unmatchedItems,
     draftPayload,
     ocrResults,
@@ -7530,7 +7766,7 @@ function captureAgentEvidenceSnapshots(state, accountSetId, evidenceRefs = []) {
     .filter(Boolean);
 }
 
-function verifyAgentEvidenceSnapshots(state, action, actorId) {
+async function verifyAgentEvidenceSnapshots(state, action, actorId) {
   const mismatches = [];
   for (const snapshot of action.evidenceSnapshots ?? []) {
     const attachment = state.attachments.get(snapshot.attachmentId);
@@ -7557,6 +7793,21 @@ function verifyAgentEvidenceSnapshots(state, action, actorId) {
       eventType: "evidence_verification_failed",
       actorId,
       payload: { mismatches }
+    });
+    await recordSecurityEvent(state, {
+      accountSetId: action.accountSetId,
+      eventType: "evidence_verification_failed",
+      severity: "high",
+      actorId,
+      source: "agent_action_execution",
+      objectType: "agent_action",
+      objectId: action.id,
+      message: "Agent action evidence hash verification failed before execution.",
+      payload: {
+        toolName: action.toolName,
+        evidenceRefs: action.evidenceRefs ?? [],
+        mismatches
+      }
     });
     const error = new Error("Agent action evidence hash verification failed before execution.");
     error.code = "AGENT_EVIDENCE_HASH_MISMATCH";
@@ -7754,7 +8005,7 @@ function agentApprovalProgress(action, approvalHistory = action.approvalHistory 
   };
 }
 
-function approveAgentActionRecord(state, action, body, actorId) {
+async function approveAgentActionRecord(state, action, body, actorId) {
   if (action.status !== "submitted_for_approval") {
     throw new Error("Only submitted Agent actions can be approved.");
   }
@@ -7764,6 +8015,7 @@ function approveAgentActionRecord(state, action, body, actorId) {
     error.code = "AGENT_APPROVAL_DUPLICATE_APPROVER";
     throw error;
   }
+  await verifyAgentEvidenceSnapshots(state, action, approvedBy);
   const approval = {
     id: `agent-approval:${randomUUID()}`,
     agentActionId: action.id,
@@ -7790,7 +8042,7 @@ function approveAgentActionRecord(state, action, body, actorId) {
   return updated;
 }
 
-function executeAgentActionRecord(state, action, body, actorId) {
+async function executeAgentActionRecord(state, action, body, actorId) {
   if (action.status !== "approved") {
     throw new Error("Only approved Agent actions can be executed.");
   }
@@ -7817,7 +8069,7 @@ function executeAgentActionRecord(state, action, body, actorId) {
     error.code = "RESTORE_DRILL_OUTBOUND_BLOCKED";
     throw error;
   }
-  verifyAgentEvidenceSnapshots(state, action, executedBy);
+  await verifyAgentEvidenceSnapshots(state, action, executedBy);
   const executionResult = {
     status: "recorded_without_business_mutation",
     executedBy,
@@ -15966,11 +16218,18 @@ async function route(request, state) {
     const status = query.get("status");
     const riskLevel = query.get("riskLevel");
     const toolName = query.get("toolName");
+    const pagination = paginationParamsFor(query);
     if (accountSetId && !(await canAccessAccountSet(state, actorId, accountSetId))) {
       return accountSetAccessError(state, actorId, accountSetId);
     }
+    const actionFilters = {
+      status,
+      riskLevel,
+      toolName,
+      ...(pagination ? { page: pagination.page, pageSize: pagination.pageSize } : {})
+    };
     const rawItems = platformStore?.listAgentActions
-      ? (await platformStore.listAgentActions(accountSetId, { status, riskLevel, toolName })).map(summarizeAgentAction)
+      ? (await platformStore.listAgentActions(accountSetId, actionFilters)).map(summarizeAgentAction)
       : listAgentActions(state, { accountSetId, status, riskLevel, toolName });
     const items = [];
     for (const item of rawItems) {
@@ -15979,13 +16238,23 @@ async function route(request, state) {
       }
       items.push(item);
     }
+    const total =
+      platformStore?.countAgentActions && accountSetId
+        ? await platformStore.countAgentActions(accountSetId, { status, riskLevel, toolName })
+        : items.length;
+    const pagedItems =
+      pagination && !platformStore?.countAgentActions
+        ? items.slice((pagination.page - 1) * pagination.pageSize, pagination.page * pagination.pageSize)
+        : items;
     return jsonResponse(200, {
       accountSetId: accountSetId ?? null,
       status: status ?? null,
       riskLevel: riskLevel ?? null,
       toolName: toolName ?? null,
-      total: items.length,
-      items
+      page: pagination?.page,
+      pageSize: pagination?.pageSize,
+      total,
+      items: pagedItems
     });
   }
 
@@ -16036,9 +16305,9 @@ async function route(request, state) {
         segments[2] === "submit"
           ? submitAgentActionForApproval(state, currentAction, body, actorId)
           : segments[2] === "approve"
-            ? approveAgentActionRecord(state, currentAction, body, actorId)
+            ? await approveAgentActionRecord(state, currentAction, body, actorId)
             : segments[2] === "execute"
-              ? executeAgentActionRecord(state, currentAction, body, actorId)
+              ? await executeAgentActionRecord(state, currentAction, body, actorId)
               : reverseAgentActionRecord(state, currentAction, body, actorId);
       const savedAction = await persistAgentActionForRoute(state, updated);
       appendAuditLog(state, {

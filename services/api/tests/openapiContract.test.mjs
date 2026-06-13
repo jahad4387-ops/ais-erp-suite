@@ -938,6 +938,8 @@ test("Agent-facing endpoints expose dry-run and evidence fields", () => {
   assert.match(agentBlock, /get:/, "Agent action list endpoint must be documented.");
   assert.match(agentBlock, /AgentActionQueue/, "Agent action list endpoint must return a queue schema.");
   assert.match(agentBlock, /x-risk-level: low/, "Agent action list endpoint must be low-risk read-only.");
+  assert.match(agentBlock, /name: page/, "Agent action list endpoint must document queue pagination.");
+  assert.match(agentBlock, /name: pageSize/, "Agent action list endpoint must document bounded queue page size.");
   assert.match(agentDetailBlock, /AgentAction/, "Agent detail endpoint must return the current action state.");
   assert.match(agentSubmitBlock, /AgentAction/, "Agent submit endpoint must return submitted action state.");
   assert.match(agentApproveBlock, /AgentAction/, "Agent approve endpoint must return approved action state.");
@@ -953,6 +955,7 @@ test("Agent-facing endpoints expose dry-run and evidence fields", () => {
   assert.match(contract, /auditSummary/, "AgentAction schema must expose a human-readable audit summary.");
   assert.match(contract, /AgentActionAuditSummary/, "AgentAction audit summary schema must be documented.");
   assert.match(contract, /verificationStatus/, "AgentAction audit summary must expose evidence verification status.");
+  assert.match(contract, /pageSize/, "AgentActionQueue schema must expose pagination metadata.");
   assert.match(contract, /mutationState/, "AgentAction audit summary must expose mutation state.");
   assert.match(contract, /nextActions/, "AgentAction audit summary must expose next available actions.");
   assert.match(agentReplayBlock, /auditSummary/, "Agent replay endpoint must return the same audit summary as action detail.");
