@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 import { useAppContext } from '../context/AppContext';
 
 type LineSideWarehouse = {
@@ -86,6 +87,13 @@ export const LineSideWarehouses: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0 }}>线边仓管理</h2>
         <Space>
+          <AgentDraftEntryButton
+            draftType="line_side_replenishment"
+            sourceObjectType="line_side_warehouse_page"
+            userInstruction="Generate line-side warehouse replenishment or return-material draft from work order and line-side stock context."
+          >
+            Agent
+          </AgentDraftEntryButton>
           <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
           <Button onClick={() => setMovementModalOpen(true)} disabled={!rows.length}>补退料记录</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setWarehouseModalOpen(true)}>新增线边仓</Button>

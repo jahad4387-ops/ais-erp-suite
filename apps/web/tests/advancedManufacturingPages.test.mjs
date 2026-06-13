@@ -48,3 +48,21 @@ test("Phase 5 advanced manufacturing pages wire their API collections", () => {
   const lineSideSource = readFileSync(fileURLToPath(new URL("../src/pages/LineSideWarehouses.tsx", import.meta.url)), "utf8");
   assert.match(lineSideSource, /\/line-side-material-movements/);
 });
+
+test("Phase 5 advanced manufacturing pages expose contextual Agent entry points", () => {
+  const expectations = [
+    ["ProductionPlans", "production_plan", "production_plan_page"],
+    ["ReworkOrders", "rework_order", "rework_order_page"],
+    ["OutsourcingOrders", "outsourcing_order", "outsourcing_order_page"],
+    ["Traceability", "traceability_report", "traceability_page"],
+    ["LineSideWarehouses", "line_side_replenishment", "line_side_warehouse_page"]
+  ];
+
+  for (const [componentName, draftType, sourceObjectType] of expectations) {
+    const pagePath = fileURLToPath(new URL(`../src/pages/${componentName}.tsx`, import.meta.url));
+    const source = readFileSync(pagePath, "utf8");
+    assert.match(source, /AgentDraftEntryButton/, `${componentName} should expose an Agent entry.`);
+    assert.match(source, new RegExp(`draftType="${draftType}"`), `${componentName} should pass ${draftType}.`);
+    assert.match(source, new RegExp(`sourceObjectType="${sourceObjectType}"`), `${componentName} should pass ${sourceObjectType}.`);
+  }
+});

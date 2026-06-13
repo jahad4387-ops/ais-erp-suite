@@ -4596,6 +4596,11 @@ const SUPPORTED_AGENT_DRAFT_TYPES = new Set([
   "payroll_allocation",
   "depreciation_run",
   "asset_change",
+  "production_plan",
+  "rework_order",
+  "outsourcing_order",
+  "traceability_report",
+  "line_side_replenishment",
   "report_interpretation"
 ]);
 

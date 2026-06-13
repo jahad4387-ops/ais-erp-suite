@@ -57,6 +57,58 @@ test("Phase 3 supply chain Agent tools are registered with unified dry-run contr
   assert.equal(toolsByName.get("run_supply_chain_close_check").approvalPolicy.minApprovals, 2);
 });
 
+test("Phase 5 manufacturing pages can open Agent draft candidates with source context", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "SCCTX",
+      name: "Supply Chain Context Agents",
+      companyName: "Supply Chain Context Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 6
+    },
+    "agent-supply-chain-context-account"
+  );
+
+  const contexts = [
+    ["production_plan", "production_plan_page"],
+    ["rework_order", "rework_order_page"],
+    ["outsourcing_order", "outsourcing_order_page"],
+    ["traceability_report", "traceability_page"],
+    ["line_side_replenishment", "line_side_warehouse_page"]
+  ];
+
+  for (const [draftType, sourceObjectType] of contexts) {
+    const candidate = await request(
+      api,
+      "POST",
+      "/agent/draft-candidates",
+      {
+        accountSetId: accountSet.body.id,
+        fiscalPeriodId: "period:scctx:2026:6",
+        draftType,
+        sourceObjectType,
+        userInstruction: `Generate ${draftType} draft from ${sourceObjectType}.`,
+        evidenceRefs: [`${sourceObjectType}:sample`],
+        dryRun: true
+      },
+      `agent-supply-chain-context-${draftType}`
+    );
+
+    assert.equal(candidate.status, 201, `${draftType} should create a reviewable candidate.`);
+    assert.equal(candidate.body.draftType, draftType);
+    assert.equal(candidate.body.sourceObjectType, sourceObjectType);
+    assert.equal(candidate.body.status, "candidate");
+    assert.equal(candidate.body.dryRunResult.status, "ready_for_confirmation");
+    assert.equal(candidate.body.requiresHumanConfirmation, true);
+  }
+});
+
 test("Phase 3 supply chain Agent tool invocation records a dry-run action with business-safe output", async () => {
   const api = createApi();
   const accountSet = await request(

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd';
 import { PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 import { useAppContext } from '../context/AppContext';
 
 type TraceRule = {
@@ -70,6 +71,13 @@ export const Traceability: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0 }}>追溯规则</h2>
         <Space>
+          <AgentDraftEntryButton
+            draftType="traceability_report"
+            sourceObjectType="traceability_page"
+            userInstruction="Generate traceability report draft and impact scope from batch, order, or work-order context."
+          >
+            Agent
+          </AgentDraftEntryButton>
           <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
           <Button icon={<SearchOutlined />} onClick={() => setQueryModalOpen(true)} disabled={!rows.length}>批次追溯</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setRuleModalOpen(true)}>新增规则</Button>

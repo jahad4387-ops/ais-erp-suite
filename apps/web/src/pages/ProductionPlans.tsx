@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Form, Input, InputNumber, Modal, Space, Table, Tag, message } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { AgentDraftEntryButton } from '../components/AgentDraftEntryButton';
 import { useAppContext } from '../context/AppContext';
 
 type ProductionPlanLine = {
@@ -107,6 +108,13 @@ export const ProductionPlans: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0 }}>主生产计划</h2>
         <Space>
+          <AgentDraftEntryButton
+            draftType="production_plan"
+            sourceObjectType="production_plan_page"
+            userInstruction={`Generate production plan draft for ${currentYear}-${String(currentPeriod).padStart(2, '0')}.`}
+          >
+            Agent
+          </AgentDraftEntryButton>
           <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增计划</Button>
         </Space>

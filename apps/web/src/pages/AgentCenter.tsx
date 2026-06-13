@@ -18,6 +18,11 @@ const draftTypeOptions = [
   { value: 'payroll_allocation', label: '工资分摊草稿' },
   { value: 'depreciation_run', label: '折旧测算草稿' },
   { value: 'asset_change', label: '资产变动草稿' },
+  { value: 'production_plan', label: '主生产计划草稿' },
+  { value: 'rework_order', label: '返工计划草稿' },
+  { value: 'outsourcing_order', label: '委外单草稿' },
+  { value: 'traceability_report', label: '追溯报告草稿' },
+  { value: 'line_side_replenishment', label: '线边仓补料草稿' },
   { value: 'master_data', label: '基础档案草稿' },
   { value: 'report_interpretation', label: '报表解读草稿' },
 ];
