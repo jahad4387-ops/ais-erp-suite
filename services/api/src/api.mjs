@@ -1293,6 +1293,24 @@ async function voucherPeriodMutationError(state, voucher, action) {
   );
 }
 
+async function assertAgentDraftPeriodOpen(state, candidate, reviewedDraftPayload, action) {
+  const fiscalYear = Number(reviewedDraftPayload?.fiscalYear ?? candidate.fiscalYear);
+  const periodNo = Number(reviewedDraftPayload?.periodNo ?? candidate.periodNo);
+  if (!Number.isInteger(fiscalYear) || !Number.isInteger(periodNo)) return;
+  const period = await findPeriod(state, {
+    accountSetId: candidate.accountSetId,
+    fiscalYear,
+    periodNo
+  });
+  if (period && period.status !== "open") {
+    throw codedError(
+      "AGENT_DRAFT_PERIOD_CLOSED",
+      `Accounting period must be open before ${action}.`,
+      409
+    );
+  }
+}
+
 async function findVoucherByIdentifier(state, identifier) {
   const localVoucher = state.vouchers.get(identifier);
   if (localVoucher) {
@@ -6218,7 +6236,7 @@ async function convertAgentDraftCandidateToSalesOrder(state, candidate, body, ac
   return { salesOrder: savedOrder };
 }
 
-function convertAgentDraftCandidateToInventoryMovementDraft(state, candidate, body, actorId) {
+async function convertAgentDraftCandidateToInventoryMovementDraft(state, candidate, body, actorId) {
   if (candidate.status !== "candidate") {
     throw new Error("Only candidate Agent drafts can be converted.");
   }
@@ -6242,6 +6260,7 @@ function convertAgentDraftCandidateToInventoryMovementDraft(state, candidate, bo
   }
 
   assertDraftCandidateAttachmentsAvailable(state, candidate);
+  await assertAgentDraftPeriodOpen(state, candidate, body.reviewedDraftPayload, "converting Agent inventory movement drafts");
   const movementType = body.reviewedDraftPayload.movementType;
   const draftId = body.reviewedDraftPayload.id ?? `inventory-movement-draft:${randomUUID()}`;
   const lines = body.reviewedDraftPayload.lines.map((line, index) => {
@@ -6345,7 +6364,7 @@ function convertAgentDraftCandidateToInventoryMovementDraft(state, candidate, bo
   return { inventoryMovementDraft: draft };
 }
 
-function convertAgentDraftCandidateToMaterialRequisitionDraft(state, candidate, body, actorId) {
+async function convertAgentDraftCandidateToMaterialRequisitionDraft(state, candidate, body, actorId) {
   if (candidate.status !== "candidate") {
     throw new Error("Only candidate Agent drafts can be converted.");
   }
@@ -6366,6 +6385,7 @@ function convertAgentDraftCandidateToMaterialRequisitionDraft(state, candidate, 
   }
 
   assertDraftCandidateAttachmentsAvailable(state, candidate);
+  await assertAgentDraftPeriodOpen(state, candidate, body.reviewedDraftPayload, "converting Agent material requisition drafts");
   const workOrder = findWorkOrderByIdentifier(state, body.reviewedDraftPayload.workOrderId);
   if (!workOrder || workOrder.accountSetId !== candidate.accountSetId) {
     throw new Error("Work order was not found.");
@@ -6474,7 +6494,7 @@ function convertAgentDraftCandidateToMaterialRequisitionDraft(state, candidate, 
   return { materialRequisitionDraft: draft };
 }
 
-function convertAgentDraftCandidateToProductReceiptDraft(state, candidate, body, actorId) {
+async function convertAgentDraftCandidateToProductReceiptDraft(state, candidate, body, actorId) {
   if (candidate.status !== "candidate") {
     throw new Error("Only candidate Agent drafts can be converted.");
   }
@@ -6495,6 +6515,7 @@ function convertAgentDraftCandidateToProductReceiptDraft(state, candidate, body,
   }
 
   assertDraftCandidateAttachmentsAvailable(state, candidate);
+  await assertAgentDraftPeriodOpen(state, candidate, body.reviewedDraftPayload, "converting Agent product receipt drafts");
   const workOrder = findWorkOrderByIdentifier(state, body.reviewedDraftPayload.workOrderId);
   if (!workOrder || workOrder.accountSetId !== candidate.accountSetId) {
     throw new Error("Work order was not found.");
@@ -16422,17 +16443,17 @@ async function route(request, state) {
         return jsonResponse(201, result.salesOrder);
       }
       if (candidate.draftType === "inventory_movement") {
-        const result = convertAgentDraftCandidateToInventoryMovementDraft(state, candidate, conversionBody, actorId);
+        const result = await convertAgentDraftCandidateToInventoryMovementDraft(state, candidate, conversionBody, actorId);
         await persistConvertedAgentDraftCandidate();
         return jsonResponse(201, result.inventoryMovementDraft);
       }
       if (candidate.draftType === "material_requisition") {
-        const result = convertAgentDraftCandidateToMaterialRequisitionDraft(state, candidate, conversionBody, actorId);
+        const result = await convertAgentDraftCandidateToMaterialRequisitionDraft(state, candidate, conversionBody, actorId);
         await persistConvertedAgentDraftCandidate();
         return jsonResponse(201, result.materialRequisitionDraft);
       }
       if (candidate.draftType === "product_receipt") {
-        const result = convertAgentDraftCandidateToProductReceiptDraft(state, candidate, conversionBody, actorId);
+        const result = await convertAgentDraftCandidateToProductReceiptDraft(state, candidate, conversionBody, actorId);
         await persistConvertedAgentDraftCandidate();
         return jsonResponse(201, result.productReceiptDraft);
       }
@@ -16475,8 +16496,8 @@ async function route(request, state) {
       throw unsupportedAgentDraftConversion(candidate.draftType);
     } catch (error) {
       return errorResponse(
-        400,
-        ["AGENT_DRAFT_CONVERSION_UNSUPPORTED", "AGENT_DRAFT_UNMATCHED_ITEMS_UNRESOLVED"].includes(error.code)
+        error.status ?? 400,
+        ["AGENT_DRAFT_CONVERSION_UNSUPPORTED", "AGENT_DRAFT_UNMATCHED_ITEMS_UNRESOLVED", "AGENT_DRAFT_PERIOD_CLOSED"].includes(error.code)
           ? error.code
           : "BUSINESS_RULE_FAILED",
         error.message

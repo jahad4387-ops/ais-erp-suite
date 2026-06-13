@@ -948,3 +948,104 @@ test("Phase 5 Agent draft candidates convert into non-mutating manufacturing pre
     assert.ok(api.state.auditLogs.some((log) => log.action === "agent.draft_candidate.convert" && log.objectId === converted.body.id));
   }
 });
+
+test("Agent draft conversion blocks inventory-impacting production drafts in closed periods", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "SCPCG",
+      name: "Supply Chain Period Control",
+      companyName: "Supply Chain Period Control Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 6
+    },
+    "agent-period-control-account"
+  );
+  const accountSetId = accountSet.body.id;
+  api.state.periods.set("period:scpcg:2026:6", {
+    id: "period:scpcg:2026:6",
+    accountSetId,
+    fiscalYear: 2026,
+    periodNo: 6,
+    status: "closed"
+  });
+  api.state.inventoryItems.set("item:mat-period", {
+    id: "item:mat-period",
+    accountSetId,
+    code: "MAT-PERIOD",
+    name: "Material Period",
+    itemType: "material",
+    unit: "PCS",
+    costMethod: "moving_average"
+  });
+  api.state.warehouses.set("warehouse:period", {
+    id: "warehouse:period",
+    accountSetId,
+    code: "MAIN",
+    name: "Main Warehouse",
+    warehouseType: "main",
+    locations: []
+  });
+  api.state.workOrders.set("work-order:period", {
+    id: "work-order:period",
+    accountSetId,
+    workOrderNo: "WO-PERIOD",
+    productItemId: "item:fg-period",
+    productItemCode: "FG-PERIOD",
+    productItemName: "Finished Period",
+    plannedQuantity: 1,
+    status: "released",
+    fiscalYear: 2026,
+    periodNo: 6
+  });
+
+  const candidate = await request(
+    api,
+    "POST",
+    "/agent/draft-candidates",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      draftType: "material_requisition",
+      sourceObjectType: "work_order",
+      sourceObjectId: "work-order:period",
+      userInstruction: "Generate material issue draft in a closed period.",
+      evidenceRefs: ["work-order:period"],
+      dryRun: true
+    },
+    "agent-period-control-candidate"
+  );
+  const converted = await request(
+    api,
+    "POST",
+    `/agent/draft-candidates/${encodeURIComponent(candidate.body.id)}/convert`,
+    {
+      reviewedBy: "period-reviewer",
+      resolvedUnmatchedItems: (candidate.body.unmatchedItems ?? []).map((item) => ({
+        field: item.field,
+        resolution: "manual_review",
+        resolvedValue: "reviewed"
+      })),
+      reviewedDraftPayload: {
+        documentType: "material_requisition",
+        workOrderId: "work-order:period",
+        fiscalYear: 2026,
+        periodNo: 6,
+        lines: [{ componentItemId: "item:mat-period", warehouseId: "warehouse:period", quantity: 1 }]
+      }
+    },
+    "agent-period-control-convert"
+  );
+
+  assert.equal(candidate.status, 201);
+  assert.equal(converted.status, 409, JSON.stringify(converted.body));
+  assert.equal(converted.body.code, "AGENT_DRAFT_PERIOD_CLOSED");
+  assert.equal(api.state.materialRequisitions.size, 0);
+  assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "candidate");
+});

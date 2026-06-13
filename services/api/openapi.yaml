@@ -3933,7 +3933,7 @@ paths:
   /agent/draft-candidates/{agentDraftCandidateId}/convert:
     post:
       summary: Convert a reviewed Agent draft candidate into a supported system draft.
-      description: Requires a human-reviewed payload. The model candidate is never trusted directly; unresolved accounts, auxiliaries, master data, and evidence must be corrected before this endpoint creates a formal system draft. Current supported conversions are voucher drafts, purchase order drafts, sales order drafts, non-mutating inventory movement drafts, non-mutating material requisition drafts, non-mutating product receipt drafts, non-mutating stock count previews, non-mutating master data drafts, payroll allocation drafts, non-mutating depreciation dry-run drafts, fixed asset change drafts, and report interpretation drafts.
+      description: Requires a human-reviewed payload. The model candidate is never trusted directly; unresolved accounts, auxiliaries, master data, and evidence must be corrected before this endpoint creates a system draft or review preview. Current supported conversions include voucher, order, inventory movement, material requisition, product receipt, stock count, master data, payroll allocation, non-mutating depreciation dry-run drafts, asset change, report interpretation, production plan, rework, outsourcing, traceability, and line-side replenishment drafts. Inventory-impacting conversions are rejected with AGENT_DRAFT_PERIOD_CLOSED when the accounting period is closed or locked.
       x-permission: agent_draft.convert
       x-risk-level: medium
       x-agent-allowed: false
@@ -3969,6 +3969,9 @@ paths:
                   - $ref: "#/components/schemas/AgentDepreciationRunDraft"
                   - $ref: "#/components/schemas/AgentAssetChangeDraft"
                   - $ref: "#/components/schemas/AgentReportInterpretationDraft"
+                  - type: object
+                    description: Reviewed production_plan_draft, rework_order_draft, outsourcing_order_draft, traceability_report_draft, or line_side_replenishment_draft preview.
+                    additionalProperties: true
         "400":
           description: BUSINESS_RULE_FAILED.
           content:
@@ -3978,7 +3981,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/Conflict"
+          description: AGENT_DRAFT_PERIOD_CLOSED when an inventory-impacting Agent draft targets a closed or locked accounting period.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /agent/draft-candidates/{agentDraftCandidateId}/reject:
     post:
@@ -13645,7 +13652,7 @@ components:
           properties:
             documentType:
               type: string
-              enum: [voucher, purchase_order, sales_order, inventory_movement, material_requisition, product_receipt, stock_count, master_data, payroll_allocation, depreciation_run, asset_change, report_interpretation]
+              enum: [voucher, purchase_order, sales_order, inventory_movement, material_requisition, product_receipt, stock_count, master_data, payroll_allocation, depreciation_run, asset_change, production_plan_draft, rework_order_draft, outsourcing_order_draft, traceability_report_draft, line_side_replenishment_draft, report_interpretation]
             accountSetId:
               type: string
             runNo:

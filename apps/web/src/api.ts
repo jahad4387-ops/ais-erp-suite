@@ -104,6 +104,7 @@ const errorCodeText: Record<string, string> = {
   INVENTORY_ITEM_CODE_EXISTS: '存货编码已存在，请换一个编码。',
   BATCH_COST_METHOD_CONFLICT: '批次管理的存货不能使用移动平均计价，请选择先进先出或个别计价。',
   VOUCHER_PERIOD_CLOSED: '凭证所属会计期间必须先打开。',
+  AGENT_DRAFT_PERIOD_CLOSED: '会计期间已关闭或锁定，不能生成影响库存或成本的 Agent 草稿。',
   VOUCHER_ATTACHMENT_NOT_AVAILABLE: '凭证附件未就绪，不能记账。',
   VOUCHER_NOT_FOUND: '未找到凭证。',
   VOUCHER_UPDATE_CONFLICT: '凭证已被其他用户修改，请刷新后重试。',
