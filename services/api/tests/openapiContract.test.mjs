@@ -969,6 +969,11 @@ test("Agent-facing endpoints expose dry-run and evidence fields", () => {
   assert.match(contract, /remainingCount/, "Agent approval progress must expose remaining approvals.");
   assert.match(contract, /userTokenConfirmed/, "Agent execution request must expose explicit user token confirmation.");
   assert.match(contract, /executionResult/, "AgentAction schema must expose execution result.");
+  assert.match(contract, /business_draft_created/, "AgentAction execution must document created business drafts.");
+  assert.match(contract, /createdObjects/, "AgentAction execution must expose created business object references.");
+  assert.match(contract, /business_draft_reversed/, "AgentAction reversal must document business draft rollback.");
+  assert.match(contract, /AGENT_ACTION_BLOCKED_BY_DRY_RUN/, "Agent execution must document dry-run blocking protection.");
+  assert.match(contract, /AGENT_ACTION_REVERSAL_BLOCKED/, "Agent reversal must document changed-draft protection.");
   assert.match(contract, /reversed/, "AgentAction schema must expose reversal state.");
   assert.match(contract, /reversalResult/, "AgentAction schema must expose reversal result.");
   assert.match(contract, /evidenceSnapshots/, "AgentAction schema must expose immutable evidence snapshots.");

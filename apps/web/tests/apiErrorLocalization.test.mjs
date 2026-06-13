@@ -30,6 +30,10 @@ test("api errors shown to users are localized to Chinese", () => {
   assert.match(source, /BATCH_COST_METHOD_CONFLICT/);
   assert.match(source, /AGENT_DRAFT_PERIOD_CLOSED/);
   assert.match(source, /会计期间已关闭或锁定，不能生成影响库存或成本的 Agent 草稿。/);
+  assert.match(source, /AGENT_ACTION_BLOCKED_BY_DRY_RUN/);
+  assert.match(source, /Agent 试算仍有阻断项，不能执行。/);
+  assert.match(source, /AGENT_ACTION_REVERSAL_BLOCKED/);
+  assert.match(source, /业务草稿已被下达或修改，不能由 Agent 自动撤销。/);
   assert.match(source, /批次管理的存货不能使用移动平均计价/);
   assert.match(source, /errorMessagePatterns/);
   assert.match(source, /code === 'BUSINESS_RULE_FAILED'/);

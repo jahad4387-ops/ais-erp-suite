@@ -97,6 +97,9 @@ const phase6AgentActionPersistenceMigrationText = readMigrationText(
 const phase6SecurityEventsMigrationText = readMigrationText(
   "../prisma/migrations/20260612103000_phase6_security_events/migration.sql"
 );
+const supplyChainProductionPlanMigrationText = readMigrationText(
+  "../prisma/migrations/20260613110000_supply_chain_production_plan/migration.sql"
+);
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 function readMigrationText(relativePath) {
@@ -609,4 +612,15 @@ test("Phase 6 security events migration creates persistent anomaly audit table",
   assert.match(phase6SecurityEventsMigrationText, /CREATE INDEX "SecurityEvent_accountSetId_createdAt_idx"/);
   assert.match(phase6SecurityEventsMigrationText, /CREATE INDEX "SecurityEvent_eventType_severity_idx"/);
   assert.match(phase6SecurityEventsMigrationText, /CREATE INDEX "SecurityEvent_actorId_createdAt_idx"/);
+});
+
+test("Supply-chain production plan migration persists Agent-linked plan drafts", () => {
+  for (const table of ["ProductionPlan", "ProductionPlanLine"]) {
+    assert.match(supplyChainProductionPlanMigrationText, new RegExp(`CREATE TABLE "${table}"`), `${table} must be created.`);
+  }
+  assert.match(supplyChainProductionPlanMigrationText, /"agentActionId" TEXT/);
+  assert.match(supplyChainProductionPlanMigrationText, /"sourceObjectType" TEXT/);
+  assert.match(supplyChainProductionPlanMigrationText, /"sourceObjectId" TEXT/);
+  assert.match(supplyChainProductionPlanMigrationText, /CREATE UNIQUE INDEX "ProductionPlan_accountSetId_planNo_key"/);
+  assert.match(supplyChainProductionPlanMigrationText, /CREATE INDEX "ProductionPlan_agentActionId_idx"/);
 });

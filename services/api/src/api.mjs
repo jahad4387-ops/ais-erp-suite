@@ -2846,7 +2846,16 @@ function collectionResponse(rows) {
   };
 }
 
-function createProductionPlan(state, body, actorId) {
+function nextProductionPlanNo(plans) {
+  const existing = new Set(plans.map((plan) => plan.planNo));
+  let sequence = 1;
+  while (existing.has(`MPS-${sequence}`)) {
+    sequence += 1;
+  }
+  return `MPS-${sequence}`;
+}
+
+async function createProductionPlan(state, body, actorId) {
   if (!Array.isArray(body.lines) || body.lines.length === 0) {
     throw new Error("Production plan lines are required.");
   }
@@ -2869,22 +2878,36 @@ function createProductionPlan(state, body, actorId) {
       status: line.status ?? "planned"
     };
   });
+  const existingPlans = state.config.platformStore?.listProductionPlans
+    ? await state.config.platformStore.listProductionPlans(body.accountSetId)
+    : listByAccountSet(state.productionPlans, body.accountSetId, "planNo");
   const plan = {
     id: planId,
     accountSetId: body.accountSetId,
-    planNo: body.planNo ?? `MPS-${state.productionPlans.size + 1}`,
+    planNo: body.planNo ?? nextProductionPlanNo(existingPlans),
     fiscalYear: Number(body.fiscalYear),
     periodNo: Number(body.periodNo),
     status: body.status ?? "draft",
     sourceType: body.sourceType ?? "manual",
+    sourceObjectType: body.sourceObjectType ?? null,
+    sourceObjectId: body.sourceObjectId ?? null,
+    agentActionId: body.agentActionId ?? null,
     createdBy: body.createdBy ?? actorId,
     createdAt: "now",
     updatedAt: "now",
     lines
   };
-  state.productionPlans.set(plan.id, plan);
-  appendAuditLog(state, { actorId: plan.createdBy, action: "production_plan.create", objectType: "production_plan", objectId: plan.id });
-  return plan;
+  const savedPlan = state.config.platformStore?.createProductionPlan
+    ? await state.config.platformStore.createProductionPlan(plan)
+    : plan;
+  state.productionPlans.set(savedPlan.id, savedPlan);
+  appendAuditLog(state, {
+    actorId: savedPlan.createdBy,
+    action: "production_plan.create",
+    objectType: "production_plan",
+    objectId: savedPlan.id
+  });
+  return savedPlan;
 }
 
 function buildWorkOrderDraftsFromPlan(plan, body = {}) {
@@ -8181,6 +8204,50 @@ async function approveAgentActionRecord(state, action, body, actorId) {
   return updated;
 }
 
+async function executeAgentBusinessDraft(state, action, executedBy) {
+  if (action.toolName !== "generate_production_plan") return null;
+  const blockingErrors = action.dryRunResult?.blockingErrors ?? [];
+  if (blockingErrors.length > 0) {
+    const error = new Error("Agent action dry-run contains blocking errors and cannot be executed.");
+    error.code = "AGENT_ACTION_BLOCKED_BY_DRY_RUN";
+    throw error;
+  }
+  const draft = action.dryRunResult?.draftPayload?.productionPlanDraft;
+  if (!draft || !Array.isArray(draft.lines) || draft.lines.length === 0) {
+    const error = new Error("Agent production plan dry-run does not contain executable plan lines.");
+    error.code = "AGENT_ACTION_EXECUTION_PAYLOAD_INVALID";
+    throw error;
+  }
+  const plan = await createProductionPlan(
+    state,
+    {
+      accountSetId: action.accountSetId,
+      fiscalYear: draft.fiscalYear,
+      periodNo: draft.periodNo,
+      status: "draft",
+      sourceType: "agent",
+      sourceObjectType: draft.sourceObjectType ?? null,
+      sourceObjectId: draft.sourceObjectId ?? null,
+      agentActionId: action.id,
+      createdBy: executedBy,
+      lines: draft.lines
+    },
+    executedBy
+  );
+  return {
+    status: "business_draft_created",
+    businessMutation: true,
+    createdObjects: [
+      {
+        objectType: "production_plan",
+        objectId: plan.id,
+        objectNo: plan.planNo,
+        status: plan.status
+      }
+    ]
+  };
+}
+
 async function executeAgentActionRecord(state, action, body, actorId) {
   if (action.status !== "approved") {
     throw new Error("Only approved Agent actions can be executed.");
@@ -8209,13 +8276,15 @@ async function executeAgentActionRecord(state, action, body, actorId) {
     throw error;
   }
   await verifyAgentEvidenceSnapshots(state, action, executedBy);
+  const businessExecution = await executeAgentBusinessDraft(state, action, executedBy);
   const executionResult = {
     status: "recorded_without_business_mutation",
     executedBy,
     executedAt: "now",
     toolName: action.toolName,
     businessMutation: false,
-    userTokenConfirmed: body.userTokenConfirmed === true
+    userTokenConfirmed: body.userTokenConfirmed === true,
+    ...(businessExecution ?? {})
   };
   const updated = {
     ...action,
@@ -8232,7 +8301,57 @@ async function executeAgentActionRecord(state, action, body, actorId) {
   return updated;
 }
 
-function reverseAgentActionRecord(state, action, body, actorId) {
+async function reverseAgentBusinessDraft(state, action, reversedBy) {
+  if (action.executionResult?.businessMutation !== true) return null;
+  const createdObjects = action.executionResult.createdObjects ?? [];
+  const productionPlans = createdObjects.filter((item) => item.objectType === "production_plan");
+  if (productionPlans.length === 0) return null;
+
+  const plans = [];
+  for (const item of productionPlans) {
+    const plan =
+      state.productionPlans.get(item.objectId) ??
+      (state.config.platformStore?.findProductionPlan
+        ? await state.config.platformStore.findProductionPlan(item.objectId)
+        : null);
+    if (!plan || plan.agentActionId !== action.id) {
+      const error = new Error("Agent-created production plan could not be verified for reversal.");
+      error.code = "AGENT_ACTION_REVERSAL_TARGET_INVALID";
+      throw error;
+    }
+    if (plan.status !== "draft") {
+      const error = new Error("Only an unchanged draft production plan can be reversed automatically.");
+      error.code = "AGENT_ACTION_REVERSAL_BLOCKED";
+      throw error;
+    }
+    plans.push(plan);
+  }
+
+  for (const plan of plans) {
+    if (state.config.platformStore?.deleteProductionPlanDraft) {
+      await state.config.platformStore.deleteProductionPlanDraft(plan.id, action.id);
+    }
+    state.productionPlans.delete(plan.id);
+    appendAuditLog(state, {
+      actorId: reversedBy,
+      action: "production_plan.agent_reverse",
+      objectType: "production_plan",
+      objectId: plan.id
+    });
+  }
+  return {
+    status: "business_draft_reversed",
+    businessMutation: true,
+    reversedObjects: plans.map((plan) => ({
+      objectType: "production_plan",
+      objectId: plan.id,
+      objectNo: plan.planNo,
+      status: "deleted"
+    }))
+  };
+}
+
+async function reverseAgentActionRecord(state, action, body, actorId) {
   if (action.status !== "executed") {
     throw new Error("Only executed Agent actions can be reversed.");
   }
@@ -8241,6 +8360,7 @@ function reverseAgentActionRecord(state, action, body, actorId) {
     typeof body.reversalReason === "string" && body.reversalReason.trim() !== ""
       ? body.reversalReason
       : "Agent action reversed by user request.";
+  const businessReversal = await reverseAgentBusinessDraft(state, action, reversedBy);
   const reversalResult = {
     status: "reversed_without_business_mutation",
     reversedBy,
@@ -8248,7 +8368,8 @@ function reverseAgentActionRecord(state, action, body, actorId) {
     reversalReason,
     originalExecutionResult: action.executionResult ?? null,
     toolName: action.toolName,
-    businessMutation: false
+    businessMutation: false,
+    ...(businessReversal ?? {})
   };
   const updated = {
     ...action,
@@ -12069,7 +12190,13 @@ async function route(request, state) {
       if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
         return accountSetAccessError(state, actorId, accountSetId);
       }
-      return jsonResponse(200, collectionResponse(listByAccountSet(state.productionPlans, accountSetId, "planNo")));
+      const plans = platformStore?.listProductionPlans
+        ? await platformStore.listProductionPlans(accountSetId)
+        : listByAccountSet(state.productionPlans, accountSetId, "planNo");
+      for (const plan of plans) {
+        state.productionPlans.set(plan.id, plan);
+      }
+      return jsonResponse(200, collectionResponse(plans));
     }
 
     if (request.method === "POST") {
@@ -12077,7 +12204,7 @@ async function route(request, state) {
         return accountSetAccessError(state, actorId, body.accountSetId);
       }
       try {
-        return jsonResponse(201, createProductionPlan(state, body, actorId));
+        return jsonResponse(201, await createProductionPlan(state, body, actorId));
       } catch (error) {
         return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
       }
@@ -12087,7 +12214,9 @@ async function route(request, state) {
   if (segments.length === 3 && segments[0] === "production-plans" && segments[2] === "generate-work-orders" && request.method === "POST") {
     const actorId = actorIdFor(request, state);
     const planId = decodedPathId(segments[1]);
-    const plan = state.productionPlans.get(planId);
+    const plan =
+      state.productionPlans.get(planId) ??
+      (platformStore?.findProductionPlan ? await platformStore.findProductionPlan(planId) : null);
     if (!plan) {
       return errorResponse(404, "PRODUCTION_PLAN_NOT_FOUND", "Production plan was not found.");
     }
@@ -16663,7 +16792,7 @@ async function route(request, state) {
             ? await approveAgentActionRecord(state, currentAction, body, actorId)
             : segments[2] === "execute"
               ? await executeAgentActionRecord(state, currentAction, body, actorId)
-              : reverseAgentActionRecord(state, currentAction, body, actorId);
+              : await reverseAgentActionRecord(state, currentAction, body, actorId);
       const savedAction = await persistAgentActionForRoute(state, updated);
       appendAuditLog(state, {
         actorId: body.submittedBy ?? body.approvedBy ?? body.executedBy ?? body.reversedBy ?? actorId,

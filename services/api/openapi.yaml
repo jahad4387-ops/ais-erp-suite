@@ -4331,7 +4331,7 @@ paths:
   /agent-actions/{agentActionId}/execute:
     post:
       summary: Execute an approved Agent action.
-      description: Execution can only be triggered by a real user confirmation when the action approval policy sets executeRequiresUserToken.
+      description: Execution can only be triggered by a real user confirmation when the action approval policy sets executeRequiresUserToken. An approved generate_production_plan action creates a linked draft ProductionPlan and records its createdObjects reference; dry-run blocking errors prevent execution.
       x-permission: agent_action.execute
       x-risk-level: high
       x-agent-allowed: false
@@ -4351,11 +4351,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgentAction"
+        "409":
+          description: AGENT_ACTION_BLOCKED_BY_DRY_RUN, AGENT_ACTION_EXECUTION_PAYLOAD_INVALID, or an approval/evidence conflict.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /agent-actions/{agentActionId}/reverse:
     post:
       summary: Reverse an executed Agent action through the audit trail.
-      description: Records a compensating reversal event for an executed Agent action. It does not silently delete or mutate prior audit history; business correction still follows the relevant domain workflow.
+      description: Records a compensating reversal event without deleting audit history. An untouched Agent-created production plan draft can be removed and recorded as business_draft_reversed. AGENT_ACTION_REVERSAL_BLOCKED prevents automatic deletion after the plan is released or changed.
       x-permission: agent_action.execute
       x-risk-level: high
       x-agent-allowed: false
@@ -4375,6 +4381,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AgentAction"
+        "409":
+          description: AGENT_ACTION_REVERSAL_BLOCKED, AGENT_ACTION_REVERSAL_TARGET_INVALID, or an action state conflict.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /agent-actions/{agentActionId}/replay:
     get:
@@ -10343,6 +10355,15 @@ components:
           enum: [draft, planned, released, closed]
         sourceType:
           type: string
+        sourceObjectType:
+          type: string
+          nullable: true
+        sourceObjectId:
+          type: string
+          nullable: true
+        agentActionId:
+          type: string
+          nullable: true
         createdBy:
           type: string
         createdAt:
@@ -14501,15 +14522,76 @@ components:
         approvalProgress:
           $ref: "#/components/schemas/AgentApprovalProgress"
         executionResult:
-          type: object
-          nullable: true
-          additionalProperties: true
+          oneOf:
+            - $ref: "#/components/schemas/AgentActionExecutionResult"
+            - type: "null"
         reversalResult:
-          type: object
-          nullable: true
-          additionalProperties: true
+          oneOf:
+            - $ref: "#/components/schemas/AgentActionReversalResult"
+            - type: "null"
         auditSummary:
           $ref: "#/components/schemas/AgentActionAuditSummary"
+
+    AgentBusinessObjectReference:
+      type: object
+      required: [objectType, objectId, status]
+      properties:
+        objectType:
+          type: string
+          enum: [production_plan]
+        objectId:
+          type: string
+        objectNo:
+          type: string
+          nullable: true
+        status:
+          type: string
+
+    AgentActionExecutionResult:
+      type: object
+      required: [status, executedBy, executedAt, toolName, businessMutation, userTokenConfirmed]
+      properties:
+        status:
+          type: string
+          enum: [recorded_without_business_mutation, business_draft_created]
+        executedBy:
+          type: string
+        executedAt:
+          type: string
+        toolName:
+          type: string
+        businessMutation:
+          type: boolean
+        userTokenConfirmed:
+          type: boolean
+        createdObjects:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentBusinessObjectReference"
+
+    AgentActionReversalResult:
+      type: object
+      required: [status, reversedBy, reversedAt, reversalReason, toolName, businessMutation]
+      properties:
+        status:
+          type: string
+          enum: [reversed_without_business_mutation, business_draft_reversed]
+        reversedBy:
+          type: string
+        reversedAt:
+          type: string
+        reversalReason:
+          type: string
+        originalExecutionResult:
+          $ref: "#/components/schemas/AgentActionExecutionResult"
+        toolName:
+          type: string
+        businessMutation:
+          type: boolean
+        reversedObjects:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentBusinessObjectReference"
 
     AgentActionQueue:
       type: object

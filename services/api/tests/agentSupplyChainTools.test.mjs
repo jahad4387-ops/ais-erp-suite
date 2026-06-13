@@ -1049,3 +1049,253 @@ test("Agent draft conversion blocks inventory-impacting production drafts in clo
   assert.equal(api.state.materialRequisitions.size, 0);
   assert.equal(api.state.agentDraftCandidates.get(candidate.body.id).status, "candidate");
 });
+
+test("approved production plan Agent action creates and reverses a linked business draft", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "SCAPX",
+      name: "Supply Chain Agent Plan Execution",
+      companyName: "Supply Chain Agent Plan Execution Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 6
+    },
+    "agent-production-plan-execution-account"
+  );
+  const accountSetId = accountSet.body.id;
+  api.state.salesOrders.set("sales-order:agent-plan", {
+    id: "sales-order:agent-plan",
+    accountSetId,
+    orderNo: "SO-AGENT-PLAN",
+    orderDate: "2026-06-13",
+    requiredDate: "2026-06-20",
+    status: "approved",
+    lines: [
+      {
+        id: "sales-order-line:agent-plan:1",
+        lineNo: 1,
+        itemCode: "FG-AGENT-PLAN",
+        itemName: "Agent Planned Product",
+        quantity: 12,
+        shippedQuantity: 2
+      }
+    ]
+  });
+
+  const invoked = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_production_plan/invoke",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      sourceObjectType: "sales_order",
+      sourceObjectId: "sales-order:agent-plan",
+      dryRun: true,
+      evidenceRefs: ["sales-order:agent-plan"],
+      payload: { plannedStartDate: "2026-06-14" },
+      requestedBy: "planner-agent"
+    },
+    "agent-production-plan-execution-invoke"
+  );
+  const actionId = invoked.body.result.id;
+  assert.equal(invoked.status, 201);
+  assert.equal(api.state.productionPlans.size, 0);
+
+  const submitted = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/submit`,
+    { submittedBy: "planner-agent", approvalComment: "Submit reviewed production plan." },
+    "agent-production-plan-execution-submit"
+  );
+  const approved = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/approve`,
+    { approvedBy: "production-manager", approvalComment: "Production plan accepted." },
+    "agent-production-plan-execution-approve"
+  );
+  const executed = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/execute`,
+    { executedBy: "production-manager", userTokenConfirmed: true },
+    "agent-production-plan-execution-execute"
+  );
+
+  assert.equal(submitted.status, 200);
+  assert.equal(approved.body.status, "approved");
+  assert.equal(executed.status, 200);
+  assert.equal(executed.body.executionResult.status, "business_draft_created");
+  assert.equal(executed.body.executionResult.businessMutation, true);
+  assert.equal(executed.body.auditSummary.mutationState, "executed_with_business_mutation");
+  assert.equal(api.state.productionPlans.size, 1);
+  const [plan] = [...api.state.productionPlans.values()];
+  assert.equal(plan.status, "draft");
+  assert.equal(plan.sourceType, "agent");
+  assert.equal(plan.sourceObjectType, "sales_order");
+  assert.equal(plan.sourceObjectId, "sales-order:agent-plan");
+  assert.equal(plan.agentActionId, actionId);
+  assert.equal(plan.lines[0].plannedQuantity, 10);
+  assert.deepEqual(executed.body.executionResult.createdObjects, [
+    { objectType: "production_plan", objectId: plan.id, objectNo: plan.planNo, status: "draft" }
+  ]);
+
+  plan.status = "released";
+  const blockedReversal = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/reverse`,
+    { reversedBy: "production-manager", reversalReason: "Released plans must not be deleted." },
+    "agent-production-plan-execution-reverse-blocked"
+  );
+  assert.equal(blockedReversal.status, 409);
+  assert.equal(blockedReversal.body.code, "AGENT_ACTION_REVERSAL_BLOCKED");
+  assert.equal(api.state.productionPlans.has(plan.id), true);
+
+  plan.status = "draft";
+
+  const reversed = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/reverse`,
+    { reversedBy: "production-manager", reversalReason: "Replace with revised manual plan." },
+    "agent-production-plan-execution-reverse"
+  );
+
+  assert.equal(reversed.status, 200);
+  assert.equal(reversed.body.reversalResult.status, "business_draft_reversed");
+  assert.equal(reversed.body.reversalResult.businessMutation, true);
+  assert.equal(reversed.body.auditSummary.mutationState, "reversed_with_business_mutation");
+  assert.equal(api.state.productionPlans.size, 0);
+  assert.deepEqual(reversed.body.reversalResult.reversedObjects, [
+    { objectType: "production_plan", objectId: plan.id, objectNo: plan.planNo, status: "deleted" }
+  ]);
+});
+
+test("Agent-created production plans persist across API restarts and reversal", async () => {
+  const persistedPlans = new Map();
+  const platformStore = {
+    createProductionPlan: async (plan) => {
+      persistedPlans.set(plan.id, structuredClone(plan));
+      return structuredClone(plan);
+    },
+    listProductionPlans: async (accountSetId) =>
+      [...persistedPlans.values()].filter((plan) => plan.accountSetId === accountSetId).map((plan) => structuredClone(plan)),
+    findProductionPlan: async (identifier) => {
+      const plan = [...persistedPlans.values()].find((item) => item.id === identifier || item.planNo === identifier);
+      return plan ? structuredClone(plan) : null;
+    },
+    deleteProductionPlanDraft: async (id, agentActionId) => {
+      const plan = persistedPlans.get(id);
+      if (!plan || plan.status !== "draft" || plan.agentActionId !== agentActionId) {
+        const error = new Error("Only the unchanged Agent-created production plan draft can be deleted.");
+        error.code = "AGENT_ACTION_REVERSAL_BLOCKED";
+        throw error;
+      }
+      persistedPlans.delete(id);
+      return structuredClone(plan);
+    }
+  };
+  const api = createApi({ platformStore });
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "SCAPR",
+      name: "Supply Chain Agent Plan Restart",
+      companyName: "Supply Chain Agent Plan Restart Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 6
+    },
+    "agent-production-plan-restart-account"
+  );
+  const accountSetId = accountSet.body.id;
+  api.state.salesOrders.set("sales-order:agent-plan-restart", {
+    id: "sales-order:agent-plan-restart",
+    accountSetId,
+    orderNo: "SO-AGENT-RESTART",
+    orderDate: "2026-06-13",
+    requiredDate: "2026-06-21",
+    status: "approved",
+    lines: [{ id: "sales-order-line:agent-plan-restart:1", lineNo: 1, itemCode: "FG-RESTART", itemName: "Restart Product", quantity: 4 }]
+  });
+  const invoked = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_production_plan/invoke",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      sourceObjectType: "sales_order",
+      sourceObjectId: "sales-order:agent-plan-restart",
+      dryRun: true,
+      evidenceRefs: ["sales-order:agent-plan-restart"],
+      payload: {},
+      requestedBy: "planner-agent"
+    },
+    "agent-production-plan-restart-invoke"
+  );
+  const actionId = invoked.body.result.id;
+  await request(api, "POST", `/agent-actions/${encodeURIComponent(actionId)}/submit`, { submittedBy: "planner-agent" }, "agent-production-plan-restart-submit");
+  await request(api, "POST", `/agent-actions/${encodeURIComponent(actionId)}/approve`, { approvedBy: "production-manager" }, "agent-production-plan-restart-approve");
+  const executed = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/execute`,
+    { executedBy: "production-manager", userTokenConfirmed: true },
+    "agent-production-plan-restart-execute"
+  );
+  assert.equal(executed.status, 200);
+
+  const restartedApi = createApi({ platformStore });
+  restartedApi.state.accountSets.set(accountSetId, api.state.accountSets.get(accountSetId));
+  const manualPlan = await request(
+    restartedApi,
+    "POST",
+    "/production-plans",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      status: "draft",
+      sourceType: "manual",
+      createdBy: "planner",
+      lines: [{ productItemCode: "FG-MANUAL", productItemName: "Manual Product", plannedQuantity: 2 }]
+    },
+    "agent-production-plan-restart-manual-plan"
+  );
+  assert.equal(manualPlan.status, 201);
+  assert.notEqual(manualPlan.body.planNo, executed.body.executionResult.createdObjects[0].objectNo);
+
+  const persistedList = await request(restartedApi, "GET", `/production-plans?accountSetId=${encodeURIComponent(accountSetId)}`);
+  assert.equal(persistedList.status, 200);
+  assert.equal(persistedList.body.total, 2);
+  assert.ok(persistedList.body.items.some((plan) => plan.agentActionId === actionId));
+
+  const reversed = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/reverse`,
+    { reversedBy: "production-manager", reversalReason: "Withdraw persisted Agent plan." },
+    "agent-production-plan-restart-reverse"
+  );
+  assert.equal(reversed.status, 200);
+
+  const afterReverseApi = createApi({ platformStore });
+  afterReverseApi.state.accountSets.set(accountSetId, api.state.accountSets.get(accountSetId));
+  const afterReverseList = await request(afterReverseApi, "GET", `/production-plans?accountSetId=${encodeURIComponent(accountSetId)}`);
+  assert.equal(afterReverseList.body.total, 1);
+  assert.equal(afterReverseList.body.items[0].id, manualPlan.body.id);
+});

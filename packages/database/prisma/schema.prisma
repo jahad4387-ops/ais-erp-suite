@@ -62,6 +62,7 @@ model AccountSet {
   inventoryTransfers InventoryTransfer[]
   stockCounts        StockCount[]
   workOrders         WorkOrder[]
+  productionPlans    ProductionPlan[]
   materialRequisitions MaterialRequisition[]
   productReceipts    ProductReceipt[]
   mockCostInputs     MockCostInput[]
@@ -1409,6 +1410,47 @@ model WorkOrder {
   @@index([accountSetId, status])
 }
 
+model ProductionPlan {
+  id               String   @id @default(uuid())
+  accountSetId     String
+  planNo           String
+  fiscalYear       Int
+  periodNo         Int
+  status           String   @default("draft")
+  sourceType       String   @default("manual")
+  sourceObjectType String?
+  sourceObjectId   String?
+  agentActionId    String?
+  createdBy        String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  accountSet  AccountSet   @relation(fields: [accountSetId], references: [id])
+  agentAction AgentAction? @relation(fields: [agentActionId], references: [id])
+  lines       ProductionPlanLine[]
+
+  @@unique([accountSetId, planNo])
+  @@index([accountSetId, fiscalYear, periodNo, status])
+  @@index([agentActionId])
+}
+
+model ProductionPlanLine {
+  id                String   @id @default(uuid())
+  productionPlanId  String
+  lineNo            Int
+  productItemId     String?
+  productItemCode   String
+  productItemName   String?
+  plannedQuantity   Float
+  plannedStartDate  DateTime?
+  plannedFinishDate DateTime?
+  status            String   @default("planned")
+
+  productionPlan ProductionPlan @relation(fields: [productionPlanId], references: [id], onDelete: Cascade)
+
+  @@unique([productionPlanId, lineNo])
+}
+
 model MaterialRequisition {
   id               String   @id @default(uuid())
   accountSetId     String
@@ -2506,6 +2548,7 @@ model AgentAction {
   accountSet AccountSet @relation(fields: [accountSetId], references: [id])
   approvals  AgentApproval[]
   replayEvents AgentReplayEvent[]
+  productionPlans ProductionPlan[]
 
   @@index([accountSetId, status])
   @@index([accountSetId, riskLevel])

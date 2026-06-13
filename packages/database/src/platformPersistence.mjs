@@ -93,6 +93,38 @@ function inventoryItemToDto(item) {
   };
 }
 
+function productionPlanToDto(plan) {
+  return {
+    id: plan.id,
+    accountSetId: plan.accountSetId,
+    planNo: plan.planNo,
+    fiscalYear: plan.fiscalYear,
+    periodNo: plan.periodNo,
+    status: plan.status,
+    sourceType: plan.sourceType,
+    sourceObjectType: plan.sourceObjectType ?? null,
+    sourceObjectId: plan.sourceObjectId ?? null,
+    agentActionId: plan.agentActionId ?? null,
+    createdBy: plan.createdBy,
+    createdAt: plan.createdAt instanceof Date ? plan.createdAt.toISOString() : plan.createdAt,
+    updatedAt: plan.updatedAt instanceof Date ? plan.updatedAt.toISOString() : plan.updatedAt,
+    lines: (plan.lines ?? [])
+      .map((line) => ({
+        id: line.id,
+        productionPlanId: line.productionPlanId ?? plan.id,
+        lineNo: line.lineNo,
+        productItemId: line.productItemId ?? null,
+        productItemCode: line.productItemCode,
+        productItemName: line.productItemName ?? null,
+        plannedQuantity: line.plannedQuantity,
+        plannedStartDate: dateOnly(line.plannedStartDate),
+        plannedFinishDate: dateOnly(line.plannedFinishDate),
+        status: line.status
+      }))
+      .sort((left, right) => left.lineNo - right.lineNo)
+  };
+}
+
 function orderLineToDto(line) {
   return {
     id: line.id,
@@ -1726,6 +1758,69 @@ export function createPlatformPersistence(prisma) {
         }
       });
       return item ? inventoryItemToDto(item) : null;
+    },
+
+    async createProductionPlan(plan) {
+      const saved = await prisma.productionPlan.create({
+        data: {
+          id: plan.id,
+          accountSetId: plan.accountSetId,
+          planNo: plan.planNo,
+          fiscalYear: plan.fiscalYear,
+          periodNo: plan.periodNo,
+          status: plan.status ?? "draft",
+          sourceType: plan.sourceType ?? "manual",
+          sourceObjectType: plan.sourceObjectType ?? null,
+          sourceObjectId: plan.sourceObjectId ?? null,
+          agentActionId: plan.agentActionId ?? null,
+          createdBy: plan.createdBy,
+          createdAt: dateTime(plan.createdAt),
+          updatedAt: dateTime(plan.updatedAt),
+          lines: {
+            create: (plan.lines ?? []).map((line) => ({
+              id: line.id,
+              lineNo: line.lineNo,
+              productItemId: line.productItemId ?? null,
+              productItemCode: line.productItemCode,
+              productItemName: line.productItemName ?? null,
+              plannedQuantity: line.plannedQuantity,
+              plannedStartDate: line.plannedStartDate ? dateTime(line.plannedStartDate) : null,
+              plannedFinishDate: line.plannedFinishDate ? dateTime(line.plannedFinishDate) : null,
+              status: line.status ?? "planned"
+            }))
+          }
+        },
+        include: { lines: true }
+      });
+      return productionPlanToDto(saved);
+    },
+
+    async listProductionPlans(accountSetId) {
+      const plans = await prisma.productionPlan.findMany({
+        where: accountSetId ? { accountSetId } : undefined,
+        include: { lines: true }
+      });
+      return plans.map(productionPlanToDto).sort((left, right) => left.planNo.localeCompare(right.planNo));
+    },
+
+    async findProductionPlan(identifier) {
+      const plan = await prisma.productionPlan.findFirst({
+        where: { OR: [{ id: identifier }, { planNo: identifier }] },
+        include: { lines: true }
+      });
+      return plan ? productionPlanToDto(plan) : null;
+    },
+
+    async deleteProductionPlanDraft(id, agentActionId) {
+      const plan = await prisma.productionPlan.findUnique({ where: { id }, include: { lines: true } });
+      if (!plan) return null;
+      if (plan.status !== "draft" || plan.agentActionId !== agentActionId) {
+        const error = new Error("Only the unchanged Agent-created production plan draft can be deleted.");
+        error.code = "AGENT_ACTION_REVERSAL_BLOCKED";
+        throw error;
+      }
+      const deleted = await prisma.productionPlan.delete({ where: { id }, include: { lines: true } });
+      return productionPlanToDto(deleted);
     },
 
     async createPurchaseOrder(order) {

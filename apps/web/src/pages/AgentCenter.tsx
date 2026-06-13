@@ -1654,6 +1654,28 @@ export const AgentCenter: React.FC = () => {
                   </pre>
                 }
               />
+              {agentAction.executionResult ? (
+                <Alert
+                  type="success"
+                  showIcon
+                  title="Agent Action 执行结果"
+                  description={
+                    <Space vertical style={{ width: '100%' }}>
+                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
+                        {JSON.stringify(agentAction.executionResult, null, 2)}
+                      </pre>
+                      {(agentAction.executionResult.createdObjects ?? []).map((record: any) => (
+                        <Button
+                          key={`${record.objectType}:${record.objectId}`}
+                          onClick={() => record.objectType === 'production_plan' && navigate('/production-plans')}
+                        >
+                          {`查看 ${record.objectNo ?? record.objectId}`}
+                        </Button>
+                      ))}
+                    </Space>
+                  }
+                />
+              ) : null}
               {agentAction.reversalResult ? (
                 <Alert
                   type="warning"

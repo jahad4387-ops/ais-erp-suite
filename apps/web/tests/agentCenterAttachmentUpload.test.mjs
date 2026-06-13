@@ -275,6 +275,9 @@ test("agent center exposes Phase 6 Agent Action approval and replay workflow", (
   assert.match(source, /updateAgentAction\('approve'\)/);
   assert.match(source, /updateAgentAction\('execute'\)/);
   assert.match(source, /updateAgentAction\('reverse'\)/);
+  assert.match(source, /agentAction\.executionResult/);
+  assert.match(source, /Agent Action 执行结果/);
+  assert.match(source, /createdObjects/);
   assert.match(source, /\/agent-actions\/\$\{encodeURIComponent\(agentAction\.id\)\}\/replay/);
   assert.match(source, /Replay 回放/);
   assert.match(source, /title: '载荷'/);

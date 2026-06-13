@@ -14,6 +14,7 @@ function createFakePrisma() {
   const accountSetUsers = new Map();
   const partners = new Map();
   const inventoryItems = new Map();
+  const productionPlans = new Map();
   const purchaseOrders = new Map();
   const salesOrders = new Map();
   const purchaseReceipts = new Map();
@@ -223,6 +224,40 @@ function createFakePrisma() {
         [...inventoryItems.values()].find(
           (item) => where.OR.some((condition) => item.id === condition.id || item.code === condition.code)
         ) ?? null
+    },
+    productionPlan: {
+      create: async ({ data, include }) => {
+        const plan = {
+          ...data,
+          lines: data.lines.create.map((line) => ({ ...line }))
+        };
+        productionPlans.set(plan.id, plan);
+        return include?.lines ? plan : { ...plan, lines: undefined };
+      },
+      findMany: async ({ where, include } = {}) => {
+        const rows = [...productionPlans.values()].filter(
+          (plan) => !where?.accountSetId || plan.accountSetId === where.accountSetId
+        );
+        return rows.map((plan) => (include?.lines ? plan : { ...plan, lines: undefined }));
+      },
+      findFirst: async ({ where, include }) => {
+        const plan = [...productionPlans.values()].find((item) =>
+          where.OR.some((condition) => item.id === condition.id || item.planNo === condition.planNo)
+        );
+        if (!plan) return null;
+        return include?.lines ? plan : { ...plan, lines: undefined };
+      },
+      findUnique: async ({ where, include }) => {
+        const plan = productionPlans.get(where.id) ?? null;
+        if (!plan) return null;
+        return include?.lines ? plan : { ...plan, lines: undefined };
+      },
+      delete: async ({ where, include }) => {
+        const plan = productionPlans.get(where.id) ?? null;
+        if (!plan) return null;
+        productionPlans.delete(where.id);
+        return include?.lines ? plan : { ...plan, lines: undefined };
+      }
     },
     purchaseOrder: {
       create: async ({ data, include }) => {
@@ -1338,6 +1373,61 @@ test("Prisma platform persistence stores Phase 3 inventory item master data", as
   );
   assert.equal(found.code, "RM001");
   assert.equal(found.shelfLifeDays, 180);
+});
+
+test("Prisma platform persistence stores and reverses Agent-linked production plan drafts", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  const accountSet = await store.createAccountSet({
+    id: "account-set:production-plan",
+    code: "SCPP",
+    name: "Supply Chain Production Plan",
+    companyName: "Supply Chain Production Plan Co.",
+    baseCurrency: "CNY",
+    accountingStandard: "Small Business Accounting Standards",
+    startYear: 2026,
+    startPeriod: 6,
+    status: "enabled",
+    createdBy: "system"
+  });
+  const plan = await store.createProductionPlan({
+    id: "production-plan:persisted-agent",
+    accountSetId: accountSet.id,
+    planNo: "MPS-AGENT-001",
+    fiscalYear: 2026,
+    periodNo: 6,
+    status: "draft",
+    sourceType: "agent",
+    sourceObjectType: "sales_order",
+    sourceObjectId: "sales-order:source",
+    agentActionId: "agent-action:source",
+    createdBy: "production-manager",
+    createdAt: "2026-06-13",
+    updatedAt: "2026-06-13",
+    lines: [
+      {
+        id: "production-plan-line:persisted-agent:1",
+        lineNo: 1,
+        productItemId: "inventory-item:fg-agent",
+        productItemCode: "FG-AGENT",
+        productItemName: "Agent Finished Good",
+        plannedQuantity: 10,
+        plannedStartDate: "2026-06-14",
+        plannedFinishDate: "2026-06-20",
+        status: "planned"
+      }
+    ]
+  });
+
+  const listed = await store.listProductionPlans(accountSet.id);
+  const found = await store.findProductionPlan(plan.id);
+
+  assert.equal(plan.agentActionId, "agent-action:source");
+  assert.equal(plan.lines[0].plannedQuantity, 10);
+  assert.deepEqual(listed.map((item) => item.planNo), ["MPS-AGENT-001"]);
+  assert.equal(found.sourceObjectId, "sales-order:source");
+
+  await store.deleteProductionPlanDraft(plan.id, "agent-action:source");
+  assert.equal(await store.findProductionPlan(plan.id), null);
 });
 
 test("Prisma platform persistence stores Phase 2 purchase and sales orders", async () => {
