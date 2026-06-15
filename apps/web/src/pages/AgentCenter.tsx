@@ -1667,7 +1667,10 @@ export const AgentCenter: React.FC = () => {
                       {(agentAction.executionResult.createdObjects ?? []).map((record: any) => (
                         <Button
                           key={`${record.objectType}:${record.objectId}`}
-                          onClick={() => record.objectType === 'production_plan' && navigate('/production-plans')}
+                          onClick={() => {
+                            if (record.objectType === 'production_plan') navigate('/production-plans');
+                            if (record.objectType === 'work_order') navigate('/work-orders');
+                          }}
                         >
                           {`查看 ${record.objectNo ?? record.objectId}`}
                         </Button>

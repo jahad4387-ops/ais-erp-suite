@@ -14,7 +14,9 @@ function createFakePrisma() {
   const accountSetUsers = new Map();
   const partners = new Map();
   const inventoryItems = new Map();
+  const boms = new Map();
   const productionPlans = new Map();
+  const workOrders = new Map();
   const purchaseOrders = new Map();
   const salesOrders = new Map();
   const purchaseReceipts = new Map();
@@ -225,6 +227,27 @@ function createFakePrisma() {
           (item) => where.OR.some((condition) => item.id === condition.id || item.code === condition.code)
         ) ?? null
     },
+    bom: {
+      create: async ({ data }) => {
+        const bom = {
+          ...data,
+          productItem: inventoryItems.get(data.productItemId),
+          lines: data.lines.create.map((line) => ({
+            ...line,
+            bomId: data.id,
+            componentItem: inventoryItems.get(line.componentItemId)
+          }))
+        };
+        boms.set(bom.id, bom);
+        return bom;
+      },
+      findMany: async ({ where } = {}) =>
+        [...boms.values()].filter((bom) => !where?.accountSetId || bom.accountSetId === where.accountSetId),
+      findFirst: async ({ where }) =>
+        [...boms.values()].find((bom) =>
+          where.OR.some((condition) => bom.id === condition.id || bom.version === condition.version)
+        ) ?? null
+    },
     productionPlan: {
       create: async ({ data, include }) => {
         const plan = {
@@ -257,6 +280,29 @@ function createFakePrisma() {
         if (!plan) return null;
         productionPlans.delete(where.id);
         return include?.lines ? plan : { ...plan, lines: undefined };
+      }
+    },
+    workOrder: {
+      create: async ({ data }) => {
+        const workOrder = { ...data };
+        workOrders.set(workOrder.id, workOrder);
+        return workOrder;
+      },
+      findMany: async ({ where } = {}) =>
+        [...workOrders.values()].filter(
+          (workOrder) => !where?.accountSetId || workOrder.accountSetId === where.accountSetId
+        ),
+      findFirst: async ({ where }) =>
+        [...workOrders.values()].find((workOrder) =>
+          where.OR.some(
+            (condition) => workOrder.id === condition.id || workOrder.workOrderNo === condition.workOrderNo
+          )
+        ) ?? null,
+      findUnique: async ({ where }) => workOrders.get(where.id) ?? null,
+      delete: async ({ where }) => {
+        const workOrder = workOrders.get(where.id) ?? null;
+        if (workOrder) workOrders.delete(where.id);
+        return workOrder;
       }
     },
     purchaseOrder: {
@@ -1375,6 +1421,62 @@ test("Prisma platform persistence stores Phase 3 inventory item master data", as
   assert.equal(found.shelfLifeDays, 180);
 });
 
+test("Prisma platform persistence stores BOM versions and component lines", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  await store.createInventoryItem({
+    id: "inventory-item:bom-fg",
+    accountSetId: "account-set:bom",
+    code: "FG-BOM",
+    name: "BOM Finished Good",
+    itemType: "finished_good",
+    unit: "pcs",
+    costMethod: "moving_average",
+    isManufactured: true,
+    createdBy: "planner"
+  });
+  await store.createInventoryItem({
+    id: "inventory-item:bom-rm",
+    accountSetId: "account-set:bom",
+    code: "RM-BOM",
+    name: "BOM Raw Material",
+    itemType: "raw_material",
+    unit: "kg",
+    costMethod: "fifo",
+    createdBy: "planner"
+  });
+
+  const bom = await store.createBom({
+    id: "bom:fg:v1",
+    accountSetId: "account-set:bom",
+    productItemId: "inventory-item:bom-fg",
+    productItemCode: "FG-BOM",
+    productItemName: "BOM Finished Good",
+    version: "V1",
+    status: "active",
+    yieldQuantity: 2,
+    createdBy: "planner",
+    lines: [
+      {
+        id: "bom-line:fg:v1:1",
+        lineNo: 1,
+        componentItemId: "inventory-item:bom-rm",
+        componentItemCode: "RM-BOM",
+        componentItemName: "BOM Raw Material",
+        quantity: 3,
+        scrapRate: 0.05
+      }
+    ]
+  });
+
+  const listed = await store.listBoms("account-set:bom");
+  const found = await store.findBom(bom.id);
+
+  assert.equal(bom.productItemCode, "FG-BOM");
+  assert.equal(bom.lines[0].componentItemCode, "RM-BOM");
+  assert.deepEqual(listed.map((item) => `${item.productItemCode}:${item.version}`), ["FG-BOM:V1"]);
+  assert.equal(found.lines[0].quantity, 3);
+});
+
 test("Prisma platform persistence stores and reverses Agent-linked production plan drafts", async () => {
   const store = createPlatformPersistence(createFakePrisma());
   const accountSet = await store.createAccountSet({
@@ -1428,6 +1530,43 @@ test("Prisma platform persistence stores and reverses Agent-linked production pl
 
   await store.deleteProductionPlanDraft(plan.id, "agent-action:source");
   assert.equal(await store.findProductionPlan(plan.id), null);
+});
+
+test("Prisma platform persistence stores and reverses Agent-linked work order drafts", async () => {
+  const store = createPlatformPersistence(createFakePrisma());
+  const workOrder = await store.createWorkOrder({
+    id: "work-order:persisted-agent",
+    accountSetId: "account-set:work-order",
+    workOrderNo: "WO-MPS-AGENT-001-01",
+    productItemId: "inventory-item:fg-agent",
+    productItemCode: "FG-AGENT",
+    productItemName: "Agent Finished Good",
+    bomId: "bom:fg-agent:v1",
+    bomVersion: "V1",
+    plannedQuantity: 10,
+    completedQuantity: 0,
+    directMaterialCost: 0,
+    status: "planned",
+    fiscalYear: 2026,
+    periodNo: 6,
+    sourceType: "agent",
+    productionPlanId: "production-plan:persisted-agent",
+    productionPlanLineId: "production-plan-line:persisted-agent:1",
+    agentActionId: "agent-action:work-order-source",
+    createdBy: "production-manager",
+    createdAt: "2026-06-13"
+  });
+
+  const listed = await store.listWorkOrders("account-set:work-order");
+  const found = await store.findWorkOrder(workOrder.id);
+
+  assert.equal(workOrder.agentActionId, "agent-action:work-order-source");
+  assert.equal(workOrder.productionPlanLineId, "production-plan-line:persisted-agent:1");
+  assert.deepEqual(listed.map((item) => item.workOrderNo), ["WO-MPS-AGENT-001-01"]);
+  assert.equal(found.sourceType, "agent");
+
+  await store.deleteWorkOrderDraft(workOrder.id, "agent-action:work-order-source");
+  assert.equal(await store.findWorkOrder(workOrder.id), null);
 });
 
 test("Prisma platform persistence stores Phase 2 purchase and sales orders", async () => {

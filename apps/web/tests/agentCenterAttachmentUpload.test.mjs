@@ -332,3 +332,10 @@ test("agent center can invoke registered Agent tools in dry-run mode", () => {
   assert.match(source, /resultType === 'agent_action'/);
   assert.match(source, /setAgentAction\(result\.result\)/);
 });
+
+test("agent center links Agent-created work orders to the production work order page", () => {
+  const source = readFileSync(agentCenterPath, "utf8");
+
+  assert.match(source, /record\.objectType === 'work_order'/);
+  assert.match(source, /navigate\('\/work-orders'\)/);
+});

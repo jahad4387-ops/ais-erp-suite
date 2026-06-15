@@ -93,6 +93,34 @@ function inventoryItemToDto(item) {
   };
 }
 
+function bomToDto(bom) {
+  return {
+    id: bom.id,
+    accountSetId: bom.accountSetId,
+    productItemId: bom.productItemId,
+    productItemCode: bom.productItem?.code ?? bom.productItemCode ?? null,
+    productItemName: bom.productItem?.name ?? bom.productItemName ?? null,
+    version: bom.version,
+    status: bom.status,
+    yieldQuantity: bom.yieldQuantity,
+    createdBy: bom.createdBy,
+    createdAt: bom.createdAt instanceof Date ? bom.createdAt.toISOString() : bom.createdAt,
+    updatedAt: bom.updatedAt instanceof Date ? bom.updatedAt.toISOString() : bom.updatedAt,
+    lines: (bom.lines ?? [])
+      .map((line) => ({
+        id: line.id,
+        bomId: line.bomId ?? bom.id,
+        componentItemId: line.componentItemId,
+        componentItemCode: line.componentItem?.code ?? line.componentItemCode ?? null,
+        componentItemName: line.componentItem?.name ?? line.componentItemName ?? null,
+        lineNo: line.lineNo,
+        quantity: line.quantity,
+        scrapRate: line.scrapRate
+      }))
+      .sort((left, right) => left.lineNo - right.lineNo)
+  };
+}
+
 function productionPlanToDto(plan) {
   return {
     id: plan.id,
@@ -122,6 +150,35 @@ function productionPlanToDto(plan) {
         status: line.status
       }))
       .sort((left, right) => left.lineNo - right.lineNo)
+  };
+}
+
+function workOrderToDto(workOrder) {
+  return {
+    id: workOrder.id,
+    accountSetId: workOrder.accountSetId,
+    workOrderNo: workOrder.workOrderNo,
+    productItemId: workOrder.productItemId,
+    productItemCode: workOrder.productItem?.code ?? workOrder.productItemCode ?? null,
+    productItemName: workOrder.productItem?.name ?? workOrder.productItemName ?? null,
+    bomId: workOrder.bomId,
+    bomVersion: workOrder.bom?.version ?? workOrder.bomVersion ?? null,
+    plannedQuantity: workOrder.plannedQuantity,
+    completedQuantity: workOrder.completedQuantity,
+    directMaterialCost: workOrder.directMaterialCost,
+    status: workOrder.status,
+    fiscalYear: workOrder.fiscalYear,
+    periodNo: workOrder.periodNo,
+    sourceType: workOrder.sourceType ?? "manual",
+    productionPlanId: workOrder.productionPlanId ?? null,
+    productionPlanLineId: workOrder.productionPlanLineId ?? null,
+    agentActionId: workOrder.agentActionId ?? null,
+    createdBy: workOrder.createdBy,
+    releasedBy: workOrder.releasedBy ?? null,
+    closedBy: workOrder.closedBy ?? null,
+    createdAt: workOrder.createdAt instanceof Date ? workOrder.createdAt.toISOString() : workOrder.createdAt,
+    releasedAt: workOrder.releasedAt instanceof Date ? workOrder.releasedAt.toISOString() : workOrder.releasedAt ?? null,
+    closedAt: workOrder.closedAt instanceof Date ? workOrder.closedAt.toISOString() : workOrder.closedAt ?? null
   };
 }
 
@@ -1760,6 +1817,51 @@ export function createPlatformPersistence(prisma) {
       return item ? inventoryItemToDto(item) : null;
     },
 
+    async createBom(bom) {
+      const saved = await prisma.bom.create({
+        data: {
+          id: bom.id,
+          accountSetId: bom.accountSetId,
+          productItemId: bom.productItemId,
+          version: bom.version,
+          status: bom.status ?? "draft",
+          yieldQuantity: bom.yieldQuantity ?? 1,
+          createdBy: bom.createdBy,
+          createdAt: dateTime(bom.createdAt),
+          updatedAt: dateTime(bom.updatedAt),
+          lines: {
+            create: (bom.lines ?? []).map((line) => ({
+              id: line.id,
+              componentItemId: line.componentItemId,
+              lineNo: line.lineNo,
+              quantity: line.quantity,
+              scrapRate: line.scrapRate ?? 0
+            }))
+          }
+        },
+        include: { productItem: true, lines: { include: { componentItem: true } } }
+      });
+      return bomToDto(saved);
+    },
+
+    async listBoms(accountSetId) {
+      const boms = await prisma.bom.findMany({
+        where: accountSetId ? { accountSetId } : undefined,
+        include: { productItem: true, lines: { include: { componentItem: true } } }
+      });
+      return boms.map(bomToDto).sort((left, right) =>
+        `${left.productItemCode}:${left.version}`.localeCompare(`${right.productItemCode}:${right.version}`)
+      );
+    },
+
+    async findBom(identifier) {
+      const bom = await prisma.bom.findFirst({
+        where: { OR: [{ id: identifier }, { version: identifier }] },
+        include: { productItem: true, lines: { include: { componentItem: true } } }
+      });
+      return bom ? bomToDto(bom) : null;
+    },
+
     async createProductionPlan(plan) {
       const saved = await prisma.productionPlan.create({
         data: {
@@ -1821,6 +1923,74 @@ export function createPlatformPersistence(prisma) {
       }
       const deleted = await prisma.productionPlan.delete({ where: { id }, include: { lines: true } });
       return productionPlanToDto(deleted);
+    },
+
+    async createWorkOrder(workOrder) {
+      const saved = await prisma.workOrder.create({
+        data: {
+          id: workOrder.id,
+          accountSetId: workOrder.accountSetId,
+          workOrderNo: workOrder.workOrderNo,
+          productItemId: workOrder.productItemId,
+          bomId: workOrder.bomId,
+          plannedQuantity: workOrder.plannedQuantity,
+          completedQuantity: workOrder.completedQuantity ?? 0,
+          directMaterialCost: workOrder.directMaterialCost ?? 0,
+          status: workOrder.status ?? "planned",
+          fiscalYear: workOrder.fiscalYear,
+          periodNo: workOrder.periodNo,
+          sourceType: workOrder.sourceType ?? "manual",
+          productionPlanId: workOrder.productionPlanId ?? null,
+          productionPlanLineId: workOrder.productionPlanLineId ?? null,
+          agentActionId: workOrder.agentActionId ?? null,
+          createdBy: workOrder.createdBy,
+          releasedBy: workOrder.releasedBy ?? null,
+          closedBy: workOrder.closedBy ?? null,
+          createdAt: dateTime(workOrder.createdAt),
+          releasedAt: workOrder.releasedAt ? dateTime(workOrder.releasedAt) : null,
+          closedAt: workOrder.closedAt ? dateTime(workOrder.closedAt) : null
+        },
+        include: { productItem: true, bom: true }
+      });
+      return workOrderToDto(saved);
+    },
+
+    async listWorkOrders(accountSetId) {
+      const workOrders = await prisma.workOrder.findMany({
+        where: accountSetId ? { accountSetId } : undefined,
+        include: { productItem: true, bom: true }
+      });
+      return workOrders.map(workOrderToDto).sort((left, right) => left.workOrderNo.localeCompare(right.workOrderNo));
+    },
+
+    async findWorkOrder(identifier) {
+      const workOrder = await prisma.workOrder.findFirst({
+        where: { OR: [{ id: identifier }, { workOrderNo: identifier }] },
+        include: { productItem: true, bom: true }
+      });
+      return workOrder ? workOrderToDto(workOrder) : null;
+    },
+
+    async deleteWorkOrderDraft(id, agentActionId) {
+      const workOrder = await prisma.workOrder.findUnique({
+        where: { id },
+        include: { productItem: true, bom: true }
+      });
+      if (!workOrder) return null;
+      if (
+        workOrder.status !== "planned" ||
+        Number(workOrder.completedQuantity ?? 0) !== 0 ||
+        workOrder.agentActionId !== agentActionId
+      ) {
+        const error = new Error("Only an unchanged Agent-created planned work order can be deleted.");
+        error.code = "AGENT_ACTION_REVERSAL_BLOCKED";
+        throw error;
+      }
+      const deleted = await prisma.workOrder.delete({
+        where: { id },
+        include: { productItem: true, bom: true }
+      });
+      return workOrderToDto(deleted);
     },
 
     async createPurchaseOrder(order) {

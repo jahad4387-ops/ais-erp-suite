@@ -4331,7 +4331,7 @@ paths:
   /agent-actions/{agentActionId}/execute:
     post:
       summary: Execute an approved Agent action.
-      description: Execution can only be triggered by a real user confirmation when the action approval policy sets executeRequiresUserToken. An approved generate_production_plan action creates a linked draft ProductionPlan and records its createdObjects reference; dry-run blocking errors prevent execution.
+      description: Execution can only be triggered by a real user confirmation when the action approval policy sets executeRequiresUserToken. Approved production-plan and work-order generation actions create linked business drafts and record their createdObjects references; dry-run blocking errors prevent execution.
       x-permission: agent_action.execute
       x-risk-level: high
       x-agent-allowed: false
@@ -10854,7 +10854,7 @@ components:
 
     WorkOrder:
       type: object
-      required: [id, accountSetId, workOrderNo, productItemId, bomId, plannedQuantity, completedQuantity, directMaterialCost, status]
+      required: [id, accountSetId, workOrderNo, productItemId, bomId, plannedQuantity, completedQuantity, directMaterialCost, status, sourceType]
       properties:
         id:
           type: string
@@ -10879,6 +10879,18 @@ components:
         status:
           type: string
           enum: [planned, released, closed]
+        sourceType:
+          type: string
+          enum: [manual, agent]
+        productionPlanId:
+          type: string
+          nullable: true
+        productionPlanLineId:
+          type: string
+          nullable: true
+        agentActionId:
+          type: string
+          nullable: true
 
     CreateMaterialRequisitionRequest:
       type: object
@@ -14538,7 +14550,7 @@ components:
       properties:
         objectType:
           type: string
-          enum: [production_plan]
+          enum: [production_plan, work_order]
         objectId:
           type: string
         objectNo:

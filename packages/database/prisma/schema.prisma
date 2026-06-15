@@ -1389,6 +1389,10 @@ model WorkOrder {
   status             String   @default("planned")
   fiscalYear         Int
   periodNo           Int
+  sourceType         String   @default("manual")
+  productionPlanId   String?
+  productionPlanLineId String?
+  agentActionId      String?
   createdBy          String
   releasedBy         String?
   closedBy           String?
@@ -1408,6 +1412,8 @@ model WorkOrder {
 
   @@unique([accountSetId, workOrderNo])
   @@index([accountSetId, status])
+  @@index([productionPlanId])
+  @@index([agentActionId])
 }
 
 model ProductionPlan {

@@ -100,6 +100,9 @@ const phase6SecurityEventsMigrationText = readMigrationText(
 const supplyChainProductionPlanMigrationText = readMigrationText(
   "../prisma/migrations/20260613110000_supply_chain_production_plan/migration.sql"
 );
+const supplyChainWorkOrderAgentMigrationText = readMigrationText(
+  "../prisma/migrations/20260613120000_supply_chain_work_order_agent/migration.sql"
+);
 const migrationLock = readFileSync(new URL("../prisma/migrations/migration_lock.toml", import.meta.url), "utf8");
 
 function readMigrationText(relativePath) {
@@ -623,4 +626,13 @@ test("Supply-chain production plan migration persists Agent-linked plan drafts",
   assert.match(supplyChainProductionPlanMigrationText, /"sourceObjectId" TEXT/);
   assert.match(supplyChainProductionPlanMigrationText, /CREATE UNIQUE INDEX "ProductionPlan_accountSetId_planNo_key"/);
   assert.match(supplyChainProductionPlanMigrationText, /CREATE INDEX "ProductionPlan_agentActionId_idx"/);
+});
+
+test("Supply-chain work order migration persists Agent and production-plan source links", () => {
+  assert.match(supplyChainWorkOrderAgentMigrationText, /ALTER TABLE "WorkOrder" ADD COLUMN "sourceType" TEXT NOT NULL DEFAULT 'manual'/);
+  assert.match(supplyChainWorkOrderAgentMigrationText, /ALTER TABLE "WorkOrder" ADD COLUMN "productionPlanId" TEXT/);
+  assert.match(supplyChainWorkOrderAgentMigrationText, /ALTER TABLE "WorkOrder" ADD COLUMN "productionPlanLineId" TEXT/);
+  assert.match(supplyChainWorkOrderAgentMigrationText, /ALTER TABLE "WorkOrder" ADD COLUMN "agentActionId" TEXT/);
+  assert.match(supplyChainWorkOrderAgentMigrationText, /CREATE INDEX "WorkOrder_productionPlanId_idx"/);
+  assert.match(supplyChainWorkOrderAgentMigrationText, /CREATE INDEX "WorkOrder_agentActionId_idx"/);
 });

@@ -2370,6 +2370,19 @@ function listBoms(state, accountSetId) {
     .sort((left, right) => `${left.productItemCode}:${left.version}`.localeCompare(`${right.productItemCode}:${right.version}`));
 }
 
+async function persistedBoms(state, accountSetId) {
+  const persisted = state.config.platformStore?.listBoms
+    ? await state.config.platformStore.listBoms(accountSetId)
+    : [];
+  const byId = new Map(persisted.map((bom) => [bom.id, bom]));
+  for (const bom of listBoms(state, accountSetId)) {
+    byId.set(bom.id, bom);
+  }
+  return [...byId.values()].sort((left, right) =>
+    `${left.productItemCode}:${left.version}`.localeCompare(`${right.productItemCode}:${right.version}`)
+  );
+}
+
 function listWarehouses(state, accountSetId) {
   return [...state.warehouses.values()]
     .filter((warehouse) => warehouse.accountSetId === accountSetId)
@@ -2821,6 +2834,94 @@ function listWorkOrders(state, accountSetId) {
     .sort((left, right) => left.workOrderNo.localeCompare(right.workOrderNo));
 }
 
+async function persistedWorkOrders(state, accountSetId) {
+  const persisted = state.config.platformStore?.listWorkOrders
+    ? await state.config.platformStore.listWorkOrders(accountSetId)
+    : [];
+  const byId = new Map(persisted.map((workOrder) => [workOrder.id, workOrder]));
+  for (const workOrder of listWorkOrders(state, accountSetId)) {
+    byId.set(workOrder.id, workOrder);
+  }
+  return [...byId.values()].sort((left, right) => left.workOrderNo.localeCompare(right.workOrderNo));
+}
+
+async function createWorkOrder(state, body, actorId) {
+  const itemIdentifier = body.productItemId ?? body.productItemCode;
+  const productItem =
+    findInventoryItemByIdentifier(state, itemIdentifier) ??
+    (state.config.platformStore?.findInventoryItem
+      ? await state.config.platformStore.findInventoryItem(itemIdentifier)
+      : null);
+  const bom =
+    findBomByIdentifier(state, body.bomId) ??
+    (state.config.platformStore?.findBom ? await state.config.platformStore.findBom(body.bomId) : null);
+  if (productItem) state.inventoryItems.set(productItem.id, productItem);
+  if (bom) state.boms.set(bom.id, bom);
+  if (
+    !productItem ||
+    productItem.accountSetId !== body.accountSetId ||
+    !productItem.isManufactured ||
+    !bom ||
+    bom.accountSetId !== body.accountSetId ||
+    bom.productItemId !== productItem.id
+  ) {
+    const error = new Error("Manufactured item or matching BOM was not found.");
+    error.code = "WORK_ORDER_SOURCE_NOT_FOUND";
+    error.status = 404;
+    throw error;
+  }
+  const duplicate = (await persistedWorkOrders(state, body.accountSetId)).find(
+    (workOrder) => workOrder.workOrderNo === body.workOrderNo
+  );
+  if (duplicate) {
+    const error = new Error("Work order number already exists in this account set.");
+    error.code = "WORK_ORDER_NO_EXISTS";
+    error.status = 409;
+    throw error;
+  }
+  const plannedQuantity = Number(body.plannedQuantity);
+  if (!Number.isFinite(plannedQuantity) || plannedQuantity <= 0) {
+    throw new Error("plannedQuantity must be greater than 0.");
+  }
+  const workOrder = {
+    id: body.id ?? `work-order:${randomUUID()}`,
+    accountSetId: body.accountSetId,
+    workOrderNo: body.workOrderNo,
+    productItemId: productItem.id,
+    productItemCode: productItem.code,
+    productItemName: productItem.name,
+    bomId: bom.id,
+    bomVersion: bom.version,
+    plannedQuantity,
+    completedQuantity: Number(body.completedQuantity ?? 0),
+    directMaterialCost: Number(body.directMaterialCost ?? 0),
+    status: body.status ?? "planned",
+    fiscalYear: Number(body.fiscalYear),
+    periodNo: Number(body.periodNo),
+    sourceType: body.sourceType ?? "manual",
+    productionPlanId: body.productionPlanId ?? null,
+    productionPlanLineId: body.productionPlanLineId ?? null,
+    agentActionId: body.agentActionId ?? null,
+    createdBy: body.createdBy ?? actorId,
+    createdAt: body.createdAt ?? "now",
+    releasedBy: body.releasedBy ?? null,
+    releasedAt: body.releasedAt ?? null,
+    closedBy: body.closedBy ?? null,
+    closedAt: body.closedAt ?? null
+  };
+  const savedWorkOrder = state.config.platformStore?.createWorkOrder
+    ? await state.config.platformStore.createWorkOrder(workOrder)
+    : workOrder;
+  state.workOrders.set(savedWorkOrder.id, savedWorkOrder);
+  appendAuditLog(state, {
+    actorId: savedWorkOrder.createdBy,
+    action: "work_order.create",
+    objectType: "work_order",
+    objectId: savedWorkOrder.id
+  });
+  return savedWorkOrder;
+}
+
 function listMaterialRequisitions(state, accountSetId) {
   return [...state.materialRequisitions.values()]
     .filter((requisition) => requisition.accountSetId === accountSetId)
@@ -2910,26 +3011,38 @@ async function createProductionPlan(state, body, actorId) {
   return savedPlan;
 }
 
-function buildWorkOrderDraftsFromPlan(plan, body = {}) {
+function buildWorkOrderDraftsFromPlan(state, plan, body = {}) {
   return {
     productionPlanId: plan.id,
     planNo: plan.planNo,
     dryRun: body.dryRun !== false,
     requestedBy: body.requestedBy ?? "system",
-    workOrderDrafts: plan.lines.map((line) => ({
-      documentType: "work_order_draft",
-      planLineId: line.id,
-      workOrderNo: `WO-${plan.planNo}-${String(line.lineNo).padStart(2, "0")}`,
-      productItemId: line.productItemId,
-      productItemCode: line.productItemCode,
-      productItemName: line.productItemName,
-      plannedQuantity: line.plannedQuantity,
-      plannedStartDate: line.plannedStartDate,
-      plannedFinishDate: line.plannedFinishDate,
-      fiscalYear: plan.fiscalYear,
-      periodNo: plan.periodNo,
-      status: "draft"
-    }))
+    workOrderDrafts: plan.lines.map((line) => {
+      const productItem = findInventoryItemByIdentifier(state, line.productItemId ?? line.productItemCode);
+      const bom = listBoms(state, plan.accountSetId).find(
+        (candidate) =>
+          candidate.productItemId === productItem?.id &&
+          !["disabled", "inactive", "archived"].includes(candidate.status)
+      );
+      return {
+        documentType: "work_order_draft",
+        planLineId: line.id,
+        productionPlanId: plan.id,
+        productionPlanLineId: line.id,
+        workOrderNo: `WO-${plan.planNo}-${String(line.lineNo).padStart(2, "0")}`,
+        productItemId: productItem?.id ?? line.productItemId ?? null,
+        productItemCode: productItem?.code ?? line.productItemCode,
+        productItemName: productItem?.name ?? line.productItemName,
+        bomId: bom?.id ?? null,
+        bomVersion: bom?.version ?? null,
+        plannedQuantity: line.plannedQuantity,
+        plannedStartDate: line.plannedStartDate,
+        plannedFinishDate: line.plannedFinishDate,
+        fiscalYear: plan.fiscalYear,
+        periodNo: plan.periodNo,
+        status: "draft"
+      };
+    })
   };
 }
 
@@ -8046,6 +8159,21 @@ function createAgentActionRecord(state, body, actorId) {
   return action;
 }
 
+async function hydrateSupplyChainAgentContext(state, accountSetId) {
+  const platformStore = state.config.platformStore;
+  if (!platformStore) return;
+  const [items, boms, productionPlans, workOrders] = await Promise.all([
+    platformStore.listInventoryItems?.(accountSetId) ?? [],
+    platformStore.listBoms?.(accountSetId) ?? [],
+    platformStore.listProductionPlans?.(accountSetId) ?? [],
+    platformStore.listWorkOrders?.(accountSetId) ?? []
+  ]);
+  for (const item of items) state.inventoryItems.set(item.id, item);
+  for (const bom of boms) state.boms.set(bom.id, bom);
+  for (const plan of productionPlans) state.productionPlans.set(plan.id, plan);
+  for (const workOrder of workOrders) state.workOrders.set(workOrder.id, workOrder);
+}
+
 async function invokeRegisteredAgentTool(state, toolName, body, actorId) {
   const tool = registeredAgentTool(toolName);
   if (!tool) {
@@ -8062,6 +8190,9 @@ async function invokeRegisteredAgentTool(state, toolName, body, actorId) {
     throw new Error("Agent tool invocation must use dryRun true.");
   }
   assertAgentToolInputSchema(tool, body);
+  if (SUPPLY_CHAIN_AGENT_TOOL_NAMES.has(tool.name)) {
+    await hydrateSupplyChainAgentContext(state, body.accountSetId);
+  }
   if (tool.actionKind === "draft_generation") {
     if (!tool.draftType || !SUPPORTED_AGENT_DRAFT_TYPES.has(tool.draftType)) {
       throw new Error(`Agent draft generation tool ${toolName} does not map to a supported draft type.`);
@@ -8205,46 +8336,99 @@ async function approveAgentActionRecord(state, action, body, actorId) {
 }
 
 async function executeAgentBusinessDraft(state, action, executedBy) {
-  if (action.toolName !== "generate_production_plan") return null;
+  if (!["generate_production_plan", "generate_work_orders_from_plan"].includes(action.toolName)) return null;
   const blockingErrors = action.dryRunResult?.blockingErrors ?? [];
   if (blockingErrors.length > 0) {
     const error = new Error("Agent action dry-run contains blocking errors and cannot be executed.");
     error.code = "AGENT_ACTION_BLOCKED_BY_DRY_RUN";
     throw error;
   }
-  const draft = action.dryRunResult?.draftPayload?.productionPlanDraft;
-  if (!draft || !Array.isArray(draft.lines) || draft.lines.length === 0) {
-    const error = new Error("Agent production plan dry-run does not contain executable plan lines.");
+  if (action.toolName === "generate_production_plan") {
+    const draft = action.dryRunResult?.draftPayload?.productionPlanDraft;
+    if (!draft || !Array.isArray(draft.lines) || draft.lines.length === 0) {
+      const error = new Error("Agent production plan dry-run does not contain executable plan lines.");
+      error.code = "AGENT_ACTION_EXECUTION_PAYLOAD_INVALID";
+      throw error;
+    }
+    const plan = await createProductionPlan(
+      state,
+      {
+        accountSetId: action.accountSetId,
+        fiscalYear: draft.fiscalYear,
+        periodNo: draft.periodNo,
+        status: "draft",
+        sourceType: "agent",
+        sourceObjectType: draft.sourceObjectType ?? null,
+        sourceObjectId: draft.sourceObjectId ?? null,
+        agentActionId: action.id,
+        createdBy: executedBy,
+        lines: draft.lines
+      },
+      executedBy
+    );
+    return {
+      status: "business_draft_created",
+      businessMutation: true,
+      createdObjects: [
+        {
+          objectType: "production_plan",
+          objectId: plan.id,
+          objectNo: plan.planNo,
+          status: plan.status
+        }
+      ]
+    };
+  }
+
+  const batch = action.dryRunResult?.draftPayload?.workOrderDrafts;
+  const drafts = batch?.workOrderDrafts;
+  if (!batch?.productionPlanId || !Array.isArray(drafts) || drafts.length === 0) {
+    const error = new Error("Agent work-order dry-run does not contain executable work-order drafts.");
     error.code = "AGENT_ACTION_EXECUTION_PAYLOAD_INVALID";
     throw error;
   }
-  const plan = await createProductionPlan(
-    state,
-    {
-      accountSetId: action.accountSetId,
-      fiscalYear: draft.fiscalYear,
-      periodNo: draft.periodNo,
-      status: "draft",
-      sourceType: "agent",
-      sourceObjectType: draft.sourceObjectType ?? null,
-      sourceObjectId: draft.sourceObjectId ?? null,
-      agentActionId: action.id,
-      createdBy: executedBy,
-      lines: draft.lines
-    },
-    executedBy
-  );
+  for (const draft of drafts) {
+    const productItem = findInventoryItemByIdentifier(state, draft.productItemId ?? draft.productItemCode);
+    const bom = findBomByIdentifier(state, draft.bomId);
+    if (!productItem || !bom || bom.productItemId !== productItem.id) {
+      const error = new Error("Agent work-order draft references an unavailable manufactured item or BOM.");
+      error.code = "AGENT_ACTION_EXECUTION_PAYLOAD_INVALID";
+      throw error;
+    }
+  }
+  const workOrders = [];
+  for (const draft of drafts) {
+    workOrders.push(
+      await createWorkOrder(
+        state,
+        {
+          accountSetId: action.accountSetId,
+          workOrderNo: draft.workOrderNo,
+          productItemId: draft.productItemId,
+          bomId: draft.bomId,
+          plannedQuantity: draft.plannedQuantity,
+          fiscalYear: draft.fiscalYear,
+          periodNo: draft.periodNo,
+          status: "planned",
+          sourceType: "agent",
+          productionPlanId: batch.productionPlanId,
+          productionPlanLineId: draft.productionPlanLineId ?? draft.planLineId ?? null,
+          agentActionId: action.id,
+          createdBy: executedBy
+        },
+        executedBy
+      )
+    );
+  }
   return {
     status: "business_draft_created",
     businessMutation: true,
-    createdObjects: [
-      {
-        objectType: "production_plan",
-        objectId: plan.id,
-        objectNo: plan.planNo,
-        status: plan.status
-      }
-    ]
+    createdObjects: workOrders.map((workOrder) => ({
+      objectType: "work_order",
+      objectId: workOrder.id,
+      objectNo: workOrder.workOrderNo,
+      status: workOrder.status
+    }))
   };
 }
 
@@ -8305,7 +8489,8 @@ async function reverseAgentBusinessDraft(state, action, reversedBy) {
   if (action.executionResult?.businessMutation !== true) return null;
   const createdObjects = action.executionResult.createdObjects ?? [];
   const productionPlans = createdObjects.filter((item) => item.objectType === "production_plan");
-  if (productionPlans.length === 0) return null;
+  const workOrderRefs = createdObjects.filter((item) => item.objectType === "work_order");
+  if (productionPlans.length === 0 && workOrderRefs.length === 0) return null;
 
   const plans = [];
   for (const item of productionPlans) {
@@ -8327,6 +8512,26 @@ async function reverseAgentBusinessDraft(state, action, reversedBy) {
     plans.push(plan);
   }
 
+  const workOrders = [];
+  for (const item of workOrderRefs) {
+    const workOrder =
+      state.workOrders.get(item.objectId) ??
+      (state.config.platformStore?.findWorkOrder
+        ? await state.config.platformStore.findWorkOrder(item.objectId)
+        : null);
+    if (!workOrder || workOrder.agentActionId !== action.id) {
+      const error = new Error("Agent-created work order could not be verified for reversal.");
+      error.code = "AGENT_ACTION_REVERSAL_TARGET_INVALID";
+      throw error;
+    }
+    if (workOrder.status !== "planned" || Number(workOrder.completedQuantity ?? 0) !== 0) {
+      const error = new Error("Only an unchanged planned work order can be reversed automatically.");
+      error.code = "AGENT_ACTION_REVERSAL_BLOCKED";
+      throw error;
+    }
+    workOrders.push(workOrder);
+  }
+
   for (const plan of plans) {
     if (state.config.platformStore?.deleteProductionPlanDraft) {
       await state.config.platformStore.deleteProductionPlanDraft(plan.id, action.id);
@@ -8339,15 +8544,35 @@ async function reverseAgentBusinessDraft(state, action, reversedBy) {
       objectId: plan.id
     });
   }
+  for (const workOrder of workOrders) {
+    if (state.config.platformStore?.deleteWorkOrderDraft) {
+      await state.config.platformStore.deleteWorkOrderDraft(workOrder.id, action.id);
+    }
+    state.workOrders.delete(workOrder.id);
+    appendAuditLog(state, {
+      actorId: reversedBy,
+      action: "work_order.agent_reverse",
+      objectType: "work_order",
+      objectId: workOrder.id
+    });
+  }
   return {
     status: "business_draft_reversed",
     businessMutation: true,
-    reversedObjects: plans.map((plan) => ({
-      objectType: "production_plan",
-      objectId: plan.id,
-      objectNo: plan.planNo,
-      status: "deleted"
-    }))
+    reversedObjects: [
+      ...plans.map((plan) => ({
+        objectType: "production_plan",
+        objectId: plan.id,
+        objectNo: plan.planNo,
+        status: "deleted"
+      })),
+      ...workOrders.map((workOrder) => ({
+        objectType: "work_order",
+        objectId: workOrder.id,
+        objectNo: workOrder.workOrderNo,
+        status: "deleted"
+      }))
+    ]
   };
 }
 
@@ -10505,7 +10730,7 @@ function buildWorkOrderDraftBatchRecommendation(state, body) {
   if (!plan) return null;
   return {
     documentType: "work_order_draft_batch",
-    ...buildWorkOrderDraftsFromPlan(plan, body)
+    ...buildWorkOrderDraftsFromPlan(state, plan, body)
   };
 }
 
@@ -10704,6 +10929,15 @@ function buildSupplyChainAgentDryRunResult(state, tool, body) {
   }
   if (tool.name === "generate_material_requisition" && materialRequisitionDraft?.lines?.some((line) => line.shortageQuantity > 0)) {
     blockingErrors.push("库存不足，领料草稿只能停留在 dry-run 建议。");
+  }
+  if (tool.name === "generate_work_orders_from_plan" && !workOrderDrafts) {
+    blockingErrors.push("未找到可用于生成工单的生产计划。");
+  }
+  if (
+    tool.name === "generate_work_orders_from_plan" &&
+    workOrderDrafts?.workOrderDrafts?.some((draft) => !draft.productItemId || !draft.bomId)
+  ) {
+    blockingErrors.push("生产计划中的产品或有效 BOM 未匹配，不能生成工单草稿。");
   }
   if (tool.name === "generate_cost_voucher_draft" && dashboard.summary.costPending.count > 0) {
     warnings.push("存在未锁定或待处理成本，成本凭证只能作为高风险 dry-run 建议。");
@@ -11855,7 +12089,11 @@ async function route(request, state) {
       if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
         return accountSetAccessError(state, actorId, accountSetId);
       }
-      return jsonResponse(200, listBoms(state, accountSetId));
+      const boms = await persistedBoms(state, accountSetId);
+      for (const bom of boms) {
+        state.boms.set(bom.id, bom);
+      }
+      return jsonResponse(200, boms);
     }
 
     if (request.method === "POST") {
@@ -11863,25 +12101,32 @@ async function route(request, state) {
       if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
         return accountSetAccessError(state, actorId, body.accountSetId);
       }
-      const productItem = findInventoryItemByIdentifier(state, body.productItemId);
+      const productItem =
+        findInventoryItemByIdentifier(state, body.productItemId) ??
+        (platformStore?.findInventoryItem ? await platformStore.findInventoryItem(body.productItemId) : null);
+      if (productItem) state.inventoryItems.set(productItem.id, productItem);
       if (!productItem || productItem.accountSetId !== body.accountSetId || !productItem.isManufactured) {
         return errorResponse(404, "PRODUCT_ITEM_NOT_FOUND", "Manufactured product item was not found.");
       }
       if (!Array.isArray(body.lines) || body.lines.length === 0) {
         throw new Error("BOM lines are required.");
       }
-      const duplicate = listBoms(state, body.accountSetId).find(
+      const duplicate = (await persistedBoms(state, body.accountSetId)).find(
         (bom) => bom.productItemId === productItem.id && bom.version === (body.version ?? "V1")
       );
       if (duplicate) {
         return errorResponse(409, "BOM_VERSION_EXISTS", "BOM version already exists for this product.");
       }
       const bomId = body.id ?? `bom:${randomUUID()}`;
-      const lines = body.lines.map((line, index) => {
-        const componentItem = findInventoryItemByIdentifier(state, line.componentItemId);
+      const lines = [];
+      for (const [index, line] of body.lines.entries()) {
+        const componentItem =
+          findInventoryItemByIdentifier(state, line.componentItemId) ??
+          (platformStore?.findInventoryItem ? await platformStore.findInventoryItem(line.componentItemId) : null);
         if (!componentItem || componentItem.accountSetId !== body.accountSetId) {
           throw new Error("BOM component item was not found.");
         }
+        state.inventoryItems.set(componentItem.id, componentItem);
         const quantity = Number(line.quantity);
         const scrapRate = Number(line.scrapRate ?? 0);
         if (!Number.isFinite(quantity) || quantity <= 0) {
@@ -11890,7 +12135,7 @@ async function route(request, state) {
         if (!Number.isFinite(scrapRate) || scrapRate < 0 || scrapRate >= 1) {
           throw new Error("BOM line scrapRate must be between 0 and 1.");
         }
-        return {
+        lines.push({
           id: line.id ?? `bom-line:${randomUUID()}`,
           bomId,
           componentItemId: componentItem.id,
@@ -11899,8 +12144,8 @@ async function route(request, state) {
           lineNo: line.lineNo ?? index + 1,
           quantity,
           scrapRate
-        };
-      });
+        });
+      }
       const bom = {
         id: bomId,
         accountSetId: body.accountSetId,
@@ -11915,14 +12160,15 @@ async function route(request, state) {
         updatedAt: "now",
         lines
       };
-      state.boms.set(bom.id, bom);
+      const savedBom = platformStore?.createBom ? await platformStore.createBom(bom) : bom;
+      state.boms.set(savedBom.id, savedBom);
       appendAuditLog(state, {
-        actorId: bom.createdBy,
+        actorId: savedBom.createdBy,
         action: "bom.create",
         objectType: "bom",
-        objectId: bom.id
+        objectId: savedBom.id
       });
-      return jsonResponse(201, bom);
+      return jsonResponse(201, savedBom);
     }
   }
 
@@ -12223,7 +12469,7 @@ async function route(request, state) {
     if (!(await canAccessAccountSet(state, actorId, plan.accountSetId))) {
       return accountSetAccessError(state, actorId, plan.accountSetId);
     }
-    return jsonResponse(200, buildWorkOrderDraftsFromPlan(plan, { ...body, requestedBy: body.requestedBy ?? actorId }));
+    return jsonResponse(200, buildWorkOrderDraftsFromPlan(state, plan, { ...body, requestedBy: body.requestedBy ?? actorId }));
   }
 
   if (segments.length === 1 && segments[0] === "rework-orders") {
@@ -12399,7 +12645,11 @@ async function route(request, state) {
       if (!(await canAccessAccountSet(state, actorId, accountSetId))) {
         return accountSetAccessError(state, actorId, accountSetId);
       }
-      return jsonResponse(200, listWorkOrders(state, accountSetId));
+      const workOrders = await persistedWorkOrders(state, accountSetId);
+      for (const workOrder of workOrders) {
+        state.workOrders.set(workOrder.id, workOrder);
+      }
+      return jsonResponse(200, workOrders);
     }
 
     if (request.method === "POST") {
@@ -12407,44 +12657,11 @@ async function route(request, state) {
       if (!(await canAccessAccountSet(state, actorId, body.accountSetId))) {
         return accountSetAccessError(state, actorId, body.accountSetId);
       }
-      const productItem = findInventoryItemByIdentifier(state, body.productItemId);
-      const bom = findBomByIdentifier(state, body.bomId);
-      if (!productItem || productItem.accountSetId !== body.accountSetId || !productItem.isManufactured || !bom || bom.accountSetId !== body.accountSetId) {
-        return errorResponse(404, "WORK_ORDER_SOURCE_NOT_FOUND", "Manufactured item or BOM was not found.");
+      try {
+        return jsonResponse(201, await createWorkOrder(state, body, actorId));
+      } catch (error) {
+        return errorResponse(error.status ?? 400, error.code ?? "BUSINESS_RULE_FAILED", error.message);
       }
-      const duplicate = listWorkOrders(state, body.accountSetId).find((workOrder) => workOrder.workOrderNo === body.workOrderNo);
-      if (duplicate) {
-        return errorResponse(409, "WORK_ORDER_NO_EXISTS", "Work order number already exists in this account set.");
-      }
-      const plannedQuantity = Number(body.plannedQuantity);
-      if (!Number.isFinite(plannedQuantity) || plannedQuantity <= 0) {
-        throw new Error("plannedQuantity must be greater than 0.");
-      }
-      const workOrder = {
-        id: body.id ?? `work-order:${randomUUID()}`,
-        accountSetId: body.accountSetId,
-        workOrderNo: body.workOrderNo,
-        productItemId: productItem.id,
-        productItemCode: productItem.code,
-        productItemName: productItem.name,
-        bomId: bom.id,
-        bomVersion: bom.version,
-        plannedQuantity,
-        completedQuantity: 0,
-        directMaterialCost: 0,
-        status: "planned",
-        fiscalYear: Number(body.fiscalYear),
-        periodNo: Number(body.periodNo),
-        createdBy: body.createdBy ?? actorId,
-        createdAt: "now",
-        releasedBy: null,
-        releasedAt: null,
-        closedBy: null,
-        closedAt: null
-      };
-      state.workOrders.set(workOrder.id, workOrder);
-      appendAuditLog(state, { actorId: workOrder.createdBy, action: "work_order.create", objectType: "work_order", objectId: workOrder.id });
-      return jsonResponse(201, { ...workOrder });
     }
   }
 

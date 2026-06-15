@@ -1180,6 +1180,238 @@ test("approved production plan Agent action creates and reverses a linked busine
   ]);
 });
 
+test("approved work-order Agent action creates and reverses plan-linked work order drafts", async () => {
+  const api = createApi();
+  const accountSet = await request(
+    api,
+    "POST",
+    "/account-sets",
+    {
+      code: "SCAWO",
+      name: "Supply Chain Agent Work Orders",
+      companyName: "Supply Chain Agent Work Order Co.",
+      baseCurrency: "CNY",
+      accountingStandard: "Small Business Accounting Standards",
+      startYear: 2026,
+      startPeriod: 6
+    },
+    "agent-work-order-execution-account"
+  );
+  const accountSetId = accountSet.body.id;
+  api.state.inventoryItems.set("inventory-item:agent-wo-fg", {
+    id: "inventory-item:agent-wo-fg",
+    accountSetId,
+    code: "FG-AGENT-WO",
+    name: "Agent Work Order Product",
+    isManufactured: true
+  });
+  api.state.boms.set("bom:agent-wo", {
+    id: "bom:agent-wo",
+    accountSetId,
+    productItemId: "inventory-item:agent-wo-fg",
+    productItemCode: "FG-AGENT-WO",
+    productItemName: "Agent Work Order Product",
+    version: "V1",
+    status: "active",
+    yieldQuantity: 1,
+    lines: []
+  });
+  api.state.productionPlans.set("production-plan:agent-wo", {
+    id: "production-plan:agent-wo",
+    accountSetId,
+    planNo: "MPS-AGENT-WO-001",
+    fiscalYear: 2026,
+    periodNo: 6,
+    status: "draft",
+    sourceType: "agent",
+    lines: [
+      {
+        id: "production-plan-line:agent-wo:1",
+        productionPlanId: "production-plan:agent-wo",
+        lineNo: 1,
+        productItemId: "inventory-item:agent-wo-fg",
+        productItemCode: "FG-AGENT-WO",
+        productItemName: "Agent Work Order Product",
+        plannedQuantity: 6,
+        plannedStartDate: "2026-06-14",
+        plannedFinishDate: "2026-06-18",
+        status: "planned"
+      }
+    ]
+  });
+
+  const invoked = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_work_orders_from_plan/invoke",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      sourceObjectType: "production_plan",
+      sourceObjectId: "production-plan:agent-wo",
+      dryRun: true,
+      evidenceRefs: ["production-plan:agent-wo", "bom:agent-wo"],
+      payload: {},
+      requestedBy: "planner-agent"
+    },
+    "agent-work-order-execution-invoke"
+  );
+  const actionId = invoked.body.result.id;
+  const draft = invoked.body.result.dryRunResult.draftPayload.workOrderDrafts.workOrderDrafts[0];
+  assert.equal(draft.productItemId, "inventory-item:agent-wo-fg");
+  assert.equal(draft.bomId, "bom:agent-wo");
+  assert.equal(draft.productionPlanId, "production-plan:agent-wo");
+  assert.equal(draft.productionPlanLineId, "production-plan-line:agent-wo:1");
+
+  await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/submit`,
+    { submittedBy: "planner-agent" },
+    "agent-work-order-execution-submit"
+  );
+  await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/approve`,
+    { approvedBy: "production-manager" },
+    "agent-work-order-execution-approve"
+  );
+  const executed = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/execute`,
+    { executedBy: "production-manager", userTokenConfirmed: true },
+    "agent-work-order-execution-execute"
+  );
+
+  assert.equal(executed.status, 200);
+  assert.equal(executed.body.executionResult.status, "business_draft_created");
+  assert.equal(executed.body.executionResult.businessMutation, true);
+  assert.equal(api.state.workOrders.size, 1);
+  const [workOrder] = [...api.state.workOrders.values()];
+  assert.equal(workOrder.status, "planned");
+  assert.equal(workOrder.sourceType, "agent");
+  assert.equal(workOrder.productionPlanId, "production-plan:agent-wo");
+  assert.equal(workOrder.productionPlanLineId, "production-plan-line:agent-wo:1");
+  assert.equal(workOrder.agentActionId, actionId);
+  assert.deepEqual(executed.body.executionResult.createdObjects, [
+    { objectType: "work_order", objectId: workOrder.id, objectNo: workOrder.workOrderNo, status: "planned" }
+  ]);
+
+  workOrder.status = "released";
+  const blockedReversal = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/reverse`,
+    { reversedBy: "production-manager", reversalReason: "Released work orders must be retained." },
+    "agent-work-order-execution-reverse-blocked"
+  );
+  assert.equal(blockedReversal.status, 409);
+  assert.equal(blockedReversal.body.code, "AGENT_ACTION_REVERSAL_BLOCKED");
+  assert.equal(api.state.workOrders.has(workOrder.id), true);
+
+  workOrder.status = "planned";
+  const reversed = await request(
+    api,
+    "POST",
+    `/agent-actions/${encodeURIComponent(actionId)}/reverse`,
+    { reversedBy: "production-manager", reversalReason: "Regenerate work orders from revised plan." },
+    "agent-work-order-execution-reverse"
+  );
+  assert.equal(reversed.status, 200);
+  assert.equal(reversed.body.reversalResult.status, "business_draft_reversed");
+  assert.equal(api.state.workOrders.size, 0);
+  assert.deepEqual(reversed.body.reversalResult.reversedObjects, [
+    { objectType: "work_order", objectId: workOrder.id, objectNo: workOrder.workOrderNo, status: "deleted" }
+  ]);
+});
+
+test("work-order Agent hydrates persisted production plans, items, and BOMs after restart", async () => {
+  const accountSetId = "account-set:agent-work-order-restart";
+  const platformStore = {
+    listInventoryItems: async () => [
+      {
+        id: "inventory-item:agent-wo-restart",
+        accountSetId,
+        code: "FG-AGENT-WO-RESTART",
+        name: "Restart Work Order Product",
+        isManufactured: true
+      }
+    ],
+    listBoms: async () => [
+      {
+        id: "bom:agent-wo-restart",
+        accountSetId,
+        productItemId: "inventory-item:agent-wo-restart",
+        productItemCode: "FG-AGENT-WO-RESTART",
+        productItemName: "Restart Work Order Product",
+        version: "V1",
+        status: "active",
+        yieldQuantity: 1,
+        lines: []
+      }
+    ],
+    listProductionPlans: async () => [
+      {
+        id: "production-plan:agent-wo-restart",
+        accountSetId,
+        planNo: "MPS-AGENT-WO-RESTART",
+        fiscalYear: 2026,
+        periodNo: 6,
+        status: "draft",
+        sourceType: "agent",
+        lines: [
+          {
+            id: "production-plan-line:agent-wo-restart:1",
+            productionPlanId: "production-plan:agent-wo-restart",
+            lineNo: 1,
+            productItemId: "inventory-item:agent-wo-restart",
+            productItemCode: "FG-AGENT-WO-RESTART",
+            productItemName: "Restart Work Order Product",
+            plannedQuantity: 3,
+            status: "planned"
+          }
+        ]
+      }
+    ],
+    listWorkOrders: async () => []
+  };
+  const api = createApi({ platformStore });
+  api.state.accountSets.set(accountSetId, {
+    id: accountSetId,
+    code: "SCAWR",
+    status: "draft",
+    startYear: 2026,
+    startPeriod: 6
+  });
+
+  const invoked = await request(
+    api,
+    "POST",
+    "/agent-tools/generate_work_orders_from_plan/invoke",
+    {
+      accountSetId,
+      fiscalYear: 2026,
+      periodNo: 6,
+      sourceObjectType: "production_plan",
+      sourceObjectId: "production-plan:agent-wo-restart",
+      dryRun: true,
+      evidenceRefs: ["production-plan:agent-wo-restart", "bom:agent-wo-restart"],
+      payload: {},
+      requestedBy: "planner-agent"
+    },
+    "agent-work-order-restart-invoke"
+  );
+
+  assert.equal(invoked.status, 201);
+  assert.deepEqual(invoked.body.result.dryRunResult.blockingErrors, []);
+  const draft = invoked.body.result.dryRunResult.draftPayload.workOrderDrafts.workOrderDrafts[0];
+  assert.equal(draft.productItemId, "inventory-item:agent-wo-restart");
+  assert.equal(draft.bomId, "bom:agent-wo-restart");
+});
+
 test("Agent-created production plans persist across API restarts and reversal", async () => {
   const persistedPlans = new Map();
   const platformStore = {
