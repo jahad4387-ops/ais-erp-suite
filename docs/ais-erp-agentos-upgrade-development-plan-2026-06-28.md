@@ -1,10 +1,10 @@
 # AIS ERP Suite AgentOS 升级开发治理文档
 
-文档日期：2026-06-28  
-适用仓库：`jahad4387-ops/ais-erp-suite`  
-本地路径：`D:\codex工作区\ais-erp-suite`  
-当前基线：`62ce90b docs: add full development audit report`  
-文档定位：生产化升级、Agent 原生升级、业务逻辑保护、工程治理与多轮 Codex 开发协议  
+文档日期：2026-06-28
+适用仓库：`jahad4387-ops/ais-erp-suite`
+本地路径：`D:\codex工作区\ais-erp-suite`
+当前基线：`62ce90b docs: add full development audit report`
+文档定位：生产化升级、Agent 原生升级、业务逻辑保护、工程治理与多轮 Codex 开发协议
 参考模板：`EGSS AgentOS Skill v2.2 JSON Protocol Control + Beginner Friendly Interaction Edition`
 
 ---
@@ -1018,4 +1018,3 @@ npm test -- --grep replay
 5. `WP-U4-001`：Agent Intake API。
 
 这个顺序能最大限度保护现有业务逻辑，同时给 Agent 低风险自动化留下安全入口。等这些底座稳定后，再推进 AI worker、低风险工具、制造业深度增强和生产部署。
-
