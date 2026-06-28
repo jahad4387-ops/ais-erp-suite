@@ -17,6 +17,7 @@
 - [个人优先、预留多人协作的开发方式](docs/multi-team-development.md)
 - [实施路线图](docs/implementation-roadmap.md)
 - [2026-06-27 本地开发全盘核查与项目进展报告](docs/project-development-audit-2026-06-27.md)
+- [2026-06-28 AgentOS 升级开发治理文档](docs/ais-erp-agentos-upgrade-development-plan-2026-06-28.md)
 - [Phase 0 详细开发计划](docs/phase-0-detailed-plan.md)
 - [任务级实施计划](docs/superpowers/plans/2026-06-05-ais-erp-suite.md)
 - [API 草案](services/api/openapi.yaml)
